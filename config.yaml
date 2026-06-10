@@ -1,0 +1,28 @@
+# CẤU HÌNH VẬN HÀNH PIPELINE MANGA RECAP
+
+# Cấu hình lượng khung hình xử lý
+orchestrator:
+  batch_size: 10            # Số lượng N khung hình mới gửi vào LLM mỗi đợt tổng hợp
+  sliding_context_window: 5   # Số lượng khung hình trước đó lấy kịch bản làm lịch sử
+  vlm_image_resize_shortest_edge: 500 # Kích thước cạnh ngắn nhất của hình ảnh khi nén (px)
+  max_panels: 40            # Giới hạn số lượng ảnh tải và xử lý (dành cho test)
+  vlm_batch_size: 4         # Số lượng ảnh gửi vào VLM cùng lúc trong 1 API call
+  vlm_context_length: 2     # Số lượng khung hình cuối cùng của batch trước để làm ngữ cảnh cho batch sau
+
+
+# Giới hạn độ dài kịch bản sinh ra cho mỗi khung hình (tính theo số ký tự)
+script_limits:
+  min_length: 50            # Độ dài văn bản tối thiểu mỗi khung hình
+  max_length: 250           # Độ dài văn bản tối đa mỗi khung hình
+
+# Cấu hình Mô hình (Models) cho VLM và LLM
+models:
+  llm_model: "openrouter/free"
+  vlm_model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+  # Lựa chọn VLM thay thế (gemma):
+  # vlm_model: "google/gemma-4-31b-it:free"
+
+# Cấu hình giọng đọc và tốc độ thuyết minh mặc định cho TTS
+tts:
+  speed: 1.0                # Tốc độ đọc (1.0 là mặc định, > 1.0 đọc nhanh hơn, < 1.0 đọc chậm hơn)
+  voice: "xtts-vi" # Giọng đọc: xtts-vi (XTTS chuẩn), xtts-vi-female (XTTS nữ), vi_VN-vais1000-medium (Piper nam), vi_VN-vivos-x_low (Piper robot), vi_VN-25hours_single-low (Piper nữ)

@@ -1,0 +1,37 @@
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache and compiled files
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Environment variables (sensitive data)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Large model weight directories
+models/
+*.onnx
+*.pth
+*.bin
+
+# Runtime data (inputs, outputs, database cache, logs)
+data/
+*.log
+*.mp4
+*.wav
+*.srt
+
+# OS specific files
+.DS_Store
+Thumbs.db

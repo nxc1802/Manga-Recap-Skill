@@ -1,0 +1,28 @@
+# ==============================================================================
+# Manga Recap Pipeline Orchestrator Requirements
+# ==============================================================================
+
+# Core Application & API
+fastapi
+uvicorn
+streamlit
+httpx
+pydantic
+supabase
+pillow
+pyyaml
+python-dotenv
+
+# TTS & Voice Generation (Piper & Coqui TTS)
+piper-tts
+torch
+torchaudio
+numpy==1.26.4
+munch
+nltk
+librosa
+noisereduce
+phonemizer-fork
+espeakng-loader
+TTS==0.22.0
+transformers
