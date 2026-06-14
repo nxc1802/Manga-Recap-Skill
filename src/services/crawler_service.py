@@ -41,8 +41,6 @@ class CrawlerService:
         except Exception as e:
             logger.exception(f"Error in get_or_create_project: {e}")
             raise
-
-
     async def download_image(self, client: httpx.AsyncClient, img_url: str, save_path: Path, chapter_base_url: str = None) -> bool:
         """
         Downloads a single image with referrer headers, saving it locally.
@@ -50,9 +48,14 @@ class CrawlerService:
         if save_path.exists():
             return True
         headers = self.headers.copy()
-        # Referer must match the page or base domain
-        headers["Referer"] = chapter_base_url or config.crawler.chapter_base_url
         
+        # Referer must match the page or base domain.
+        # Webtoons requires Referer: https://www.webtoons.com/
+        if "webtoons.com" in img_url.lower() or "pstatic.net" in img_url.lower():
+            headers["Referer"] = "https://www.webtoons.com/"
+        else:
+            headers["Referer"] = chapter_base_url or config.crawler.chapter_base_url
+            
         try:
             resp = await client.get(img_url, headers=headers, timeout=30.0)
             if resp.status_code == 200:
@@ -113,25 +116,40 @@ class CrawlerService:
                 
             soup = BeautifulSoup(resp.text, "html.parser")
             
-            # Find all image tags in div.page-chapter
-            page_divs = soup.find_all("div", class_="page-chapter")
-            if not page_divs:
-                logger.error("No page-chapter divs found on page. Checking alternative structures...")
-                # Try finding any img tag that contains chap_ or cdn
-                img_tags = soup.find_all("img")
-                manga_imgs = []
-                for img in img_tags:
-                    src = img.get("src") or img.get("data-src") or img.get("data-original")
-                    if src and ("chap" in src or "truyenvua" in src):
-                        manga_imgs.append(src)
-            else:
-                manga_imgs = []
-                for div in page_divs:
-                    img = div.find("img")
-                    if img:
-                        src = img.get("src") or img.get("data-src") or img.get("data-original")
+            # Check if this is a Webtoons.com URL
+            if "webtoons.com" in url.lower():
+                logger.info("Webtoons.com URL detected. Applying Webtoons parsing logic...")
+                img_list_div = soup.find("div", id="_imageList")
+                if img_list_div:
+                    img_tags = img_list_div.find_all("img")
+                    manga_imgs = []
+                    for img in img_tags:
+                        src = img.get("data-url") or img.get("src")
                         if src:
                             manga_imgs.append(src)
+                else:
+                    img_tags = soup.find_all("img", class_="_images")
+                    manga_imgs = [img.get("data-url") or img.get("src") for img in img_tags if img.get("data-url") or img.get("src")]
+            else:
+                # Find all image tags in div.page-chapter
+                page_divs = soup.find_all("div", class_="page-chapter")
+                if not page_divs:
+                    logger.error("No page-chapter divs found on page. Checking alternative structures...")
+                    # Try finding any img tag that contains chap_ or cdn
+                    img_tags = soup.find_all("img")
+                    manga_imgs = []
+                    for img in img_tags:
+                        src = img.get("src") or img.get("data-src") or img.get("data-original")
+                        if src and ("chap" in src or "truyenvua" in src):
+                            manga_imgs.append(src)
+                else:
+                    manga_imgs = []
+                    for div in page_divs:
+                        img = div.find("img")
+                        if img:
+                            src = img.get("src") or img.get("data-src") or img.get("data-original")
+                            if src:
+                                manga_imgs.append(src)
                             
             if not manga_imgs:
                 logger.error("No manga panels found to download.")
@@ -144,56 +162,77 @@ class CrawlerService:
                 limit_panels = getattr(config.orchestrator, "max_panels", None)
                 
             if limit_panels is not None and limit_panels > 0:
-                logger.info(f"Limiting panels to {limit_panels} as per settings.")
+                logger.info(f"Limiting raw pages to download to {limit_panels} as per settings.")
                 manga_imgs = manga_imgs[:limit_panels]
                 
-            logger.info(f"Found {len(manga_imgs)} panel images to download.")
+            logger.info(f"Found {len(manga_imgs)} raw page images to download.")
             
-            # 4. Download images sequentially or concurrently
-            # Let's download them concurrently with limit
+            # 4. Download images sequentially or concurrently to raw_pages/
             sem = asyncio.Semaphore(5) # limit concurrency to 5 requests
+            
+            from src.core.utils import get_project_title_by_id, get_project_data_dir
+            project_title = get_project_title_by_id(project_id)
+            project_dir = get_project_data_dir(project_title)
+            
+            # Temporary directory for raw unsliced pages
+            raw_pages_dir = project_dir / "raw_pages" / f"chap_{chapter_number}"
+            raw_pages_dir.mkdir(parents=True, exist_ok=True)
             
             async def download_task(seq: int, img_url: str):
                 async with sem:
-                    # e.g., data/raw_images/chap_1/panel_1.jpg
                     ext = ".jpg" # Default extension
                     if ".png" in img_url.lower():
                         ext = ".png"
                     elif ".webp" in img_url.lower():
                         ext = ".webp"
-                        
-                    from src.core.utils import get_project_title_by_id, get_project_data_dir
-                    project_title = get_project_title_by_id(project_id)
-                    project_dir = get_project_data_dir(project_title)
-                    file_name = f"image_{chapter_number}_{seq}{ext}"
-                    local_dir = project_dir / "raw_images"
-                    save_path = local_dir / file_name
                     
-                    success = await self.download_image(client, img_url, save_path, chapter_base_url)
+                    file_name = f"image_{chapter_number}_{seq}{ext}"
+                    save_path = raw_pages_dir / file_name
+                    
+                    success = await self.download_image(client, img_url, save_path, url)
                     if success:
-                        logger.info(f"Downloaded panel {seq} -> {save_path}")
-                        # Insert panel record in DB
-                        # First check if exists
-                        try:
-                            pan_res = supabase.table("panels").select("id").eq("chapter_id", chapter_id).eq("sequence_number", seq).execute()
-                            if not pan_res.data:
-                                supabase.table("panels").insert({
-                                    "chapter_id": chapter_id,
-                                    "sequence_number": seq,
-                                    "raw_image_url": str(save_path),
-                                    "status": "pending"
-                                }).execute()
-                        except Exception as e:
-                            logger.error(f"Failed to record panel {seq} in Supabase: {e}")
+                        logger.info(f"Downloaded raw page {seq} -> {save_path}")
                     else:
-                        logger.error(f"Failed downloading panel {seq}")
+                        logger.error(f"Failed downloading raw page {seq}")
 
-            tasks = [download_task(i + 1, url) for i, url in enumerate(manga_imgs)]
+            tasks = [download_task(i + 1, img_url) for i, img_url in enumerate(manga_imgs)]
             await asyncio.gather(*tasks)
+            
+            # 5. Run Stitch & Segment on the downloaded pages
+            logger.info("--- Preprocessing: Stitch & Segment Chapter Pages ---")
+            raw_images_dir = project_dir / "raw_images" / f"chap_{chapter_number}"
+            raw_images_dir.mkdir(parents=True, exist_ok=True)
+            
+            from src.core.stitch_segment import preprocess_and_segment_images
+            segmented_panels = preprocess_and_segment_images(
+                raw_pages_dir=raw_pages_dir,
+                output_panels_dir=raw_images_dir
+            )
+            
+            if not segmented_panels:
+                raise ValueError("Stitch & Segment failed to produce any valid panel images.")
+                
+            # 6. Insert segmented panels into Supabase
+            logger.info(f"Registering {len(segmented_panels)} segmented panels in database...")
+            
+            # First, clean existing database panel records to prevent duplicates on re-run
+            supabase.table("panels").delete().eq("chapter_id", chapter_id).execute()
+            
+            for idx, panel_path in enumerate(segmented_panels):
+                seq = idx + 1
+                try:
+                    supabase.table("panels").insert({
+                        "chapter_id": chapter_id,
+                        "sequence_number": seq,
+                        "raw_image_url": str(panel_path),
+                        "status": "pending"
+                    }).execute()
+                except Exception as e:
+                    logger.error(f"Failed to record panel {seq} in Supabase: {e}")
             
             # Update chapter status to crawled (processing in DB)
             supabase.table("chapters").update({"status": "processing"}).eq("id", chapter_id).execute()
-            logger.info(f"Chapter {chapter_number} crawl completed successfully.")
+            logger.info(f"Chapter {chapter_number} crawl and segmentation completed successfully.")
             return chapter_id, summary_context
 
 crawler_service = CrawlerService()

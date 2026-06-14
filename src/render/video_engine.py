@@ -257,11 +257,17 @@ class VideoEngine:
         duration_sec = duration_ms / 1000.0
         frame_count = int(self.fps * duration_sec)
         
-        # Fixed zoom factor to provide padding for panning
-        zoom = 1.15
-        
-        # Calculate horizontal and vertical panning expressions based on pan_direction
-        if pan_direction == "horizontal":
+        # Calculate horizontal, vertical, slow-zoom or static expressions based on pan_direction
+        if pan_direction == "static":
+            zoom_expr = "1.0"
+            x_expr = "0"
+            y_expr = "0"
+        elif pan_direction == "zoom":
+            zoom_expr = f"1.0+0.15*(on/{frame_count})"
+            x_expr = "(iw-iw/zoom)/2"
+            y_expr = "(ih-ih/zoom)/2"
+        elif pan_direction == "horizontal":
+            zoom_expr = "1.15"
             # Alternates left-to-right and right-to-left based on sequence number
             if seq % 2 == 0:
                 x_expr = f"(zoom-1)*iw*(on/{frame_count})"
@@ -269,13 +275,15 @@ class VideoEngine:
                 x_expr = f"(zoom-1)*iw*(1-on/{frame_count})"
             y_expr = f"(zoom-1)*ih/2"
         elif pan_direction == "vertical":
+            zoom_expr = "1.15"
             # Alternates top-to-bottom and bottom-to-top based on sequence number
             x_expr = f"(zoom-1)*iw/2"
             if seq % 2 == 0:
                 y_expr = f"(zoom-1)*ih*(on/{frame_count})"
             else:
                 y_expr = f"(zoom-1)*ih*(1-on/{frame_count})"
-        else: # "zoom" or fallback
+        else: # Default fallback
+            zoom_expr = "1.15"
             x_expr = f"(zoom-1)*iw/2"
             y_expr = f"(zoom-1)*ih/2"
             
@@ -288,12 +296,12 @@ class VideoEngine:
         if sub_overlay_path and os.path.exists(sub_overlay_path):
             cmd.extend([
                 "-loop", "1", "-i", sub_overlay_path,
-                "-filter_complex", f"[0:v]zoompan=z={zoom}:d={frame_count}:x='{x_expr}':y='{y_expr}':s={self.width}x{self.height}[pan];[pan][2:v]overlay=0:0:shortest=1[outv]",
+                "-filter_complex", f"[0:v]zoompan=z='{zoom_expr}':d={frame_count}:x='{x_expr}':y='{y_expr}':s={self.width}x{self.height}[pan];[pan][2:v]overlay=0:0:shortest=1[outv]",
                 "-map", "[outv]",
                 "-map", "1:a"
             ])
         else:
-            vf_filter = f"zoompan=z={zoom}:d={frame_count}:x='{x_expr}':y='{y_expr}':s={self.width}x{self.height}"
+            vf_filter = f"zoompan=z='{zoom_expr}':d={frame_count}:x='{x_expr}':y='{y_expr}':s={self.width}x{self.height}"
             cmd.extend([
                 "-vf", vf_filter
             ])

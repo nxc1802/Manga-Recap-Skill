@@ -8,6 +8,7 @@ orchestrator:
   max_panels: 40            # Giới hạn số lượng ảnh tải và xử lý (dành cho test)
   vlm_batch_size: 4         # Số lượng ảnh gửi vào VLM cùng lúc trong 1 API call
   vlm_context_length: 2     # Số lượng khung hình cuối cùng của batch trước để làm ngữ cảnh cho batch sau
+  render_pan_mode: "dynamic" # Chế độ panning cho video: dynamic (xoay vòng linh hoạt), horizontal (ngang), vertical (dọc), zoom (phóng to), static (tĩnh)
 
 
 # Giới hạn độ dài kịch bản sinh ra cho mỗi khung hình (tính theo số ký tự)

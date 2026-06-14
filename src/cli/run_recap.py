@@ -23,6 +23,7 @@ async def main():
     parser.add_argument("--suffix", type=str, default="agent", help="Suffix for output video (default: agent)")
     parser.add_argument("--keep_temp", action="store_true", help="Keep temporary images and audio files (default: False)")
     parser.add_argument("--no-subs", action="store_true", help="Disable burning subtitles onto the video")
+    parser.add_argument("--pan-mode", type=str, default=None, choices=["dynamic", "horizontal", "vertical", "zoom", "static"], help="Unified cinematic pan mode for all clips")
     args = parser.parse_args()
 
     # Fallback configs
@@ -72,7 +73,8 @@ async def main():
             bgm_path=args.bgm,
             output_suffix=args.suffix,
             progress_callback=progress_cb,
-            burn_subtitles=burn_subtitles
+            burn_subtitles=burn_subtitles,
+            pan_mode=args.pan_mode
         )
         
         logger.info("Video generation completed successfully.")

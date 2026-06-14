@@ -16,6 +16,7 @@ class OrchestratorConfig(BaseModel):
     max_panels: Optional[int] = None
     vlm_batch_size: int = 4
     vlm_context_length: int = 2
+    render_pan_mode: str = "dynamic"
 
 class ScriptLimitsConfig(BaseModel):
     min_length: int = 50

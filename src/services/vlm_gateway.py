@@ -297,6 +297,15 @@ class VLMGateway:
                         continue
                     base_seq = int(match_prefix.group(1))
                     
+                    # If the returned sequence number is relative (e.g. 1, 2, 3...) instead of global (e.g. 5, 6, 7...)
+                    # we map it by index to the expected global sequence numbers.
+                    if base_seq not in expected_seqs and 1 <= base_seq <= len(expected_seqs):
+                        mapped_seq = expected_seqs[base_seq - 1]
+                        logger.info(f"VLM Parser: Mapping relative sequence '{seq_id}' (base {base_seq}) to global expected sequence {mapped_seq} by index.")
+                        base_seq = mapped_seq
+                    elif base_seq not in expected_seqs:
+                        logger.warning(f"VLM Parser: Received unexpected sequence ID '{seq_id}' (base {base_seq}) outside expected range {expected_seqs}")
+                    
                     if base_seq not in grouped:
                         grouped[base_seq] = []
                     grouped[base_seq].append(p)
@@ -311,7 +320,11 @@ class VLMGateway:
                     
                     sub_panels_data = []
                     for idx, p in enumerate(sub_list):
-                        sub_seq_id = p.get("sequence_id") or p.get("sequence_number") or f"{base_seq}_{idx+1}"
+                        orig_seq_id = p.get("sequence_id") or p.get("sequence_number") or ""
+                        if orig_seq_id:
+                            sub_seq_id = re.sub(r'^\d+', str(base_seq), str(orig_seq_id))
+                        else:
+                            sub_seq_id = f"{base_seq}_{idx+1}" if len(sub_list) > 1 else str(base_seq)
                         
                         sub_panels_data.append({
                             "sequence_id": str(sub_seq_id),

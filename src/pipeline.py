@@ -48,6 +48,7 @@ class MangaRecapPipeline:
         max_length = overrides.get("max_length") or config.script_limits.max_length
         tts_speed = overrides.get("tts_speed") or config.tts.speed
         tts_voice = overrides.get("tts_voice") or config.tts.voice
+        pan_mode = overrides.get("render_pan_mode") or getattr(config.orchestrator, "render_pan_mode", "dynamic")
 
         # 1. Use manual story title and get or create project
         if progress_callback:
@@ -167,7 +168,8 @@ class MangaRecapPipeline:
             bgm_path,
             output_suffix,
             progress_callback,
-            burn_subtitles=burn_subtitles
+            burn_subtitles=burn_subtitles,
+            pan_mode=pan_mode
         )
         
         # 7. Storage Cleanup
@@ -289,12 +291,17 @@ class MangaRecapPipeline:
         bgm_path: str = None,
         output_suffix: str = "manual",
         progress_callback = None,
-        burn_subtitles: bool = True
+        burn_subtitles: bool = True,
+        pan_mode: str = None
     ) -> str:
         """
         Assembles individual panel clips and renders the final video for the chapter.
         """
         logger.info(f"Assembling video for chapter {chapter_number}...")
+        
+        # Resolve pan_mode: argument override -> config default -> "dynamic"
+        resolved_pan_mode = pan_mode or getattr(config.orchestrator, "render_pan_mode", "dynamic")
+        logger.info(f"Using pan mode: {resolved_pan_mode}")
         
         from src.core.utils import get_project_title_by_chapter_id, get_project_data_dir, load_csv_script_for_chapter, get_next_video_path
         project_title = get_project_title_by_chapter_id(chapter_id)
@@ -382,6 +389,12 @@ class MangaRecapPipeline:
                     continue
                     
                 panel_cfg = panel_config_map[k]
+                
+                # Apply unified pan mode override if configured (and not "dynamic")
+                pan_dir = panel_cfg["pan_direction"]
+                if resolved_pan_mode and resolved_pan_mode != "dynamic":
+                    pan_dir = resolved_pan_mode
+                    
                 tasks.append(
                     self._process_single_panel_clip(
                         seq_id=k,
@@ -390,7 +403,7 @@ class MangaRecapPipeline:
                         panel_text=panel_cfg["text"],
                         focus_x=panel_cfg["focus_x"],
                         focus_y=panel_cfg["focus_y"],
-                        pan_direction=panel_cfg["pan_direction"],
+                        pan_direction=pan_dir,
                         crop_scale=panel_cfg["crop_scale"],
                         project_dir=project_dir,
                         chapter_number=chapter_number,

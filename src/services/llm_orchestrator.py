@@ -404,6 +404,9 @@ class LLMOrchestrator:
                 logger.error("Chapter not found in Supabase")
                 return False
             project_id = chap_res.data[0]["project_id"]
+            from src.core.utils import get_project_title_by_id, get_project_data_dir
+            project_title = get_project_title_by_id(project_id)
+            project_dir = get_project_data_dir(project_title)
             if not summary_context:
                 summary_context = chap_res.data[0].get("summary_context") or "Không có bối cảnh cốt truyện."
             
@@ -432,9 +435,6 @@ class LLMOrchestrator:
                     ]
                     
                     # Log prompt
-                    from src.core.utils import get_project_title_by_id, get_project_data_dir
-                    project_title = get_project_title_by_id(project_id)
-                    project_dir = get_project_data_dir(project_title)
                     history_dir = project_dir / "logs" / "llm_history"
                     os.makedirs(history_dir, exist_ok=True)
                     with open(os.path.join(history_dir, f"project_{project_id}_seed_prompt.txt"), "w", encoding="utf-8") as f:
