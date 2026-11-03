@@ -58,6 +58,7 @@ def handle_tts_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         repeats=repeats,
         use_mock=use_mock,
         copy_to_lab=copy_to_lab,
+        include_ab_tests=getattr(args, "ab_tests", False),
     )
 
     result = runner.run()

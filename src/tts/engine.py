@@ -154,9 +154,12 @@ class NeuralTTSBackend(BaseTTSBackend):
         self._init_sdk()
 
     def _init_sdk(self):
-        # Only enable offline mode if HF cache directory already exists and has contents
+        # Specifically verify that VieNeu weights exist in HF cache before enabling offline mode
         hf_cache = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface" / "hub"))
-        if hf_cache.exists() and any(hf_cache.iterdir()):
+        has_vieneu_weights = hf_cache.exists() and any(
+            "vieneu" in p.name.lower() for p in hf_cache.iterdir()
+        )
+        if has_vieneu_weights:
             os.environ["HF_HUB_OFFLINE"] = "1"
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
@@ -287,6 +290,7 @@ class VieNeuEngine:
         Synthesizes an utterance with SHA-256 caching and sidecar cache validation.
         Returns: (duration_seconds, sha256_checksum, was_cached)
         """
+        current_backend = self.mode
         resolved_voice = resolve_voice_id(voice)
         cache_key = compute_utterance_cache_key(
             text=text,
@@ -295,6 +299,7 @@ class VieNeuEngine:
             emotion=emotion,
             emotion_cue=emotion_cue,
             model_version="v3turbo",
+            backend_mode=current_backend,
         )
 
         output_path = Path(output_path).resolve()
@@ -309,8 +314,8 @@ class VieNeuEngine:
                 except Exception:
                     pass  # Corrupt file; re-synthesize
 
-        # Check global cache pool
-        cached_file = get_cached_audio_path(cache_key)
+        # Check global cache pool isolated by backend mode
+        cached_file = get_cached_audio_path(cache_key, backend_mode=current_backend)
         if not force and use_cache and cached_file and cached_file.exists():
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(cached_file, output_path)
@@ -335,9 +340,9 @@ class VieNeuEngine:
         except Exception:
             pass
 
-        # Store in global cache pool
+        # Store in global cache pool under specific backend mode
         if use_cache:
-            save_to_cache(cache_key, output_path, overwrite=force)
+            save_to_cache(cache_key, output_path, backend_mode=current_backend, overwrite=force)
         return dur, cache_key, False
 
     def synthesize_to_file(

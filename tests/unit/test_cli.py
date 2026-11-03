@@ -492,3 +492,60 @@ class TestSubcommandImplementations:
             assert after_mtime == before_mtime, (
                 "docs/lab/benchmark_data.js was modified despite --no-copy-to-lab!"
             )
+
+    def test_render_final_requires_voice_selection_approval(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render fails without approved voice_selection.json."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("review_proj", "Review Proj")
+        init_chapter_layout("review_proj", "1")
+
+        chap_dir = tmp_path / "data" / "projects" / "review_proj" / "chapters" / "1"
+        script_data = {
+            "project_slug": "review_proj",
+            "chapter_number": "1",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "narrator_text": "Sample text",
+                    "duration": 2.0,
+                }
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        code = main(["render", "-p", "review_proj", "-c", "1", "--quality", "final", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        captured = capsys.readouterr()
+        assert "Human Review Gate 1" in captured.out
+
+    def test_render_final_passes_with_skip_review(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render can bypass human review gate when --skip-review is passed."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("skip_proj", "Skip Proj")
+        init_chapter_layout("skip_proj", "1")
+
+        chap_dir = tmp_path / "data" / "projects" / "skip_proj" / "chapters" / "1"
+        script_data = {
+            "project_slug": "skip_proj",
+            "chapter_number": "1",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "narrator_text": "Sample text",
+                    "duration": 2.0,
+                }
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        # Mock VideoEngine.render_chapter to avoid running full FFmpeg in CLI unit test
+        with patch("src.cli.render_cmd.VideoEngine") as mock_engine:
+            mock_inst = mock_engine.return_value
+            mock_inst.render_chapter.return_value = {
+                "video_path": str(chap_dir / "video" / "test.mp4"),
+                "subtitle_path": str(chap_dir / "subtitles" / "test.srt"),
+            }
+            code = main(["render", "-p", "skip_proj", "-c", "1", "--quality", "final", "--skip-review", "--json"])
+            assert code == ExitCode.SUCCESS

@@ -187,3 +187,20 @@ def test_engine_synthesize_utterance_force_updates_global_cache(tmp_path, monkey
     assert b"OLDSTALE" not in refreshed_cache_bytes, (
         "Global cache pool was not updated when force=True!"
     )
+
+
+def test_cache_mock_neural_isolation(tmp_path, monkeypatch):
+    """Verifies that Mock and Neural cache keys are cryptographically distinct."""
+    key_neural = compute_utterance_cache_key(
+        text="Đối chiếu phân tách cache.",
+        voice_id="Trúc Ly",
+        speed=1.0,
+        backend_mode="neural",
+    )
+    key_mock = compute_utterance_cache_key(
+        text="Đối chiếu phân tách cache.",
+        voice_id="Trúc Ly",
+        speed=1.0,
+        backend_mode="mock",
+    )
+    assert key_neural != key_mock, "Neural and Mock keys must never collide!"

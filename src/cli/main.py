@@ -120,6 +120,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bm.add_argument("--emotions", default="all", help="Comma-separated emotion IDs or 'all'")
     p_bm.add_argument("--repeats", type=int, default=1, help="Number of repetitions per prompt")
     p_bm.add_argument("--mock", action="store_true", help="Use deterministic mock synthesis mode")
+    p_bm.add_argument("--ab-tests", action="store_true", help="Include controlled A/B emotion cue comparison tests")
     p_bm.add_argument("--copy-to-lab", action=argparse.BooleanOptionalAction, default=True, help="Copy results to docs/lab/")
 
     # 7. render

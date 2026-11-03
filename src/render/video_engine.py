@@ -148,6 +148,7 @@ class VideoEngine:
         out_p = Path(output_path).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
+        scaled_font_size = max(18, int(round(font_size * (self.width / 1280.0))))
         overlay = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         clean_text = sanitize_subtitle_text(text)
         if not clean_text:
@@ -155,13 +156,14 @@ class VideoEngine:
             return str(out_p)
 
         draw = ImageDraw.Draw(overlay)
-        font = self._get_font(font_size)
-        lines = textwrap.wrap(clean_text, width=48)
+        font = self._get_font(scaled_font_size)
+        wrap_width = int(round(48 * (self.width / 1280.0)))
+        lines = textwrap.wrap(clean_text, width=wrap_width)
         if not lines:
             overlay.save(out_p, "PNG")
             return str(out_p)
 
-        line_height = font_size + 10
+        line_height = scaled_font_size + 10
         rect_height = len(lines) * line_height + 24
         rect_top = self.height - rect_height - 35
 
@@ -699,6 +701,9 @@ class VideoEngine:
                 crf = "20"
                 self.width = 1920
                 self.height = 1080
+
+            # Synchronize camera motion generator with target resolution (critical for 1080p final render)
+            self.camera_generator = CameraMotionGenerator(self.width, self.height, self.fps)
 
             video_dir = chap_dir / "video"
             clips_dir = video_dir / "clips"

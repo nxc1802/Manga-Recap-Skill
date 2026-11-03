@@ -444,3 +444,26 @@ class PanelManifest(BaseModel):
     panels: List[PanelItem] = Field(default_factory=list)
     contact_sheets: List[ContactSheetInfo] = Field(default_factory=list)
     schema_version: str = "3.0.0"
+
+
+# ==============================================================================
+# 9. Human Review Gate: voice_selection.json
+# ==============================================================================
+
+class VoiceSelectionApproval(BaseModel):
+    """Schema for Review Gate 1 voice selection approval."""
+    model_config = ConfigDict(extra="ignore")
+
+    approved_strategy: str = Field(default="single_narrator", description="Approved strategy (single_narrator, dual_voice, multi_voice)")
+    primary_voice: str = Field(..., description="Approved primary narrator voice name")
+    speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Approved narration speed")
+    reviewer: Optional[str] = Field(default=None, description="Human reviewer identifier")
+    approved_by: Optional[str] = Field(default=None, description="Alias for reviewer")
+    approved_at: Optional[str] = Field(default=None, description="ISO timestamp of approval")
+    notes: Optional[str] = Field(default=None, description="Human reviewer notes")
+
+    def get_reviewer(self) -> str:
+        return (self.reviewer or self.approved_by or "").strip()
+
+    def is_approved(self) -> bool:
+        return bool(self.get_reviewer() and self.primary_voice.strip())

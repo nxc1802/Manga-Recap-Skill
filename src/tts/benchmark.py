@@ -113,6 +113,50 @@ EMOTION_BENCHMARK_PROMPTS = [
     }
 ]
 
+# Controlled A/B Benchmark Prompts: Identical semantic text with varied cues/punctuation
+CONTROLLED_AB_PROMPTS = [
+    {
+        "id": "ab_neutral_baseline",
+        "category": "controlled_ab",
+        "emotion": "neutral",
+        "name_vi": "A/B Đối chứng: Chuẩn trung tính",
+        "text": "Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật.",
+        "cues": []
+    },
+    {
+        "id": "ab_sigh_cue",
+        "category": "controlled_ab",
+        "emotion": "sad",
+        "name_vi": "A/B Đối chứng: [thở dài] ngắt quãng",
+        "text": "[thở dài] Sau tất cả những biến cố kinh hoàng vừa xảy ra... Cuối cùng hắn cũng đã hiểu được sự thật.",
+        "cues": ["[thở dài]"]
+    },
+    {
+        "id": "ab_laugh_cue",
+        "category": "controlled_ab",
+        "emotion": "comedic",
+        "name_vi": "A/B Đối chứng: [cười] dí dỏm",
+        "text": "[cười] Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật!",
+        "cues": ["[cười]"]
+    },
+    {
+        "id": "ab_throat_cue",
+        "category": "controlled_ab",
+        "emotion": "philosophical",
+        "name_vi": "A/B Đối chứng: [hắng giọng] quyền uy",
+        "text": "[hắng giọng] Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật.",
+        "cues": ["[hắng giọng]"]
+    },
+    {
+        "id": "ab_dramatic_climax",
+        "category": "controlled_ab",
+        "emotion": "excited",
+        "name_vi": "A/B Đối chứng: Cao trào ngắt nhịp",
+        "text": "Sau tất cả những biến cố kinh hoàng vừa xảy ra... Cuối cùng! Hắn cũng đã hiểu được toàn bộ sự thật!",
+        "cues": ["!", "..."]
+    },
+]
+
 
 def generate_mock_wav(
     output_path: Path,
@@ -210,6 +254,7 @@ class TTSBenchmarkRunner:
         repeats: int = 1,
         use_mock: bool = False,
         copy_to_lab: bool = True,
+        include_ab_tests: bool = False,
     ):
         self.output_dir = output_dir.resolve()
         self.samples_dir = self.output_dir / "samples"
@@ -218,6 +263,7 @@ class TTSBenchmarkRunner:
         self.repeats = max(1, repeats)
         self.use_mock = use_mock
         self.copy_to_lab = copy_to_lab
+        self.include_ab_tests = include_ab_tests
 
     def run(self) -> Dict[str, Any]:
         self.samples_dir.mkdir(parents=True, exist_ok=True)
@@ -237,42 +283,11 @@ class TTSBenchmarkRunner:
 
         samples_data: List[Dict[str, Any]] = []
 
-        # 1. Voice Screening Phase: Selected voices x Reference Prompts
-        for v_name in self.voices:
-            vp = VOICE_BY_NAME.get(v_name)
-            v_info = {
-                "name": v_name,
-                "region": vp.region.value if vp else "Bắc",
-                "gender": vp.gender.value if vp else "female",
-                "role": vp.suggested_role if vp else "Narrator",
-                "is_top10": vp.is_top10 if vp else False,
-                "timbre": vp.timbre_description if vp else "",
-            }
+        for rep in range(self.repeats):
+            rep_suffix = f"_rep{rep+1}" if self.repeats > 1 else ""
 
-            for prompt in REFERENCE_PROMPTS:
-                sample_item = self._synthesize_sample(
-                    voice_name=v_name,
-                    voice_info=v_info,
-                    prompt_id=prompt["id"],
-                    category=prompt["category"],
-                    emotion=prompt["emotion"],
-                    text=prompt["text"],
-                )
-                samples_data.append(sample_item)
-
-        # 2. Emotion Benchmark Phase: Target voices x 8 Emotions
-        emotion_prompts_map = {ep["id"]: ep for ep in EMOTION_BENCHMARK_PROMPTS}
-        for emo_id in self.emotions:
-            if emo_id not in emotion_prompts_map:
-                continue
-            ep = emotion_prompts_map[emo_id]
-
-            # Primary voice ("Trúc Ly") + up to 2 other top10 voices
-            target_voices = [v for v in self.voices if (VOICE_BY_NAME.get(v) and VOICE_BY_NAME[v].is_top10)][:3]
-            if "Trúc Ly" not in target_voices and "Trúc Ly" in self.voices:
-                target_voices.insert(0, "Trúc Ly")
-
-            for v_name in target_voices:
+            # 1. Voice Screening Phase: Selected voices x Reference Prompts
+            for v_name in self.voices:
                 vp = VOICE_BY_NAME.get(v_name)
                 v_info = {
                     "name": v_name,
@@ -282,15 +297,73 @@ class TTSBenchmarkRunner:
                     "is_top10": vp.is_top10 if vp else False,
                     "timbre": vp.timbre_description if vp else "",
                 }
-                sample_item = self._synthesize_sample(
-                    voice_name=v_name,
-                    voice_info=v_info,
-                    prompt_id=f"emo_{emo_id}",
-                    category="emotion",
-                    emotion=emo_id,
-                    text=ep["text"],
-                )
-                samples_data.append(sample_item)
+
+                for prompt in REFERENCE_PROMPTS:
+                    sample_item = self._synthesize_sample(
+                        voice_name=v_name,
+                        voice_info=v_info,
+                        prompt_id=f"{prompt['id']}{rep_suffix}",
+                        category=prompt["category"],
+                        emotion=prompt["emotion"],
+                        text=prompt["text"],
+                    )
+                    samples_data.append(sample_item)
+
+            # 2. Emotion Benchmark Phase: Target voices x 8 Emotions
+            emotion_prompts_map = {ep["id"]: ep for ep in EMOTION_BENCHMARK_PROMPTS}
+            for emo_id in self.emotions:
+                if emo_id not in emotion_prompts_map:
+                    continue
+                ep = emotion_prompts_map[emo_id]
+
+                # Primary voice ("Trúc Ly") + up to 2 other top10 voices
+                target_voices = [v for v in self.voices if (VOICE_BY_NAME.get(v) and VOICE_BY_NAME[v].is_top10)][:3]
+                if "Trúc Ly" not in target_voices and "Trúc Ly" in self.voices:
+                    target_voices.insert(0, "Trúc Ly")
+
+                for v_name in target_voices:
+                    vp = VOICE_BY_NAME.get(v_name)
+                    v_info = {
+                        "name": v_name,
+                        "region": vp.region.value if vp else "Bắc",
+                        "gender": vp.gender.value if vp else "female",
+                        "role": vp.suggested_role if vp else "Narrator",
+                        "is_top10": vp.is_top10 if vp else False,
+                        "timbre": vp.timbre_description if vp else "",
+                    }
+                    sample_item = self._synthesize_sample(
+                        voice_name=v_name,
+                        voice_info=v_info,
+                        prompt_id=f"emo_{emo_id}{rep_suffix}",
+                        category="emotion",
+                        emotion=emo_id,
+                        text=ep["text"],
+                    )
+                    samples_data.append(sample_item)
+
+            # 3. Controlled A/B Emotion Phase (Optional): Top voices tested on identical text with varied cues
+            if self.include_ab_tests:
+                ab_target_voices = [v for v in self.voices if v in ["Trúc Ly", "Thiện Minh"]][:2]
+                for v_name in ab_target_voices:
+                    vp = VOICE_BY_NAME.get(v_name)
+                    v_info = {
+                        "name": v_name,
+                        "region": vp.region.value if vp else "Bắc",
+                        "gender": vp.gender.value if vp else "female",
+                        "role": vp.suggested_role if vp else "Narrator",
+                        "is_top10": vp.is_top10 if vp else False,
+                        "timbre": vp.timbre_description if vp else "",
+                    }
+                    for ab_prompt in CONTROLLED_AB_PROMPTS:
+                        sample_item = self._synthesize_sample(
+                            voice_name=v_name,
+                            voice_info=v_info,
+                            prompt_id=f"{ab_prompt['id']}{rep_suffix}",
+                            category=ab_prompt["category"],
+                            emotion=ab_prompt["emotion"],
+                            text=ab_prompt["text"],
+                        )
+                        samples_data.append(sample_item)
 
         total_wall = time.perf_counter() - start_time
         if resource is not None:

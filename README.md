@@ -4,7 +4,7 @@
 [![Architecture](https://img.shields.io/badge/architecture-Agent--Native%20Decoupled-green.svg)](docs/plan.md)
 [![Audio](https://img.shields.io/badge/TTS-VieNeu--TTS%20v3%20Turbo%20Local-orange.svg)](docs/lab/index.html)
 [![Storage](https://img.shields.io/badge/storage-Local%20Atomic%20JSON-purple.svg)](src/core/storage.py)
-[![Tests](https://img.shields.io/badge/tests-302%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-306%20passed-brightgreen.svg)](tests/)
 
 An autonomous, agent-native manga and webtoon recap video creation pipeline. Engineered around a **strict separation of intelligence and execution**: AI coding agents handle vision, visual OCR, narrative recap scripting, and continuity; deterministic offline Python CLI tools handle media ingestion, long-strip streaming segmentation, local VieNeu-TTS v3 Turbo synthesis, and cinematic FFmpeg video rendering.
 
@@ -17,10 +17,10 @@ An autonomous, agent-native manga and webtoon recap video creation pipeline. Eng
    - Visual interpretation of manga panels, character tracking, and Vietnamese narration scripts are executed directly by Coding Agents (Antigravity, OpenCode, Claude Code) using native vision/reasoning.
 2. **Local Atomic JSON Storage**:
    - **Zero Supabase or database dependencies**: All project states, manifests, scripts, and checkpoints are stored locally in self-contained directories under `data/projects/<project_slug>/`.
-   - Concurrency is governed by exclusive POSIX `FileLock` (`.lock`), atomic file replacement (`.tmp` write + `os.fsync` + atomic rename), and SHA-256 fingerprinting.
+   - Concurrency is governed by cross-platform single-writer `FileLock` (POSIX `fcntl` on macOS/Linux, `msvcrt` on Windows), atomic file replacement (`.tmp` write + `os.fsync` + atomic rename), and SHA-256 fingerprinting.
 3. **Local VieNeu-TTS v3 Turbo Audio Engine**:
    - Master narration synthesized offline at uncompressed **48 kHz 16-bit PCM WAV** with SHA-256 utterance-level caching (`src/tts/`).
-   - Hardware-accelerated local execution (Apple Silicon MPS / NVIDIA CUDA / CPU ONNX) delivering ultra-fast throughput ($RTF \le 0.002$).
+   - Hardware-accelerated local neural execution (Apple Silicon MPS / NVIDIA CUDA / CPU ONNX) delivering high throughput ($RTF \approx 0.197$, ~5.1x faster than real-time speech).
 4. **Cinematic Video Engine V2**:
    - 8 dynamic camera motion modes (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`).
    - Motion speeds and clip durations strictly calculated from exact binary audio waveform headers.
@@ -209,7 +209,7 @@ Run the test suite:
 ```bash
 pytest
 ```
-*Current test suite status: **302/302 passed** in ~82 seconds (100% pass rate).*
+*Current test suite status: **306/306 passed** in ~80 seconds (100% pass rate).*
 
 ---
 

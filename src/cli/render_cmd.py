@@ -92,6 +92,30 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                 "Voice strategy must be approved before final render, or specify --skip-review."
             )
 
+        import json
+        from src.core.schemas import VoiceSelectionApproval
+        from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
+
+        try:
+            raw_sel = json.loads(voice_sel_path.read_text(encoding="utf-8"))
+            approval = VoiceSelectionApproval.model_validate(raw_sel)
+        except Exception as err:
+            raise CliValidationError(
+                f"Human Review Gate 1 schema validation failed for '{voice_sel_path}': {err}."
+            ) from err
+
+        if not approval.is_approved():
+            raise CliValidationError(
+                f"Human Review Gate 1 rejected: '{voice_sel_path}' is not approved. "
+                "A valid reviewer identifier ('reviewer' or 'approved_by') and primary voice are required."
+            )
+
+        resolved_v = resolve_voice_id(approval.primary_voice)
+        if resolved_v not in CATALOG_VOICES:
+            raise CliValidationError(
+                f"Human Review Gate 1 invalid: approved voice '{approval.primary_voice}' is not recognized in official catalog."
+            )
+
     # Execute full Video Engine V2 render pipeline
     engine = VideoEngine()
     render_result = engine.render_chapter(

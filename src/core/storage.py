@@ -305,6 +305,7 @@ class FileLock:
                 except ImportError:
                     try:
                         import msvcrt
+                        os.lseek(self._fd, 0, os.SEEK_SET)
                         msvcrt.locking(self._fd, msvcrt.LK_NBLCK, 1)
                     except ImportError:
                         pass  # Basic file existence lock fallback
@@ -338,8 +339,9 @@ class FileLock:
             except ImportError:
                 try:
                     import msvcrt
+                    os.lseek(self._fd, 0, os.SEEK_SET)
                     msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
-                except ImportError:
+                except Exception:
                     pass
             os.close(self._fd)
         finally:

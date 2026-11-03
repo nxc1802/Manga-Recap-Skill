@@ -174,6 +174,35 @@ class TestVideoEngineChapterRender:
         meta = load_chapter_metadata(chap_dir)
         assert meta.checkpoints[StageType.RENDER].status == CheckpointStatus.COMPLETED
 
+    def test_render_chapter_final_1080p(self, setup_synthetic_chapter):
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+        engine = VideoEngine()
+
+        result = engine.render_chapter(
+            project_dir=proj_dir,
+            chapter_num="1",
+            quality="final",
+            burn_subtitles=True,
+            keep_temp=False,
+            suffix="final",
+        )
+
+        assert result["quality"] == "final"
+        assert result["resolution"] == "1920x1080"
+        assert result["fps"] == 30.0
+        assert Path(result["video_path"]).exists()
+        assert Path(result["subtitle_path"]).exists()
+
+        # Check stream validation
+        assert result["validation"]["valid"] is True
+        assert result["validation"]["video"]["width"] == 1920
+        assert result["validation"]["video"]["height"] == 1080
+        assert result["duration_diff_seconds"] <= 0.15
+
+        # Check chapter.json checkpoint
+        meta = load_chapter_metadata(chap_dir)
+        assert meta.checkpoints[StageType.RENDER].status == CheckpointStatus.COMPLETED
+
     def test_render_cli_command(self, setup_synthetic_chapter, capsys):
         proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
 
