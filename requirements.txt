@@ -1,28 +1,24 @@
 # ==============================================================================
-# Manga Recap Pipeline Orchestrator Requirements
+# Manga Recap Pipeline Orchestrator Requirements (100% Cloud API Architecture)
 # ==============================================================================
 
-# Core Application & API
-fastapi
-uvicorn
-streamlit
+# Core Application & API Clients
 httpx
 pydantic
 supabase
 pillow
 pyyaml
 python-dotenv
+numpy
+beautifulsoup4
 
-# TTS & Voice Generation (Piper & Coqui TTS)
-piper-tts
-torch
-torchaudio
-numpy==1.26.4
-munch
-nltk
-librosa
-noisereduce
-phonemizer-fork
-espeakng-loader
-TTS==0.22.0
-transformers
+# Cloud TTS (Text-to-Speech via Microsoft Edge-TTS API)
+edge-tts
+
+# YouTube Data API v3 Integration
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
+
+# Testing & Quality Assurance
+pytest

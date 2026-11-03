@@ -76,4 +76,4 @@ fi
 echo -e "${GREEN}=== Hoàn tất quá trình thiết lập! ===${NC}"
 echo -e "Để kích hoạt môi trường ảo chạy lệnh:"
 echo -e "  ${YELLOW}source venv/bin/activate${NC}"
-echo -e "Để chạy backend hoặc UI, vui lòng tham khảo ${GREEN}README.md${NC}."
+echo -e "Để chạy công cụ qua giao diện dòng lệnh (CLI), vui lòng tham khảo ${GREEN}README.md${NC}."

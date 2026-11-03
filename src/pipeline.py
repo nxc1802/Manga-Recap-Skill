@@ -4,13 +4,11 @@ from pathlib import Path
 from src.core.config import config
 from src.core.logger import logger
 from src.core.supabase_client import supabase
-from src.core.utils import format_sequence_id
+from src.core.utils import format_sequence_id, sync_agent_script_to_db, get_project_data_dir
 
 from src.services.crawler_service import crawler_service
-from src.services.vlm_gateway import vlm_gateway
-from src.services.llm_orchestrator import vlm_orchestrator
 from src.services.tts_service import tts_service
-from src.render.video_engine import video_engine
+from src.render.video_engine import video_engine, VideoMode
 
 class MangaRecapPipeline:
     def __init__(self):
@@ -19,134 +17,90 @@ class MangaRecapPipeline:
     async def run(
         self,
         chapter_number: str,
-        general_story_context: str,
+        general_story_context: str = "Không có bối cảnh cốt truyện.",
         project_title: str = "Mỗi lính đánh thuê trở về đều có một kế hoạch",
-        initial_scripts: dict[int, str] = None,
         crawler_urls: dict[str, str] = None,
         config_overrides: dict = None,
         bgm_path: str = None,
-        output_suffix: str = "manual",
+        output_suffix: str = "agent",
         progress_callback = None,
         burn_subtitles: bool = True
     ) -> str:
         """
-        Runs the end-to-end Manga Recap Pipeline with custom parameters.
+        Runs the Manga Recap Pipeline following the Agentic Hybrid Workflow:
+        1. Setup project & crawl/recut images.
+        2. Validate / auto-sync Agent's custom script (script.txt / script.json).
+        3. Cloud TTS audio generation.
+        4. Video rendering with subtitles & cinematic pan/zoom.
         """
-        logger.info(f"=== Starting Manga Recap Pipeline for Chapter {chapter_number} ===")
+        logger.info(f"=== Starting Manga Recap Pipeline (Agentic Hybrid Workflow) for Chapter {chapter_number} ===")
         
-        # Parse overrides
         overrides = config_overrides or {}
-        vlm_model = overrides.get("vlm_model") or config.vlm_model
-        llm_model = overrides.get("llm_model") or config.llm_model
-        batch_size = overrides.get("batch_size") or config.orchestrator.batch_size
-        sliding_context_window = overrides.get("sliding_context_window") or config.orchestrator.sliding_context_window
-        vlm_image_resize_shortest_edge = overrides.get("vlm_image_resize_shortest_edge") or getattr(config.orchestrator, "vlm_image_resize_shortest_edge", 500)
-        vlm_batch_size = overrides.get("vlm_batch_size") or getattr(config.orchestrator, "vlm_batch_size", 4)
-        vlm_context_length = overrides.get("vlm_context_length") or getattr(config.orchestrator, "vlm_context_length", 2)
         max_panels = overrides.get("max_panels")
-        min_length = overrides.get("min_length") or config.script_limits.min_length
-        max_length = overrides.get("max_length") or config.script_limits.max_length
         tts_speed = overrides.get("tts_speed") or config.tts.speed
         tts_voice = overrides.get("tts_voice") or config.tts.voice
-        pan_mode = overrides.get("render_pan_mode") or getattr(config.orchestrator, "render_pan_mode", "dynamic")
-
-        # 1. Use manual story title and get or create project
+        video_mode = overrides.get("video_mode") or getattr(config.orchestrator, "video_mode", "auto")
+        
+        # 1. Project setup
         if progress_callback:
             await progress_callback("project_setup", f"Khởi tạo dự án '{project_title}'...", {"project_title": project_title})
         project_id = await crawler_service.get_or_create_project(project_title)
         
-        # 2. Crawl chapter (Images & Summary)
-        logger.info("--- Phase 2: Crawling Chapter ---")
+        # 2. Crawl & Recut Chapter
+        logger.info("--- Phase 1: Crawl & Recut Chapter Panels ---")
         if progress_callback:
-            await progress_callback("crawl_start", f"Bắt đầu crawl ảnh chapter {chapter_number}...", {})
+            await progress_callback("crawl_start", f"Kiểm tra và crawl ảnh chapter {chapter_number}...", {})
         
         chapter_base_url = crawler_urls.get("chapter_base_url") if crawler_urls else None
         chapter_id, summary_context = await crawler_service.crawl_chapter(
-            project_id,
-            chapter_number,
+            project_id=project_id,
+            chapter_number=chapter_number,
             general_story_context=general_story_context,
             chapter_base_url=chapter_base_url,
             max_panels=max_panels
         )
-        logger.info(f"Chapter ID: {chapter_id}")
+        logger.info(f"Chapter ID in DB: {chapter_id}")
         if progress_callback:
-            await progress_callback("crawl_complete", f"Crawl hoàn tất chapter {chapter_number}.", {"chapter_id": chapter_id})
+            await progress_callback("crawl_complete", f"Crawl và phân cảnh hoàn tất chapter {chapter_number}.", {"chapter_id": chapter_id})
         
-        # 3. VLM Analysis
-        logger.info("--- Phase 3: VLM Panel Analysis ---")
+        # 3. Agentic Script Validation & Sync
+        logger.info("--- Phase 2: Agent Script Validation & Sync ---")
         if progress_callback:
-            await progress_callback("vlm_start", "Bắt đầu phân tích hình ảnh VLM...", {})
+            await progress_callback("script_check", "Kiểm tra kịch bản Agent...", {})
             
-        max_vlm_retries = 3
-        total_panels = 0
-        processed_panels_db = 0
-        
-        for attempt in range(1, max_vlm_retries + 1):
-            logger.info(f"Running VLM analysis: Attempt {attempt}/{max_vlm_retries}...")
-            await vlm_gateway.process_chapter_panels(
-                chapter_id=chapter_id,
-                chapter_num=chapter_number,
-                vlm_model=vlm_model,
-                vlm_image_resize_shortest_edge=vlm_image_resize_shortest_edge,
-                vlm_batch_size=vlm_batch_size,
-                vlm_context_length=vlm_context_length,
-                progress_callback=progress_callback
-            )
-            
-            # Check DB status
-            panels_res = supabase.table("panels").select("id, status").eq("chapter_id", chapter_id).execute()
-            total_panels = len(panels_res.data)
-            processed_panels_db = sum(1 for p in panels_res.data if p["status"] == "processed")
-            logger.info(f"VLM attempt {attempt} status: {processed_panels_db}/{total_panels} processed.")
-            
-            if processed_panels_db == total_panels:
-                break
-                
-            if attempt < max_vlm_retries:
-                logger.warning(f"Only {processed_panels_db}/{total_panels} panels processed. Retrying in 5 seconds...")
-                await asyncio.sleep(5.0)
-                
+        # Check if already scripted in DB
+        seg_res = supabase.table("script_segments").select("id").eq("chapter_id", chapter_id).execute()
+        is_scripted = bool(seg_res.data)
+
+        if not is_scripted:
+            # Check if script.txt or script.json exists on disk to auto-sync
+            logger.info("Script segments not found in DB. Checking local disk for Agent script...")
+            synced = sync_agent_script_to_db(project_title, chapter_number)
+            if synced:
+                logger.info("Agent script on disk automatically synced into database.")
+                is_scripted = True
+            else:
+                project_dir = get_project_data_dir(project_title)
+                recut_dir = project_dir / "image" / "recut" / f"chap_{chapter_number}"
+                err_msg = (
+                    f"Agentic Hybrid Workflow yêu cầu Agent (AI) phải trực tiếp xem các ảnh phân cảnh trong "
+                    f"'{recut_dir}' và viết kịch bản tiếng Việt vào file 'script.txt' trước khi kết xuất.\n"
+                    f"Sau khi viết xong, hãy chạy 'python src/cli/import_agent_script.py --chapter {chapter_number} --project \"{project_title}\"'."
+                )
+                logger.error(err_msg)
+                raise RuntimeError(err_msg)
+
         if progress_callback:
-            await progress_callback(
-                "vlm_complete",
-                f"Đã xử lý xong {processed_panels_db}/{total_panels} khung hình bằng VLM.",
-                {"processed": processed_panels_db, "total": total_panels}
-            )
-            
-        if processed_panels_db < total_panels:
-            raise RuntimeError(f"VLM analysis failed: only {processed_panels_db}/{total_panels} panels processed successfully after {max_vlm_retries} attempts.")
-            
-        # 4. LLM Script Orchestration
-        logger.info("--- Phase 4: LLM Script Orchestration ---")
+            await progress_callback("script_complete", "Kịch bản Agent đã sẵn sàng.", {})
+
+        # 4. Cloud TTS Audio Generation
+        logger.info("--- Phase 3: Cloud TTS Audio Generation ---")
         if progress_callback:
-            await progress_callback("llm_start", "Bắt đầu sinh kịch bản (LLM)...", {})
-            
-        script_success = await vlm_orchestrator.orchestrate_chapter_scripts(
-            chapter_id=chapter_id,
-            chapter_num=chapter_number,
-            summary_context=summary_context,
-            initial_scripts=initial_scripts,
-            llm_model=llm_model,
-            batch_size=batch_size,
-            sliding_context_window=sliding_context_window,
-            min_length=min_length,
-            max_length=max_length,
-            progress_callback=progress_callback
-        )
-        if not script_success:
-            raise RuntimeError("Script synthesis failed.")
-            
-        if progress_callback:
-            await progress_callback("llm_complete", "Sinh kịch bản hoàn tất.", {})
-            
-        # 5. TTS Audio Generation
-        logger.info("--- Phase 5 (Part 1): TTS Audio Generation ---")
-        if progress_callback:
-            await progress_callback("tts_start", "Bắt đầu tạo giọng đọc (TTS)...", {})
+            await progress_callback("tts_start", f"Bắt đầu tạo giọng đọc TTS ({tts_voice})...", {})
             
         tts_success = await tts_service.process_chapter_audio(
-            chapter_id,
-            chapter_number,
+            chapter_id=chapter_id,
+            chapter_num=chapter_number,
             speed=tts_speed,
             voice_name=tts_voice,
             progress_callback=progress_callback
@@ -157,34 +111,23 @@ class MangaRecapPipeline:
         if progress_callback:
             await progress_callback("tts_complete", "Tạo giọng đọc hoàn tất.", {})
             
-        # 6. Video Generation
-        logger.info("--- Phase 5 (Part 2): Video Generation ---")
+        # 5. Video Generation
+        logger.info("--- Phase 4: Video Generation ---")
         if progress_callback:
             await progress_callback("video_start", "Bắt đầu xử lý và kết xuất video thành phẩm...", {})
             
         video_path = await self.generate_video(
-            chapter_id,
-            chapter_number,
-            bgm_path,
-            output_suffix,
-            progress_callback,
+            chapter_id=chapter_id,
+            chapter_number=chapter_number,
+            bgm_path=bgm_path,
+            output_suffix=output_suffix,
+            progress_callback=progress_callback,
             burn_subtitles=burn_subtitles,
-            pan_mode=pan_mode
+            video_mode=video_mode
         )
-        
-        # 7. Storage Cleanup
-        self.cleanup_temp_files(chapter_number, output_suffix, project_title)
         
         logger.info(f"=== Manga Recap Pipeline Completed successfully! Video saved at: {video_path} ===")
         return video_path
-
-    def cleanup_temp_files(self, chapter_number: str, output_suffix: str, project_title: str):
-        """
-        Deletes temporary intermediate files (images, audio files, clips, raw video)
-        to prevent filling up disk space.
-        """
-        logger.info("Storage cleanup disabled to keep all data files as requested.")
-        return
 
     async def _process_single_panel_clip(
         self,
@@ -192,10 +135,7 @@ class MangaRecapPipeline:
         img_path: str,
         audio_path: Path,
         panel_text: str,
-        focus_x: int,
-        focus_y: int,
-        pan_direction: str,
-        crop_scale: int,
+        video_mode,
         project_dir: Path,
         chapter_number: str,
         progress_callback,
@@ -204,16 +144,17 @@ class MangaRecapPipeline:
         """
         Helper method to process a single panel clip in parallel:
         1. Create background image (cropped + blurred) using Pillow (in thread pool).
-        2. Create transparent subtitle overlay PNG if text exists (in thread pool).
-        3. Render panel clip with FFmpeg overlaying the static subtitle PNG (in thread pool).
-        Enforces a minimum duration of 2.5s (2500ms).
+        2. Render panel clip with FFmpeg overlaying the static subtitle PNG (in thread pool).
+        Uses actual audio duration.
         """
         duration_ms = tts_service.get_audio_duration_ms(str(audio_path))
-        clip_duration_ms = max(duration_ms, 2500)  # Enforce min 2.5s duration
+        clip_duration_ms = duration_ms
         
         formatted_seq = format_sequence_id(seq_id)
-        cropped_dir = project_dir / "cropped_images"
+        cropped_dir = project_dir / "image" / "cropped"
         cropped_dir.mkdir(parents=True, exist_ok=True)
+        clips_dir = project_dir / "video" / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
         
         if "_" in seq_id:
             parts = seq_id.split("_")
@@ -224,51 +165,46 @@ class MangaRecapPipeline:
             crop_idx = "1"
             
         processed_image_path = cropped_dir / f"image_{chapter_number}_{raw_seq}_{crop_idx}.webp"
-        sub_overlay_path = cropped_dir / f"image_{chapter_number}_{raw_seq}_{crop_idx}_sub_overlay.png"
-        output_clip_path = cropped_dir / f"clip_{chapter_number}_{formatted_seq}.mp4"
+        output_clip_path = clips_dir / f"clip_{chapter_number}_{formatted_seq}.mp4"
         
-        if output_clip_path.exists():
-            logger.info(f"Panel {seq_id} clip already exists at {output_clip_path}. Skipping rendering.")
+        is_uptodate = False
+        if output_clip_path.exists() and audio_path.exists():
+            clip_mtime = os.path.getmtime(str(output_clip_path))
+            audio_mtime = os.path.getmtime(str(audio_path))
+            img_mtime = os.path.getmtime(str(img_path)) if os.path.exists(str(img_path)) else 0
+            if clip_mtime >= audio_mtime and clip_mtime >= img_mtime:
+                is_uptodate = True
+
+        if is_uptodate:
+            logger.info(f"Panel {seq_id} clip already exists at {output_clip_path} and is up-to-date. Skipping rendering.")
         else:
-            # 1. Create background image without subtitles (run in thread)
+            # 1. Create processed panel image (thread pool)
             await asyncio.to_thread(
                 video_engine.create_processed_panel_image,
                 raw_img_path=str(img_path),
                 output_path=str(processed_image_path),
-                focus_x=focus_x,
-                focus_y=focus_y,
-                crop_scale=crop_scale
+                video_mode=video_mode
             )
             
-            # 2. Create transparent subtitle overlay PNG if text exists and burn_subtitles is enabled
-            sub_overlay_str = None
-            if burn_subtitles and panel_text:
-                await asyncio.to_thread(
-                    video_engine.create_subtitle_overlay_png,
-                    text=panel_text,
-                    output_path=str(sub_overlay_path)
-                )
-                sub_overlay_str = str(sub_overlay_path)
-            
-            # Extract an integer sequence index for alternating pan direction
             import re
             try:
                 seq_idx = int(re.sub(r'\D', '', seq_id))
             except Exception:
                 seq_idx = 1
                 
-            # 3. Render panel clip with FFmpeg (run in thread to parallelize FFmpeg subprocesses)
+            # 2. Render panel clip with FFmpeg (thread pool)
             await asyncio.to_thread(
                 video_engine.generate_panel_clip,
                 img_path=str(processed_image_path),
                 audio_path=str(audio_path),
                 duration_ms=clip_duration_ms,
                 output_path=str(output_clip_path),
-                pan_direction=pan_direction,
+                video_mode=video_mode,
                 seq=seq_idx,
-                sub_overlay_path=sub_overlay_str
+                panel_text=panel_text,
+                burn_subtitles=burn_subtitles
             )
-        
+
         if progress_callback:
             await progress_callback(
                 "video_clip",
@@ -289,25 +225,21 @@ class MangaRecapPipeline:
         chapter_id: str,
         chapter_number: str,
         bgm_path: str = None,
-        output_suffix: str = "manual",
+        output_suffix: str = "agent",
         progress_callback = None,
         burn_subtitles: bool = True,
-        pan_mode: str = None
+        video_mode: str = None
     ) -> str:
         """
         Assembles individual panel clips and renders the final video for the chapter.
         """
         logger.info(f"Assembling video for chapter {chapter_number}...")
         
-        # Resolve pan_mode: argument override -> config default -> "dynamic"
-        resolved_pan_mode = pan_mode or getattr(config.orchestrator, "render_pan_mode", "dynamic")
-        logger.info(f"Using pan mode: {resolved_pan_mode}")
-        
         from src.core.utils import get_project_title_by_chapter_id, get_project_data_dir, load_csv_script_for_chapter, get_next_video_path
+        from PIL import Image
         project_title = get_project_title_by_chapter_id(chapter_id)
         project_dir = get_project_data_dir(project_title)
         
-        # Query all panels
         panels_res = supabase.table("panels")\
             .select("*")\
             .eq("chapter_id", chapter_id)\
@@ -317,10 +249,30 @@ class MangaRecapPipeline:
         if not panels:
             raise ValueError(f"No panels found in database for chapter {chapter_id}")
             
-        # Compile mapping from sequence_id -> script config
-        panel_config_map = {}
+        resolved_video_mode_str = video_mode or getattr(config.orchestrator, "video_mode", "auto")
+        logger.info(f"Configured video mode: {resolved_video_mode_str}")
         
-        # Try loading from central script.csv first
+        if resolved_video_mode_str == "auto" and panels:
+            first_panel = panels[0]
+            first_img_path = first_panel["processed_image_url"] or first_panel["raw_image_url"]
+            if first_img_path and os.path.exists(first_img_path):
+                try:
+                    with Image.open(first_img_path) as tmp_img:
+                        w, h = tmp_img.size
+                    resolved_video_mode = video_engine.detect_video_mode(w, h)
+                    logger.info(f"Auto-detected video mode from first panel ({w}x{h}): {resolved_video_mode.value}")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-detect video mode: {e}. Falling back to portrait_padded.")
+                    resolved_video_mode = VideoMode.PORTRAIT_PADDED
+            else:
+                resolved_video_mode = VideoMode.PORTRAIT_PADDED
+        else:
+            try:
+                resolved_video_mode = VideoMode(resolved_video_mode_str)
+            except Exception:
+                resolved_video_mode = VideoMode.PORTRAIT_PADDED
+                
+        panel_config_map = {}
         parsed_csv = load_csv_script_for_chapter(project_dir, chapter_number)
         if parsed_csv:
             logger.info(f"Loaded script for chapter {chapter_number} from local script.csv")
@@ -329,7 +281,6 @@ class MangaRecapPipeline:
                 panel_config_map[seq_id] = p
         else:
             logger.info("Local script.csv not found. Falling back to Supabase script_segments.")
-            # Query all script segments to parse script texts
             segments_res = supabase.table("script_segments")\
                 .select("*")\
                 .eq("chapter_id", chapter_id)\
@@ -346,38 +297,76 @@ class MangaRecapPipeline:
                     panel_config_map[seq_id] = {
                         "sequence_number": p["sequence_number"],
                         "sequence_id": seq_id,
-                        "text": p["text"],
-                        "focus_x": p.get("focus_x", 50),
-                        "focus_y": p.get("focus_y", 50),
-                        "pan_direction": p.get("pan_direction", "horizontal"),
-                        "crop_scale": p.get("crop_scale", 100)
+                        "text": p["text"]
                     }
                     
-        audio_dir = project_dir / "audio"
+        audio_dir = project_dir / "audio" / "clips"
+        ffmpeg_max_concurrent = getattr(config.orchestrator, "ffmpeg_max_concurrent", 4)
+        semaphore = asyncio.Semaphore(ffmpeg_max_concurrent)
         
-        # Prepare rendering tasks
-        tasks = []
+        async def bounded_process(task_coro):
+            async with semaphore:
+                return await task_coro
+                
+        active_groups = []
+        current_group = None
+        pending_context_seqs = []
+        
         for panel in panels:
             seq = panel["sequence_number"]
             img_path = panel["processed_image_url"] or panel["raw_image_url"]
+            status = panel.get("status", "processed")
+            is_skipped = (img_path and "skip" in str(img_path).lower()) or status in ("skip", "useless")
             
-            # Find all sequence_ids associated with this panel seq (e.g. "5", "5_1", "5_2")
+            if is_skipped:
+                continue
+            elif status == "context_only":
+                if current_group is not None:
+                    current_group["panel_seqs"].append(seq)
+                else:
+                    pending_context_seqs.append(seq)
+            else:
+                current_group = {
+                    "active_panel": panel,
+                    "panel_seqs": [seq]
+                }
+                if pending_context_seqs:
+                    current_group["panel_seqs"] = pending_context_seqs + current_group["panel_seqs"]
+                    pending_context_seqs = []
+                active_groups.append(current_group)
+                
+        if pending_context_seqs and active_groups:
+            active_groups[-1]["panel_seqs"].extend(pending_context_seqs)
+            pending_context_seqs = []
+
+        import re
+        tasks = []
+        for group in active_groups:
+            active_panel = group["active_panel"]
+            active_seq = active_panel["sequence_number"]
+            img_path = active_panel["processed_image_url"] or active_panel["raw_image_url"]
+            group_seqs = group["panel_seqs"]
+            
             sub_keys = []
             for k in panel_config_map.keys():
-                if k == str(seq) or k.startswith(f"{seq}_"):
-                    sub_keys.append(k)
-                    
-            # Sort sub_keys so they render in correct order (e.g. 5_1, 5_2)
+                match = re.match(r"^(\d+)", k)
+                if match:
+                    k_seq = int(match.group(1))
+                    if k_seq in group_seqs:
+                        sub_keys.append(k)
+                        
             def get_sub_key_sort(x):
                 val = x.replace("_", ".")
                 try:
                     return float(val)
                 except ValueError:
-                    return float(seq)
+                    match = re.match(r"^(\d+)", x)
+                    if match:
+                        return float(match.group(1))
+                    return 0.0
             sub_keys.sort(key=get_sub_key_sort)
             
             if not sub_keys:
-                logger.info(f"Panel {seq} has no script entry (skipped). Skipping rendering completely.")
                 continue
                 
             for k in sub_keys:
@@ -390,25 +379,19 @@ class MangaRecapPipeline:
                     
                 panel_cfg = panel_config_map[k]
                 
-                # Apply unified pan mode override if configured (and not "dynamic")
-                pan_dir = panel_cfg["pan_direction"]
-                if resolved_pan_mode and resolved_pan_mode != "dynamic":
-                    pan_dir = resolved_pan_mode
-                    
                 tasks.append(
-                    self._process_single_panel_clip(
-                        seq_id=k,
-                        img_path=img_path,
-                        audio_path=audio_path,
-                        panel_text=panel_cfg["text"],
-                        focus_x=panel_cfg["focus_x"],
-                        focus_y=panel_cfg["focus_y"],
-                        pan_direction=pan_dir,
-                        crop_scale=panel_cfg["crop_scale"],
-                        project_dir=project_dir,
-                        chapter_number=chapter_number,
-                        progress_callback=progress_callback,
-                        burn_subtitles=burn_subtitles
+                    bounded_process(
+                        self._process_single_panel_clip(
+                            seq_id=k,
+                            img_path=img_path,
+                            audio_path=audio_path,
+                            panel_text=panel_cfg["text"],
+                            video_mode=resolved_video_mode,
+                            project_dir=project_dir,
+                            chapter_number=chapter_number,
+                            progress_callback=progress_callback,
+                            burn_subtitles=burn_subtitles
+                        )
                     )
                 )
             
@@ -424,10 +407,9 @@ class MangaRecapPipeline:
             render_clips.append(clip_path)
             script_items.append(script_item)
             
-        # Concatenate all clips
-        video_dir = project_dir / "video"
-        video_dir.mkdir(parents=True, exist_ok=True)
-        raw_video_path = video_dir / f"chapter_{chapter_number}_raw_temp.mp4"
+        video_chapters_dir = project_dir / "video" / "chapters"
+        video_chapters_dir.mkdir(parents=True, exist_ok=True)
+        raw_video_path = video_chapters_dir / f"chapter_{chapter_number}_raw_temp.mp4"
         
         logger.info(f"Concatenating {len(render_clips)} clips...")
         if progress_callback:
@@ -437,11 +419,9 @@ class MangaRecapPipeline:
         if not success_concat:
             raise RuntimeError("Failed to concatenate panel clips.")
             
-        # Generate SRT subtitles
-        srt_path = video_dir / f"chapter_{chapter_number}_subs_temp.srt"
+        srt_path = video_chapters_dir / f"chapter_{chapter_number}_subs_temp.srt"
         video_engine.generate_srt_file(script_items, str(srt_path))
         
-        # Mix BGM and output final video
         final_video_path = get_next_video_path(project_dir, chapter_number)
         
         logger.info("Mixing BGM and burning subtitles...")
@@ -457,7 +437,22 @@ class MangaRecapPipeline:
         if not success_final:
             raise RuntimeError("Failed to generate final video.")
             
-        # Clean up temporary video and subtitle files
+        try:
+            chapter_audio_dir = project_dir / "audio" / "chapters"
+            chapter_audio_dir.mkdir(parents=True, exist_ok=True)
+            chapter_audio_path = chapter_audio_dir / f"chapter_{chapter_number}.wav"
+            import subprocess
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(final_video_path),
+                "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+                str(chapter_audio_path)
+            ]
+            logger.info(f"Extracting chapter audio to {chapter_audio_path}...")
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as ae:
+            logger.warning(f"Failed to extract chapter audio: {ae}")
+            
         try:
             if os.path.exists(str(raw_video_path)):
                 os.remove(str(raw_video_path))

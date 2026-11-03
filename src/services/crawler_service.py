@@ -6,13 +6,12 @@ import asyncio
 from src.core.config import config
 from src.core.logger import logger
 from src.core.supabase_client import supabase
-from src.core.openrouter_client import openrouter_client
 
 class CrawlerService:
     def __init__(self):
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://truyenqqko.com/"
+            "Referer": "https://www.webtoons.com/"
         }
         
     async def get_or_create_project(self, title: str) -> str:
@@ -80,7 +79,23 @@ class CrawlerService:
         5. Insert panel records into Supabase panels table.
         Returns (chapter_uuid, summary_context)
         """
-        url = f"{chapter_base_url or config.crawler.chapter_base_url}{chapter_number}"
+        url_template = chapter_base_url or config.crawler.chapter_base_url
+        if "[CHAPTER_NUMBER]" in url_template:
+            url = url_template.replace("[CHAPTER_NUMBER]", chapter_number)
+        elif "{chapter_number}" in url_template:
+            url = url_template.replace("{chapter_number}", chapter_number)
+        elif "{chapter}" in url_template:
+            url = url_template.replace("{chapter}", chapter_number)
+        elif "webtoons.com" in url_template.lower():
+            # Dynamically replace episode number in webtoons URL
+            import re
+            url = re.sub(r'/episode-\d+/', f'/episode-{chapter_number}/', url_template)
+            url = re.sub(r'([?&]episode_no=)\d+', r'\g<1>' + chapter_number, url)
+        else:
+            if url_template.startswith("http://") or url_template.startswith("https://"):
+                url = url_template
+            else:
+                url = f"{url_template}{chapter_number}"
         logger.info(f"Crawling Chapter {chapter_number} from: {url}")
         
         # 1. Use manual story description from parameter instead of config
@@ -175,7 +190,7 @@ class CrawlerService:
             project_dir = get_project_data_dir(project_title)
             
             # Temporary directory for raw unsliced pages
-            raw_pages_dir = project_dir / "raw_pages" / f"chap_{chapter_number}"
+            raw_pages_dir = project_dir / "image" / "raw" / f"chap_{chapter_number}"
             raw_pages_dir.mkdir(parents=True, exist_ok=True)
             
             async def download_task(seq: int, img_url: str):
@@ -200,7 +215,7 @@ class CrawlerService:
             
             # 5. Run Stitch & Segment on the downloaded pages
             logger.info("--- Preprocessing: Stitch & Segment Chapter Pages ---")
-            raw_images_dir = project_dir / "raw_images" / f"chap_{chapter_number}"
+            raw_images_dir = project_dir / "image" / "recut" / f"chap_{chapter_number}"
             raw_images_dir.mkdir(parents=True, exist_ok=True)
             
             from src.core.stitch_segment import preprocess_and_segment_images

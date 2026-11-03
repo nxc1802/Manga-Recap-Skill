@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 # Add project root to path
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.core.logger import logger
 from src.core.supabase_client import supabase
@@ -25,7 +25,7 @@ def main():
             sys.exit(1)
         
         project_dir = get_project_data_dir(args.project)
-        video_dir = project_dir / "video"
+        video_dir = project_dir / "video" / "chapters"
         
         if not video_dir.exists():
             logger.error(f"Video folder does not exist: {video_dir}")
@@ -67,7 +67,9 @@ def main():
                 abs_path = os.path.abspath(path)
                 f.write(f"file '{abs_path}'\n")
                 
-        final_video_path = project_dir / "final_recap.mp4"
+        final_video_dir = project_dir / "video"
+        final_video_dir.mkdir(parents=True, exist_ok=True)
+        final_video_path = final_video_dir / "final.mp4"
         
         # 5. Run FFmpeg demuxer to concatenate
         cmd = [
@@ -92,9 +94,23 @@ def main():
                 logger.error(result.stderr.decode("utf-8", errors="ignore"))
             sys.exit(1)
             
+        # 6. Extract final audio to audio/final.wav
+        final_audio_path = project_dir / "audio" / "final.wav"
+        final_audio_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"Extracting final audio to {final_audio_path}...")
+        cmd_audio = [
+            "ffmpeg", "-y",
+            "-i", str(final_video_path),
+            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+            str(final_audio_path)
+        ]
+        subprocess.run(cmd_audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
         logger.info("=========================================================")
-        logger.info("SUCCESS: Final recap video combined successfully!")
+        logger.info("SUCCESS: Final recap video & audio combined successfully!")
         logger.info(f"Compiled Video File: {final_video_path.resolve()}")
+        logger.info(f"Compiled Audio File: {final_audio_path.resolve()}")
         logger.info("=========================================================")
         
     except Exception as e:

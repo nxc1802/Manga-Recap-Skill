@@ -11,7 +11,7 @@ class CharacterDictionaryService:
         from src.core.utils import get_project_title_by_id, get_project_data_dir
         project_title = get_project_title_by_id(project_id)
         project_dir = get_project_data_dir(project_title)
-        return str(project_dir / "recap_memory" / "character_dictionary.json")
+        return str(project_dir / "memory" / "character_dictionary.json")
 
     def load_dictionary(self, project_id: str) -> dict:
         """
@@ -77,6 +77,18 @@ class CharacterDictionaryService:
                 self.dict_cache[target_name]["core_features"] = new_core
                 self.dict_cache[target_name]["current_outfit"] = new_outfit
                 
+                # Rename in Supabase character_embeddings table
+                try:
+                    from src.core.supabase_client import supabase
+                    supabase.table("character_embeddings")\
+                        .update({"character_name": target_name})\
+                        .eq("project_id", project_id)\
+                        .eq("character_name", char_name)\
+                        .execute()
+                    logger.info(f"Renamed character '{char_name}' to '{target_name}' in Supabase character_embeddings.")
+                except Exception as db_err:
+                    logger.error(f"Failed to rename character in Supabase character_embeddings: {db_err}")
+                    
                 # Delete the old temporary key if it exists
                 if char_name in self.dict_cache:
                     del self.dict_cache[char_name]

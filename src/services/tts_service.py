@@ -2,93 +2,129 @@ import os
 import re
 import subprocess
 import wave
+import json
+import base64
 from pathlib import Path
 import asyncio
-import piper
+import httpx
 from src.core.config import config
 from src.core.logger import logger
 from src.core.supabase_client import supabase
 from src.core.utils import format_sequence_id
 
-
 VOICE_MODELS = {
-    "vi_VN-vivos-x_low": {
-        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx",
-        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/vivos/x_low/vi_VN-vivos-x_low.onnx.json",
-        "filename": "vi_VN-vivos-x_low.onnx"
+    # Microsoft Edge-TTS Cloud API (Free, high-speed, neural speech, zero local models)
+    "edge-tts-female": {
+        "type": "edgetts",
+        "voice": "vi-VN-HoaiMyNeural",
+        "description": "Giọng nữ tiếng Việt (Hoài My - Microsoft Neural API)"
     },
-    "vi_VN-vais1000-medium": {
-        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx",
-        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/vais1000/medium/vi_VN-vais1000-medium.onnx.json",
-        "filename": "vi_VN-vais1000-medium.onnx"
+    "edge-tts-male": {
+        "type": "edgetts",
+        "voice": "vi-VN-NamMinhNeural",
+        "description": "Giọng nam tiếng Việt (Nam Minh - Microsoft Neural API)"
     },
-    "vi_VN-25hours_single-low": {
-        "onnx_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/25hours_single/low/vi_VN-25hours_single-low.onnx",
-        "json_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/vi/vi_VN/25hours_single/low/vi_VN-25hours_single-low.onnx.json",
-        "filename": "vi_VN-25hours_single-low.onnx"
+    "edge-tts-en-female": {
+        "type": "edgetts",
+        "voice": "en-US-JennyNeural",
+        "description": "Giọng nữ tiếng Anh (Jenny - Microsoft Neural API)"
     },
-    "styletts2-vi": {
-        "filename": "model.pth",
-        "type": "styletts2"
+    "edge-tts-en-male": {
+        "type": "edgetts",
+        "voice": "en-US-GuyNeural",
+        "description": "Giọng nam tiếng Anh (Guy - Microsoft Neural API)"
     },
-    "styletts2-vi-female": {
-        "filename": "model.pth",
-        "type": "styletts2"
+
+    # Google Gemini TTS REST API
+    "gemini-2.5-flash": {
+        "type": "gemini",
+        "model": "gemini-2.5-flash-preview-tts",
+        "voice": "Puck",
+        "description": "Giọng Gemini 2.5 Flash Audio API (Puck)"
     },
-    "xtts-vi": {
-        "type": "xtts",
-        "reference_wav": "models/styletts2/reference_audio/vn_1.wav"
+    "gemini-3.1-flash": {
+        "type": "gemini",
+        "model": "gemini-3.1-flash-tts-preview",
+        "voice": "Puck",
+        "description": "Giọng Gemini 3.1 Flash Audio API (Puck)"
     },
-    "xtts-vi-female": {
-        "type": "xtts",
-        "reference_wav": "models/styletts2/reference_audio/vn_2.wav"
+    "gemini-kore": {
+        "type": "gemini",
+        "model": "gemini-2.5-flash-preview-tts",
+        "voice": "Kore",
+        "description": "Giọng Gemini 2.5 Flash Audio API (Kore - Nữ)"
+    },
+
+    # OpenAI TTS Cloud API
+    "openai-tts-alloy": {
+        "type": "openai",
+        "voice": "alloy",
+        "model": "tts-1",
+        "description": "Giọng OpenAI Cloud TTS (Alloy)"
+    },
+    "openai-tts-echo": {
+        "type": "openai",
+        "voice": "echo",
+        "model": "tts-1",
+        "description": "Giọng OpenAI Cloud TTS (Echo)"
+    },
+    "openai-tts-nova": {
+        "type": "openai",
+        "voice": "nova",
+        "model": "tts-1",
+        "description": "Giọng OpenAI Cloud TTS (Nova - Nữ)"
+    },
+    "openai-tts-shimmer": {
+        "type": "openai",
+        "voice": "shimmer",
+        "model": "tts-1",
+        "description": "Giọng OpenAI Cloud TTS (Shimmer - Nữ)"
     }
+}
+
+# Redirect legacy local voice models to cloud API voices
+VOICE_ALIASES = {
+    "vi_VN-vais1000-medium": "edge-tts-male",
+    "vi_VN-vivos-x_low": "edge-tts-male",
+    "vi_VN-25hours_single-low": "edge-tts-female",
+    "xtts-vi": "edge-tts-male",
+    "xtts-vi-female": "edge-tts-female",
+    "vixtts-v2-male": "edge-tts-male",
+    "vixtts-v2-female": "edge-tts-female",
+    "vieneu-v3-male": "edge-tts-male",
+    "vieneu-v3-female": "edge-tts-female",
+    "valtec-male": "edge-tts-male",
+    "valtec-female": "edge-tts-female",
+    "valtec-sf": "edge-tts-female",
+    "valtec-sm": "edge-tts-male",
+    "valtec-nm2": "edge-tts-male",
+    "styletts2-vi": "edge-tts-male",
+    "styletts2-vi-female": "edge-tts-female",
+    "vits-mms-vi": "edge-tts-female",
 }
 
 class TTSService:
     def __init__(self):
-        self.voices = {}
-        self.models_dir = Path("models/piper")
-        self.styletts2_model = None
+        pass
 
-    def _ensure_model_downloaded(self, voice_name: str) -> Path:
-        if voice_name not in VOICE_MODELS:
-            raise ValueError(f"Unsupported voice model: {voice_name}")
-            
-        info = VOICE_MODELS[voice_name]
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        onnx_path = self.models_dir / info["filename"]
-        json_path = self.models_dir / f"{info['filename']}.json"
-        
-        # Download ONNX if not exists
-        if not onnx_path.exists():
-            logger.info(f"Downloading ONNX model for {voice_name} from {info['onnx_url']}...")
-            import urllib.request
-            urllib.request.urlretrieve(info["onnx_url"], onnx_path)
-            logger.info(f"Downloaded ONNX successfully.")
-            
-        # Download JSON if not exists
-        if not json_path.exists():
-            logger.info(f"Downloading JSON config for {voice_name} from {info['json_url']}...")
-            import urllib.request
-            urllib.request.urlretrieve(info["json_url"], json_path)
-            logger.info(f"Downloaded JSON successfully.")
-            
-        return onnx_path
-
-    def get_voice(self, voice_name: str = None):
+    def resolve_voice_name(self, voice_name: str = None) -> str:
         """
-        Lazily loads the specified Piper voice model.
+        Resolves voice name to an active API voice.
+        Maps deprecated local voices to Edge-TTS API equivalents.
         """
         if not voice_name:
-            voice_name = config.tts.voice if (config and config.tts) else "xtts-vi"
-            
-        if voice_name not in self.voices:
-            onnx_path = self._ensure_model_downloaded(voice_name)
-            logger.info(f"Loading Piper voice '{voice_name}' from {onnx_path}...")
-            self.voices[voice_name] = piper.PiperVoice.load(str(onnx_path))
-            logger.info(f"Piper voice '{voice_name}' loaded successfully.")
-        return self.voices[voice_name]
+            voice_name = config.tts.voice if (config and config.tts) else "edge-tts-female"
+
+        if voice_name in VOICE_ALIASES:
+            target_api_voice = VOICE_ALIASES[voice_name]
+            logger.info(f"TTS: Local voice '{voice_name}' is deprecated. Redirecting to API voice '{target_api_voice}'.")
+            return target_api_voice
+
+        if voice_name in VOICE_MODELS:
+            return voice_name
+
+        logger.warning(f"TTS: Unknown voice '{voice_name}'. Defaulting to 'edge-tts-female'.")
+        return "edge-tts-female"
 
     def get_audio_duration_ms(self, audio_path: str) -> int:
         """
@@ -115,13 +151,9 @@ class TTSService:
         Supports both legacy text markers and new JSON configuration formats.
         """
         script_text = script_text.strip()
-        # Check if it is JSON
         if script_text.startswith("{") and script_text.endswith("}"):
-            import json
             try:
                 data = json.loads(script_text)
-                
-                # Support wrapped "scripts" key if present
                 scripts_dict = {}
                 if isinstance(data, dict):
                     if "scripts" in data:
@@ -140,10 +172,15 @@ class TTSService:
                     seq_num = int(match_prefix.group(1))
                     
                     if isinstance(v, dict):
+                        tag = v.get("status") or v.get("tag") or ""
+                        status = "processed"
+                        if tag in ("context_only", "useless", "video_and_context"):
+                            status = "context_only" if tag == "context_only" else ("useless" if tag == "useless" else "processed")
                         results.append({
                             "sequence_id": seq_str,
                             "sequence_number": seq_num,
                             "text": v.get("text", ""),
+                            "status": status,
                             "focus_x": v.get("focus_x", 50),
                             "focus_y": v.get("focus_y", 50),
                             "pan_direction": v.get("pan_direction", "horizontal"),
@@ -154,12 +191,13 @@ class TTSService:
                             "sequence_id": seq_str,
                             "sequence_number": seq_num,
                             "text": str(v),
+                            "status": "processed",
                             "focus_x": 50,
                             "focus_y": 50,
                             "pan_direction": "horizontal",
                             "crop_scale": 100
                         })
-                # Sort by sequence float-like value
+
                 def get_sort_key(x):
                     val = x["sequence_id"].replace("_", ".")
                     try:
@@ -170,22 +208,35 @@ class TTSService:
                 return results
             except Exception as e:
                 logger.error(f"Error parsing script_text as JSON: {e}. Falling back to text regex.")
-                
-        # Legacy text regex parsing (supporting sub-panel markers like [Khung hình 5_1])
-        matches = re.finditer(r"\[Khung\s*hình\s*([^\]]+)\]:?\s*(.*?)(?=\[Khung\s*hình\s*[^\]]+\]|$)", script_text, re.DOTALL | re.IGNORECASE)
+
+        # Legacy text regex parsing
+        matches = re.finditer(
+            r"\[Khung\s*hình\s*([^\]]+)\](?:\s*\[(context_only|video_and_context|useless)\])?:?\s*(.*?)(?=\[Khung\s*hình\s*[^\]]+\]|$)",
+            script_text,
+            re.DOTALL | re.IGNORECASE
+        )
         results = []
         for match in matches:
             seq_str = match.group(1).strip()
+            tag = (match.group(2) or "").strip().lower()
+            text = match.group(3).strip()
+            text = re.sub(r"^:\s*", "", text)
+            
+            status = "processed"
+            if tag == "context_only":
+                status = "context_only"
+            elif tag == "useless":
+                status = "useless"
+                
             match_prefix = re.match(r"^(\d+)", seq_str)
             if not match_prefix:
                 continue
             seq_num = int(match_prefix.group(1))
-            text = match.group(2).strip()
-            text = re.sub(r"^:\s*", "", text)
             results.append({
                 "sequence_id": seq_str,
                 "sequence_number": seq_num,
                 "text": text,
+                "status": status,
                 "focus_x": 50,
                 "focus_y": 50,
                 "pan_direction": "horizontal",
@@ -201,225 +252,211 @@ class TTSService:
         results.sort(key=get_sort_key)
         return results
 
-    async def generate_panel_audio_styletts2(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = None) -> int:
+    async def _adjust_speed(self, output_path: Path, speed: float):
         """
-        Generates audio using StyleTTS2 and returns its duration in ms.
+        Adjusts audio file speed using FFmpeg atempo.
+        """
+        temp_path = output_path.with_name(f"temp_{output_path.name}")
+        output_path.rename(temp_path)
+        clamped_speed = max(0.5, min(2.0, speed))
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(temp_path),
+            "-filter:a", f"atempo={clamped_speed}",
+            str(output_path)
+        ]
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate()
+        
+        if proc.returncode != 0:
+            logger.error(f"FFmpeg speed adjustment failed: {stderr.decode()}")
+            if temp_path.exists():
+                temp_path.rename(output_path)
+        else:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    async def generate_panel_audio_edgetts(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = "edge-tts-female") -> int:
+        """
+        Generates audio using Microsoft Edge-TTS Cloud API and returns its duration in ms.
+        Includes automatic retry for transient network issues.
+        """
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        info = VOICE_MODELS.get(voice_name, VOICE_MODELS["edge-tts-female"])
+        voice = info.get("voice", "vi-VN-HoaiMyNeural")
+        
+        rate_percent = int((speed - 1.0) * 100)
+        rate_str = f"{rate_percent:+}%" if rate_percent != 0 else "+0%"
+        
+        import edge_tts
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                communicate = edge_tts.Communicate(text, voice, rate=rate_str)
+                temp_mp3 = output_path.with_suffix(".mp3")
+                await communicate.save(str(temp_mp3))
+                
+                # Convert MP3 to PCM WAV and strip silence
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", str(temp_mp3),
+                    "-af", "silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB:stop_silence=0.25",
+                    "-c:a", "pcm_s16le",
+                    str(output_path)
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                if temp_mp3.exists():
+                    temp_mp3.unlink()
+                    
+                return self.get_audio_duration_ms(str(output_path))
+            except Exception as e:
+                logger.warning(f"Edge-TTS API attempt {attempt} failed: {e}")
+                if attempt == max_retries:
+                    raise
+                await asyncio.sleep(1.0)
+
+    async def generate_panel_audio_gemini(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = "gemini-2.5-flash") -> int:
+        """
+        Generates audio using Google Gemini TTS REST API and returns duration in ms.
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Lazy load StyleTTS2 model
-        if self.styletts2_model is None:
-            logger.info("Initializing StyleTTS2 model...")
-            import sys
-            import torch
-            styletts2_dir = str(Path(__file__).resolve().parent / "styletts2")
-            if styletts2_dir not in sys.path:
-                sys.path.append(styletts2_dir)
-                
-            from inference import StyleTTS2 as StyleTTS2Model
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY is not configured in .env for Gemini TTS")
             
-            config_path = "models/styletts2/config.yaml"
-            models_path = "models/styletts2/model.pth"
-            
-            device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
-            logger.info(f"Loading StyleTTS2 on device: {device}")
-            self.styletts2_model = StyleTTS2Model(config_path, models_path).eval().to(device)
-            logger.info("StyleTTS2 model loaded successfully.")
-
-        # Determine reference audio for speaker identity
-        ref_audio_path = "models/styletts2/reference_audio/vn_1.wav"
-        if voice_name == "styletts2-vi-female":
-            ref_audio_path = "models/styletts2/reference_audio/vn_2.wav"
-            
-        # Run in thread pool since PyTorch / espeak-ng is CPU/GPU intensive and synchronous
-        import numpy as np
-        import soundfile as sf
-        import torch
+        info = VOICE_MODELS.get(voice_name, {})
+        model = info.get("model", "gemini-2.5-flash-preview-tts")
+        voice_preset = info.get("voice", "Puck")
         
-        def synthesize():
-            speakers = {
-                "id_1": {
-                    "path": ref_audio_path,
-                    "lang": "vi",
-                    "speed": speed
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": text}]
+                }
+            ],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice_preset
+                        }
+                    }
                 }
             }
-            with torch.no_grad():
-                styles = self.styletts2_model.get_styles(speakers, denoise=0.6, avg_style=True)
-                r = self.styletts2_model.generate(text, styles, stabilize=True, n_merge=18, default_speaker="[id_1]")
-                r = r / np.abs(r).max()
-            sf.write(str(output_path), r, samplerate=24000)
-            
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, synthesize)
+        }
         
-        # Measure duration
-        duration_ms = self.get_audio_duration_ms(str(output_path))
-        return duration_ms
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, json=payload)
+            if response.status_code != 200:
+                logger.error(f"Gemini API Error: {response.text}")
+                raise RuntimeError(f"Gemini API call failed with status {response.status_code}: {response.text}")
+                
+            data = response.json()
+            try:
+                parts = data["candidates"][0]["content"]["parts"]
+                audio_data = None
+                for part in parts:
+                    if "inlineData" in part:
+                        audio_data = part["inlineData"]["data"]
+                        break
+                        
+                if not audio_data:
+                    raise ValueError("No audio inlineData found in Gemini response")
+                    
+                raw_bytes = base64.b64decode(audio_data)
+                with wave.open(str(output_path), "wb") as wav_file:
+                    wav_file.setnchannels(1)
+                    wav_file.setsampwidth(2)
+                    wav_file.setframerate(24000)
+                    wav_file.writeframes(raw_bytes)
+            except Exception as e:
+                logger.error(f"Failed to parse Gemini API response: {e}")
+                raise RuntimeError(f"Failed to parse Gemini response: {e}")
+                
+        if speed != 1.0:
+            await self._adjust_speed(output_path, speed)
+            
+        return self.get_audio_duration_ms(str(output_path))
 
-    async def generate_panel_audio_xtts(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = None) -> int:
+    async def generate_panel_audio_openai(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = "openai-tts-alloy") -> int:
         """
-        Generates audio using XTTS and returns its duration in ms.
+        Generates audio using OpenAI TTS API (or compatible API endpoint).
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY or OPENROUTER_API_KEY is required for OpenAI TTS")
+            
+        base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        url = f"{base_url.rstrip('/')}/audio/speech"
         
-        if not hasattr(self, "xtts_model") or self.xtts_model is None:
-            logger.info("Initializing XTTS model (capleaf/viXTTS)...")
-            
-            # Ensure model files are downloaded
-            model_dir = Path("models/vixtts")
-            if not model_dir.exists() or not (model_dir / "model.pth").exists():
-                logger.info("Downloading capleaf/viXTTS from Hugging Face...")
-                from huggingface_hub import snapshot_download
-                snapshot_download(repo_id="capleaf/viXTTS", local_dir=str(model_dir))
-                logger.info("viXTTS downloaded successfully.")
-            
-            import torch
-            from TTS.api import TTS
-            
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            logger.info(f"Loading XTTS on device: {device}")
-            self.xtts_model = TTS(
-                model_path=str(model_dir),
-                config_path=str(model_dir / "config.json"),
-                gpu=(device == 'cuda')
-            )
-            logger.info("XTTS model loaded successfully.")
-
-        # Determine reference audio for speaker cloning
-        info = VOICE_MODELS.get(voice_name, VOICE_MODELS["xtts-vi"])
-        ref_audio_path = info.get("reference_wav", "models/styletts2/reference_audio/vn_1.wav")
+        info = VOICE_MODELS.get(voice_name, {})
+        voice = info.get("voice", "alloy")
+        model = info.get("model", "tts-1")
         
-        # XTTS inference is synchronous, CPU/GPU intensive
-        def synthesize():
-            self.xtts_model.tts_to_file(
-                text=text,
-                speaker_wav=ref_audio_path,
-                language="vi",
-                file_path=str(output_path)
-            )
-            
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, synthesize)
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
         
-        # Apply speed adjustment if speed != 1.0
-        if speed != 1.0:
-            temp_path = output_path.with_name(f"temp_{output_path.name}")
-            output_path.rename(temp_path)
-            
-            # Clamp speed between 0.5 and 2.0 (FFmpeg atempo limits)
-            clamped_speed = max(0.5, min(2.0, speed))
-            
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", str(temp_path),
-                "-filter:a", f"atempo={clamped_speed}",
-                str(output_path)
-            ]
-            
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
-            
-            if proc.returncode != 0:
-                logger.error(f"FFmpeg speed adjustment failed: {stderr.decode()}")
-                if temp_path.exists():
-                    temp_path.rename(output_path)
-            else:
-                if temp_path.exists():
-                    temp_path.unlink()
-                    
-        # Measure duration
-        duration_ms = self.get_audio_duration_ms(str(output_path))
-        return duration_ms
+        payload = {
+            "model": model,
+            "input": text,
+            "voice": voice,
+            "speed": max(0.25, min(4.0, speed)),
+            "response_format": "wav"
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            if resp.status_code != 200:
+                raise RuntimeError(f"OpenAI TTS API call failed: {resp.status_code} - {resp.text}")
+                
+            with open(output_path, "wb") as f:
+                f.write(resp.content)
+                
+        return self.get_audio_duration_ms(str(output_path))
 
     async def generate_panel_audio(self, text: str, output_path: Path, speed: float = 1.0, voice_name: str = None) -> int:
         """
-        Generates audio using selected engine (Piper, StyleTTS2, or XTTS).
-        If speed != 1.0, applies FFmpeg atempo audio filter to adjust speed.
+        Generates audio using 100% Cloud API mechanisms (Edge-TTS, Gemini, OpenAI).
         """
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        if not voice_name:
-            voice_name = config.tts.voice if (config and config.tts) else "xtts-vi"
+        resolved_voice = self.resolve_voice_name(voice_name)
+        info = VOICE_MODELS.get(resolved_voice, VOICE_MODELS["edge-tts-female"])
+        voice_type = info.get("type", "edgetts")
 
-        # Route to StyleTTS2 if selected
-        if voice_name.startswith("styletts2"):
+        # 1. Edge-TTS API
+        if voice_type == "edgetts":
+            return await self.generate_panel_audio_edgetts(text, output_path, speed, resolved_voice)
+
+        # 2. Gemini TTS API
+        elif voice_type == "gemini":
             try:
-                duration_ms = await self.generate_panel_audio_styletts2(text, output_path, speed, voice_name)
-                return duration_ms
+                return await self.generate_panel_audio_gemini(text, output_path, speed, resolved_voice)
             except Exception as e:
-                logger.error(f"Error in generate_panel_audio with StyleTTS2: {e}. Falling back to Piper...")
-                voice_name = "vi_VN-vais1000-medium"
-        
-        # Route to XTTS if selected
-        if voice_name.startswith("xtts"):
+                logger.error(f"Gemini TTS failed: {e}. Falling back to Edge-TTS API...")
+                return await self.generate_panel_audio_edgetts(text, output_path, speed, "edge-tts-female")
+
+        # 3. OpenAI TTS API
+        elif voice_type == "openai":
             try:
-                duration_ms = await self.generate_panel_audio_xtts(text, output_path, speed, voice_name)
-                return duration_ms
+                return await self.generate_panel_audio_openai(text, output_path, speed, resolved_voice)
             except Exception as e:
-                logger.error(f"Error in generate_panel_audio with XTTS: {e}. Falling back to Piper...")
-                voice_name = "vi_VN-vais1000-medium"
-        
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
-            
-        try:
-            voice = self.get_voice(voice_name)
-            
-            if speed != 1.0:
-                temp_path = output_path.with_name(f"temp_{output_path.name}")
-                
-                def synthesize():
-                    with wave.open(str(temp_path), "wb") as wav_file:
-                        voice.synthesize_wav(text, wav_file)
-                        
-                await loop.run_in_executor(None, synthesize)
-                
-                # Clamp speed between 0.5 and 2.0 (FFmpeg atempo limits)
-                clamped_speed = max(0.5, min(2.0, speed))
-                
-                # Use FFmpeg to adjust audio speed
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-i", str(temp_path),
-                    "-filter:a", f"atempo={clamped_speed}",
-                    str(output_path)
-                ]
-                
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await proc.communicate()
-                
-                if proc.returncode != 0:
-                    logger.error(f"FFmpeg speed adjustment failed: {stderr.decode()}")
-                    # Fallback to moving temp file directly
-                    if temp_path.exists():
-                        temp_path.rename(output_path)
-                else:
-                    if temp_path.exists():
-                        temp_path.unlink()
-            else:
-                def synthesize():
-                    with wave.open(str(output_path), "wb") as wav_file:
-                        voice.synthesize_wav(text, wav_file)
-                        
-                await loop.run_in_executor(None, synthesize)
-            
-            # Measure duration
-            duration_ms = self.get_audio_duration_ms(str(output_path))
-            return duration_ms
-        except Exception as e:
-            logger.error(f"Error in generate_panel_audio with Piper: {e}")
-            raise
+                logger.error(f"OpenAI TTS failed: {e}. Falling back to Edge-TTS API...")
+                return await self.generate_panel_audio_edgetts(text, output_path, speed, "edge-tts-female")
+
+        # Fallback default
+        return await self.generate_panel_audio_edgetts(text, output_path, speed, "edge-tts-female")
 
     def concatenate_audio_files(self, audio_paths: list[str], output_path: str):
         """
@@ -452,12 +489,11 @@ class TTSService:
     async def process_script_segment(self, segment_id: str, chapter_num: str, speed: float = 1.0, voice_name: str = None, progress_callback = None) -> bool:
         """
         Processes a single script segment:
-        1. Query segment script text.
-        2. Parse panels and synthesize individual Piper WAV audios.
-        3. Concatenate them into a segment-level WAV file.
-        4. Update script_segments in Supabase.
+        - If voice is edge-tts: Uses unified audio generation + boundary mapping + FFmpeg slicing for high coherence.
+        - Otherwise: Uses parallel API panel synthesis.
         """
-        logger.info(f"Generating TTS for Script Segment ID: {segment_id}...")
+        resolved_voice = self.resolve_voice_name(voice_name)
+        logger.info(f"Generating Cloud API TTS for Script Segment ID: {segment_id} (Voice: {resolved_voice})...")
         
         try:
             res = supabase.table("script_segments").select("*").eq("id", segment_id).execute()
@@ -478,37 +514,161 @@ class TTSService:
             from src.core.utils import get_project_title_by_chapter_id, get_project_data_dir
             project_title = get_project_title_by_chapter_id(seg["chapter_id"])
             project_dir = get_project_data_dir(project_title)
-            audio_dir = project_dir / "audio"
-            individual_paths = []
-            total_duration_ms = 0
+            audio_dir = project_dir / "audio" / "clips"
+            audio_dir.mkdir(parents=True, exist_ok=True)
             
-            for item in panels_data:
-                seq_id = format_sequence_id(item.get("sequence_id") or str(item["sequence_number"]))
-                text = item["text"]
-                
-                panel_audio_path = audio_dir / f"audio_{chapter_num}_{seq_id}.wav"
-                logger.info(f"Synthesizing audio for panel {seq_id} using {voice_name or 'default voice'}...")
-                
-                duration_ms = await self.generate_panel_audio(text, panel_audio_path, speed, voice_name)
-                logger.info(f"Panel {seq_id} audio generated. Duration: {duration_ms} ms")
-                
-                individual_paths.append(str(panel_audio_path))
-                total_duration_ms += duration_ms
-                
-                if progress_callback:
-                    await progress_callback(
-                        "tts_panel",
-                        f"Đã tạo giọng đọc cho khung hình {seq_id}.",
-                        {
-                            "sequence_id": seq_id,
-                            "sequence_number": item["sequence_number"],
-                            "duration_ms": duration_ms
-                        }
-                    )
-                
             segment_audio_path = audio_dir / f"audio_{chapter_num}_seg_{start_seq}_{end_seq}.wav"
-            self.concatenate_audio_files(individual_paths, str(segment_audio_path))
             
+            if resolved_voice.startswith("edge-tts"):
+                logger.info("Using Edge-TTS API unified synthesis + boundary slicing...")
+                import edge_tts
+                
+                info = VOICE_MODELS.get(resolved_voice, VOICE_MODELS["edge-tts-female"])
+                voice = info.get("voice", "vi-VN-HoaiMyNeural")
+                
+                rate_percent = int((speed - 1.0) * 100)
+                rate_str = f"{rate_percent:+}%" if rate_percent != 0 else "+0%"
+                
+                combined_text = '\n'.join(p['text'] for p in panels_data)
+                temp_mp3 = audio_dir / f"temp_seg_{start_seq}_{end_seq}.mp3"
+                comm = edge_tts.Communicate(combined_text, voice, rate=rate_str)
+                boundaries = []
+                
+                with open(temp_mp3, "wb") as audio_file:
+                    async for event in comm.stream():
+                        if event.get("type") == "audio":
+                            audio_file.write(event["data"])
+                        elif event.get("type") == "SentenceBoundary":
+                            boundaries.append(event)
+                            
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(temp_mp3), str(segment_audio_path)],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                )
+                if temp_mp3.exists():
+                    temp_mp3.unlink()
+                    
+                total_duration_ms = self.get_audio_duration_ms(str(segment_audio_path))
+                
+                panel_to_boundaries = {i: [] for i in range(len(panels_data))}
+                curr_panel_idx = 0
+                for b in boundaries:
+                    b_text_clean = b['text'].strip().lower()
+                    matched = False
+                    for p_idx in range(curr_panel_idx, len(panels_data)):
+                        p_text_clean = panels_data[p_idx]['text'].strip().lower()
+                        b_alpha = re.sub(r'[^\w\s]', '', b_text_clean)
+                        p_alpha = re.sub(r'[^\w\s]', '', p_text_clean)
+                        if p_alpha and b_alpha and (b_alpha in p_alpha or p_alpha in b_alpha):
+                            panel_to_boundaries[p_idx].append(b)
+                            curr_panel_idx = p_idx
+                            matched = True
+                            break
+                    if not matched:
+                        panel_to_boundaries[min(curr_panel_idx, len(panels_data) - 1)].append(b)
+                        
+                panel_timings = []
+                for i in range(len(panels_data)):
+                    b_list = panel_to_boundaries[i]
+                    if not b_list:
+                        start_ms = panel_timings[-1]["end_ms"] if panel_timings else 0
+                        duration_ms = 2500
+                        end_ms = start_ms + duration_ms
+                    else:
+                        if i == 0:
+                            start_ms = 0
+                        else:
+                            start_ms = b_list[0]['offset'] / 10000.0
+                            
+                        if i == len(panels_data) - 1:
+                            end_ms = total_duration_ms
+                        else:
+                            next_b_list = panel_to_boundaries[i+1]
+                            if next_b_list:
+                                end_ms = next_b_list[0]['offset'] / 10000.0
+                            else:
+                                end_ms = (b_list[-1]['offset'] + b_list[-1]['duration']) / 10000.0
+                                
+                        duration_ms = end_ms - start_ms
+                        if duration_ms <= 0:
+                            duration_ms = 100
+                            end_ms = start_ms + duration_ms
+                            
+                    panel_timings.append({
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "duration_ms": duration_ms
+                    })
+                    
+                for i in range(len(panel_timings)):
+                    item = panel_timings[i]
+                    if item["start_ms"] >= total_duration_ms:
+                        item["start_ms"] = total_duration_ms - 100
+                    if item["end_ms"] > total_duration_ms:
+                        item["end_ms"] = total_duration_ms
+                    if item["end_ms"] <= item["start_ms"]:
+                        item["end_ms"] = item["start_ms"] + 100
+                    item["duration_ms"] = int(item["end_ms"] - item["start_ms"])
+                    
+                for i, item in enumerate(panels_data):
+                    seq_id = format_sequence_id(item.get("sequence_id") or str(item["sequence_number"]))
+                    panel_audio_path = audio_dir / f"audio_{chapter_num}_{seq_id}.wav"
+                    timing = panel_timings[i]
+                    
+                    start_sec = timing["start_ms"] / 1000.0
+                    dur_sec = timing["duration_ms"] / 1000.0
+                    
+                    cmd = [
+                        "ffmpeg", "-y",
+                        "-ss", f"{start_sec:.3f}",
+                        "-t", f"{dur_sec:.3f}",
+                        "-i", str(segment_audio_path),
+                        "-af", "silenceremove=stop_periods=-1:stop_duration=0.3:stop_threshold=-50dB:stop_silence=0.25",
+                        "-c:a", "pcm_s16le",
+                        str(panel_audio_path)
+                    ]
+                    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+                    
+                    if progress_callback:
+                        await progress_callback(
+                            "tts_panel",
+                            f"Đã trích xuất giọng đọc API cho khung hình {seq_id} (Thời lượng: {timing['duration_ms']} ms).",
+                            {
+                                "sequence_id": seq_id,
+                                "sequence_number": item["sequence_number"],
+                                "duration_ms": timing["duration_ms"]
+                            }
+                        )
+            else:
+                logger.info(f"Synthesizing panels via Cloud API: {resolved_voice}...")
+                sem = asyncio.Semaphore(5)
+                
+                async def synthesize_panel(item):
+                    async with sem:
+                        seq_id = format_sequence_id(item.get("sequence_id") or str(item["sequence_number"]))
+                        text = item["text"]
+                        panel_audio_path = audio_dir / f"audio_{chapter_num}_{seq_id}.wav"
+                        duration_ms = await self.generate_panel_audio(text, panel_audio_path, speed, resolved_voice)
+                        
+                        if progress_callback:
+                            await progress_callback(
+                                "tts_panel",
+                                f"Đã tạo giọng đọc cho khung hình {seq_id}.",
+                                {
+                                    "sequence_id": seq_id,
+                                    "sequence_number": item["sequence_number"],
+                                    "duration_ms": duration_ms
+                                }
+                            )
+                        return str(panel_audio_path), duration_ms
+
+                tasks = [synthesize_panel(item) for item in panels_data]
+                results = await asyncio.gather(*tasks)
+                
+                individual_paths = [r[0] for r in results]
+                total_duration_ms = sum(r[1] for r in results)
+                self.concatenate_audio_files(individual_paths, str(segment_audio_path))
+                
             supabase.table("script_segments").update({
                 "audio_url": str(segment_audio_path),
                 "audio_duration_ms": total_duration_ms,
@@ -527,9 +687,10 @@ class TTSService:
 
     async def process_chapter_audio(self, chapter_id: str, chapter_num: str, speed: float = 1.0, voice_name: str = None, progress_callback = None) -> bool:
         """
-        Processes all script segments for a chapter and generates audios.
+        Processes all script segments for a chapter and generates audio files via API.
         """
-        logger.info(f"Starting audio generation for Chapter {chapter_num} using Piper...")
+        resolved_voice = self.resolve_voice_name(voice_name)
+        logger.info(f"Starting API audio generation for Chapter {chapter_num} (Voice: {resolved_voice})...")
         try:
             res = supabase.table("script_segments").select("*").eq("chapter_id", chapter_id).execute()
             segments = res.data
@@ -544,11 +705,11 @@ class TTSService:
                     logger.info(f"Audio for segment {seg['start_panel_seq']}-{seg['end_panel_seq']} already exists. Skipping.")
                     continue
                     
-                success = await self.process_script_segment(seg["id"], chapter_num, speed, voice_name, progress_callback)
+                success = await self.process_script_segment(seg["id"], chapter_num, speed, resolved_voice, progress_callback)
                 if not success:
                     return False
                     
-            logger.info(f"Audio generation for Chapter {chapter_num} completed successfully.")
+            logger.info(f"Audio generation for Chapter {chapter_num} completed successfully via API.")
             return True
         except Exception as e:
             logger.error(f"Error in process_chapter_audio: {e}")

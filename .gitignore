@@ -14,10 +14,9 @@ ENV/
 
 # Environment variables (sensitive data)
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+client_secret*.json
+.youtube_token*.json
 
 # Large model weight directories
 models/

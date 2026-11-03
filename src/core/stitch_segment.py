@@ -10,28 +10,24 @@ def preprocess_and_segment_images(
     output_panels_dir: Path,
     threshold_variance: float = 8.0,
     min_gutter_height: int = 12,
-    min_panel_height: int = 40
+    min_panel_height: int = 40,
+    sufficiency_variance: float = 100.0
 ) -> list[Path]:
     """
-    Stitches all raw pages in raw_pages_dir vertically, segments them into individual panels
-    by identifying horizontal gutters (margins), discards solid color spacer panels, and
-    saves the final panels to output_panels_dir.
-
-    Returns:
-        List of Path objects pointing to the saved panel images.
+    Stitches all raw pages vertically, segments them based on horizontal black/white gutters,
+    analyzes height and variance of each segment, performs Gutter Merging, Even Padding, and Skip-Marking,
+    and saves the final panels.
     """
     logger.info(f"Stitch & Segment: Scanning directory {raw_pages_dir}...")
     
-    # 1. Read and sort page images numerically (e.g. image_1.jpg, image_2.jpg... image_10.jpg)
+    # 1. Read and sort page images numerically
     try:
-        # Match image_*.jpg, image_*.png, image_*.webp, etc.
         all_files = list(raw_pages_dir.glob("image_*"))
         if not all_files:
             logger.warning(f"Stitch & Segment: No raw pages found in {raw_pages_dir}")
             return []
             
         def get_numeric_key(path: Path):
-            # Extract numbers from filename for natural sorting
             parts = re.split(r'(\d+)', path.name)
             return [int(p) if p.isdigit() else p for p in parts]
             
@@ -54,7 +50,6 @@ def preprocess_and_segment_images(
         return []
 
     # 2. Stitch images vertically
-    # Determine the maximum width among all images
     max_width = max(img.width for img in images)
     logger.info(f"Stitch & Segment: Normalizing page widths to max_width={max_width}px...")
 
@@ -62,7 +57,6 @@ def preprocess_and_segment_images(
     total_height = 0
     for img in images:
         if img.width != max_width:
-            # Scale height proportionally to maintain aspect ratio
             h = int(img.height * (max_width / img.width))
             img_resized = img.resize((max_width, h), Image.Resampling.LANCZOS)
         else:
@@ -78,31 +72,18 @@ def preprocess_and_segment_images(
         stitched_img.paste(img, (0, y_offset))
         y_offset += img.height
 
-    # Save temporary stitched image for debugging (optional, can be deleted later)
-    temp_dir = raw_pages_dir.parent / "temp_diagnostics"
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_stitched_path = temp_dir / "full_stitched.jpg"
-    try:
-        stitched_img.save(temp_stitched_path, "JPEG", quality=75)
-        logger.info(f"Stitch & Segment: Diagnostics stitched image saved to {temp_stitched_path}")
-    except Exception as e:
-        logger.warning(f"Stitch & Segment: Failed to save diagnostic stitched image: {e}")
-
-    # 3. Analyze row variance to detect horizontal gutters (blank margins)
+    # 3. Detect horizontal gutters (black/white blank lines)
     logger.info("Stitch & Segment: Analysing horizontal lines for gutter detection...")
     gray_img = stitched_img.convert("L")
     img_data = np.array(gray_img)
     height, width = img_data.shape
 
-    # Calculate variance and mean value for each row
     row_variances = np.var(img_data, axis=1)
     row_means = np.mean(img_data, axis=1)
 
-    # A row belongs to a gutter if its pixel variance is very low (constant color)
-    # and the mean color is close to white (>=240) or close to black (<=15)
+    # Gutters are rows with low variance and close to white or black
     is_gutter_row = (row_variances < threshold_variance) & ((row_means >= 240) | (row_means <= 15))
 
-    # Identify contiguous blocks of gutter rows
     gutter_intervals = []
     in_gutter = False
     gutter_start = 0
@@ -119,13 +100,12 @@ def preprocess_and_segment_images(
                 if gutter_height >= min_gutter_height:
                     gutter_intervals.append((gutter_start, y))
                     
-    # Handle case where gutter continues to the bottom of the image
     if in_gutter:
         gutter_height = height - gutter_start
         if gutter_height >= min_gutter_height:
             gutter_intervals.append((gutter_start, height))
 
-    # Panels are the non-gutter regions (between consecutive gutters)
+    # Slice between gutters to get initial candidates
     raw_panels = []
     last_end = 0
 
@@ -137,97 +117,166 @@ def preprocess_and_segment_images(
     if last_end < height:
         raw_panels.append((last_end, height))
 
-    logger.info(f"Stitch & Segment: Detected {len(gutter_intervals)} gutter intervals. Slicing into {len(raw_panels)} potential content panels...")
+    logger.info(f"Stitch & Segment: Slice into {len(raw_panels)} initial potential content panels...")
 
-    # 4. Crop, filter, and save panels
-    output_panels_dir.mkdir(parents=True, exist_ok=True)
-    saved_panel_paths = []
-    
-    # Pre-calculate non-white pixel ratios to find and discard footer/logo panels
-    panel_candidates = []
-    for idx, (top, bottom) in enumerate(raw_panels):
+    # Build initial candidate list
+    candidates = []
+    for top, bottom in raw_panels:
         h = bottom - top
-        if h < min_panel_height:
-            logger.info(f"Stitch & Segment: Skipping candidate {idx+1} ({top}-{bottom}) due to small height ({h}px)")
+        if h < 5:  # skip extremely thin slices immediately
             continue
-            
-        panel_crop = stitched_img.crop((0, top, max_width, bottom))
-        panel_gray = panel_crop.convert("L")
-        panel_arr = np.array(panel_gray)
-        panel_var = np.var(panel_arr)
-        panel_mean = np.mean(panel_arr)
-        
-        # Discard if variance is extremely low and average color is near white or black
-        if panel_var < 5.0 and (panel_mean >= 245 or panel_mean <= 10):
-            logger.info(f"Stitch & Segment: Discarded blank panel {idx+1} at slice {top}-{bottom} (variance: {panel_var:.2f}, mean: {panel_mean:.2f})")
-            continue
-            
-        # Calculate ratio of non-white pixels
-        non_white_pixels = np.sum(panel_arr < 240)
-        non_white_ratio = non_white_pixels / panel_arr.size * 100
-        
-        panel_candidates.append({
+        candidates.append({
             "crop_coords": [top, bottom],
-            "non_white_ratio": non_white_ratio,
             "height": h
         })
 
-    # 5. Filter footer/logo and merge sparse/text-only panels
-    # Discard the last panel if it has low non-white content (footer/credits/logo)
-    if panel_candidates:
-        last_candidate = panel_candidates[-1]
-        # If the last candidate has less than 20% non-white pixels, it's very likely a credits/footer logo
-        if last_candidate["non_white_ratio"] < 20.0:
-            logger.info(f"Stitch & Segment: Discarded last panel candidate at slice {last_candidate['crop_coords']} as footer/logo (non_white_ratio: {last_candidate['non_white_ratio']:.1f}%)")
-            panel_candidates.pop()
+    # Helper function to compute candidate variance
+    def get_candidate_variance(cand):
+        t, b = cand["crop_coords"]
+        crop = stitched_img.crop((0, t, max_width, b))
+        gray_crop = crop.convert("L")
+        return float(np.var(np.array(gray_crop)))
 
-    # Perform panel merging for sparse panels (e.g. dialogue bubbles on pure white backgrounds)
-    final_candidates = []
-    for cand in panel_candidates:
-        # If this candidate is sparse (non_white_ratio < 15%), merge it
-        if cand["non_white_ratio"] < 15.0:
-            if final_candidates:
-                prev = final_candidates[-1]
-                logger.info(f"Stitch & Segment: Merging sparse panel at {cand['crop_coords']} (non_white_ratio: {cand['non_white_ratio']:.1f}%) into previous panel {prev['crop_coords']}")
-                prev["crop_coords"][1] = cand["crop_coords"][1]
-                prev["height"] = prev["crop_coords"][1] - prev["crop_coords"][0]
+    # 4. Gutter Merging (Iteratively merge candidates that are under 70% height)
+    logger.info("Stitch & Segment: Commencing Gutter Merging for segments under 70% height...")
+    
+    force_merge_height = max_width * 0.7  # Merge very short strips (< 70% width) regardless of variance
+    
+    while True:
+        target_idx = -1
+        # Find the first candidate that is very short
+        for idx, cand in enumerate(candidates):
+            if cand["height"] < force_merge_height:
+                target_idx = idx
+                break
                 
-                # Recalculate properties for combined panel
-                panel_crop = stitched_img.crop((0, prev["crop_coords"][0], max_width, prev["crop_coords"][1]))
-                panel_gray = panel_crop.convert("L")
-                panel_arr = np.array(panel_gray)
-                prev["non_white_ratio"] = np.sum(panel_arr < 240) / panel_arr.size * 100
-            else:
-                # First panel is sparse, merge forward
-                # Find next candidate
-                cand_idx = panel_candidates.index(cand)
-                if cand_idx + 1 < len(panel_candidates):
-                    next_cand = panel_candidates[cand_idx + 1]
-                    logger.info(f"Stitch & Segment: Merging sparse first panel at {cand['crop_coords']} (non_white_ratio: {cand['non_white_ratio']:.1f}%) forward into next panel {next_cand['crop_coords']}")
-                    next_cand["crop_coords"][0] = cand["crop_coords"][0]
-                    next_cand["height"] = next_cand["crop_coords"][1] - next_cand["crop_coords"][0]
-                    
-                    # Recalculate properties
-                    panel_crop = stitched_img.crop((0, next_cand["crop_coords"][0], max_width, next_cand["crop_coords"][1]))
-                    panel_gray = panel_crop.convert("L")
-                    panel_arr = np.array(panel_gray)
-                    next_cand["non_white_ratio"] = np.sum(panel_arr < 240) / panel_arr.size * 100
+        if target_idx == -1:
+            break
+            
+        # Compare gutter heights before and after target
+        gutter_before = float('inf')
+        if target_idx > 0:
+            gutter_before = candidates[target_idx]["crop_coords"][0] - candidates[target_idx - 1]["crop_coords"][1]
+            
+        gutter_after = float('inf')
+        if target_idx < len(candidates) - 1:
+            gutter_after = candidates[target_idx + 1]["crop_coords"][0] - candidates[target_idx]["crop_coords"][1]
+            
+        if gutter_before == float('inf') and gutter_after == float('inf'):
+            # Only one candidate left, cannot merge
+            break
+            
+        # Merge with the nearest (shortest gutter)
+        if gutter_before <= gutter_after:
+            merge_idx = target_idx - 1
+            logger.info(f"Gutter Merge: Merging panel {target_idx+1} at {candidates[target_idx]['crop_coords']} backward into panel {merge_idx+1} at {candidates[merge_idx]['crop_coords']} (gutter: {gutter_before}px)")
+            new_coords = [candidates[merge_idx]["crop_coords"][0], candidates[target_idx]["crop_coords"][1]]
+            candidates[merge_idx]["crop_coords"] = new_coords
+            candidates[merge_idx]["height"] = new_coords[1] - new_coords[0]
+            candidates.pop(target_idx)
         else:
-            final_candidates.append(cand)
+            merge_idx = target_idx + 1
+            logger.info(f"Gutter Merge: Merging panel {target_idx+1} at {candidates[target_idx]['crop_coords']} forward into panel {merge_idx+1} at {candidates[merge_idx]['crop_coords']} (gutter: {gutter_after}px)")
+            new_coords = [candidates[target_idx]["crop_coords"][0], candidates[merge_idx]["crop_coords"][1]]
+            candidates[target_idx]["crop_coords"] = new_coords
+            candidates[target_idx]["height"] = new_coords[1] - new_coords[0]
+            candidates.pop(merge_idx)
 
-    # 6. Save the final merged panels
-    for panel_idx, cand in enumerate(final_candidates, start=1):
+    # 4.5. Tall Panel Splitting
+    # Splitting panels that are excessively tall (e.g. > max_width * 3.5) because gutter detection missed them
+    logger.info("Stitch & Segment: Checking for extremely tall panels to split...")
+    max_panel_height = int(max_width * 3.5)
+    split_candidates = []
+    
+    for cand in candidates:
         top, bottom = cand["crop_coords"]
+        h = cand["height"]
+        if h > max_panel_height:
+            current_top = top
+            while bottom - current_top > max_panel_height:
+                # Search for best split point in the middle
+                search_start = current_top + max_width
+                search_end = min(bottom - max_width, current_top + max_panel_height)
+                
+                if search_start >= search_end:
+                    # Fallback to hard split
+                    split_point = current_top + max_panel_height
+                else:
+                    crop = stitched_img.crop((0, search_start, max_width, search_end))
+                    gray_crop = crop.convert("L")
+                    arr = np.array(gray_crop)
+                    row_vars = np.var(arr, axis=1)
+                    best_local_y = int(np.argmin(row_vars))
+                    split_point = search_start + best_local_y
+                    
+                split_candidates.append({
+                    "crop_coords": [current_top, split_point],
+                    "height": split_point - current_top
+                })
+                current_top = split_point
+                
+            # Add remaining part
+            if bottom > current_top:
+                split_candidates.append({
+                    "crop_coords": [current_top, bottom],
+                    "height": bottom - current_top
+                })
+        else:
+            split_candidates.append(cand)
+            
+    candidates = split_candidates
+
+    # 5. Process remaining candidates (Padding, Skip-Marking, Normal)
+    output_panels_dir.mkdir(parents=True, exist_ok=True)
+    saved_panel_paths = []
+    
+    for panel_idx, cand in enumerate(candidates, start=1):
+        top, bottom = cand["crop_coords"]
+        h = cand["height"]
+        var = get_candidate_variance(cand)
+        
         panel_crop = stitched_img.crop((0, top, max_width, bottom))
-        out_path = output_panels_dir / f"panel_{panel_idx:03d}.jpg"
-        try:
+        
+        is_under_height = h < max_width
+        is_low_variance = var < sufficiency_variance
+        
+        if is_under_height:
+            # 2.2: Under-height -> Padding
+            # Căn lề padding đều trên dưới (Even Padding)
+            pad_total = max_width - h
+            pad_top = pad_total // 2
+            pad_bottom = pad_total - pad_top
+            
+            # Detect padding background color from first and last row of the image
+            gray_crop = panel_crop.convert("L")
+            gray_arr = np.array(gray_crop)
+            top_mean = np.mean(gray_arr[0, :])
+            bottom_mean = np.mean(gray_arr[-1, :])
+            border_mean = (top_mean + bottom_mean) / 2.0
+            bg_color = (0, 0, 0) if border_mean < 128 else (255, 255, 255)
+            
+            padded_img = Image.new("RGB", (max_width, max_width), bg_color)
+            padded_img.paste(panel_crop, (0, pad_top))
+            
+            out_path = output_panels_dir / f"panel_{panel_idx:03d}.jpg"
+            padded_img.save(out_path, "JPEG", quality=90)
+            saved_panel_paths.append(out_path)
+            logger.info(f"Stitch & Segment: Saved Panel {panel_idx:03d} -> {out_path.name} (Padded to square, background: {bg_color}, original height: {h}px)")
+            
+        elif not is_under_height and is_low_variance:
+            # 2.3: Sufficient height but low variance -> Skip Marking
+            out_path = output_panels_dir / f"panel_{panel_idx:03d}_skip.jpg"
             panel_crop.save(out_path, "JPEG", quality=90)
             saved_panel_paths.append(out_path)
-            logger.info(f"Stitch & Segment: Saved Panel {panel_idx:03d} -> {out_path.name} ({width}x{cand['height']}px, non_white_ratio: {cand['non_white_ratio']:.1f}%)")
-        except Exception as e:
-            logger.error(f"Stitch & Segment: Failed to save panel {out_path}: {e}")
-
-    logger.info(f"Stitch & Segment: Completed! Successfully generated {len(saved_panel_paths)} panels.")
+            logger.info(f"Stitch & Segment: Saved Panel {panel_idx:03d} -> {out_path.name} (MARKED SKIP, low variance: {var:.2f})")
+            
+        else:
+            # 2.4: Normal image (Sufficient height and sufficient variance)
+            out_path = output_panels_dir / f"panel_{panel_idx:03d}.jpg"
+            panel_crop.save(out_path, "JPEG", quality=90)
+            saved_panel_paths.append(out_path)
+            
+            logger.info(f"Stitch & Segment: Saved Panel {panel_idx:03d} -> {out_path.name} (Normal, height: {h}px, variance: {var:.2f})")
+            
+    logger.info(f"Stitch & Segment: Completed! Generated {len(saved_panel_paths)} panels.")
     return saved_panel_paths
-
-

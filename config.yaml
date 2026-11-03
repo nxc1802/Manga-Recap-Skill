@@ -1,29 +1,18 @@
-# CẤU HÌNH VẬN HÀNH PIPELINE MANGA RECAP
+# CẤU HÌNH VẬN HÀNH PIPELINE MANGA RECAP (Agentic Hybrid Workflow)
 
-# Cấu hình lượng khung hình xử lý
+# Cấu hình xử lý & Dựng video
 orchestrator:
-  batch_size: 10            # Số lượng N khung hình mới gửi vào LLM mỗi đợt tổng hợp
-  sliding_context_window: 5   # Số lượng khung hình trước đó lấy kịch bản làm lịch sử
-  vlm_image_resize_shortest_edge: 500 # Kích thước cạnh ngắn nhất của hình ảnh khi nén (px)
-  max_panels: 40            # Giới hạn số lượng ảnh tải và xử lý (dành cho test)
-  vlm_batch_size: 4         # Số lượng ảnh gửi vào VLM cùng lúc trong 1 API call
-  vlm_context_length: 2     # Số lượng khung hình cuối cùng của batch trước để làm ngữ cảnh cho batch sau
-  render_pan_mode: "dynamic" # Chế độ panning cho video: dynamic (xoay vòng linh hoạt), horizontal (ngang), vertical (dọc), zoom (phóng to), static (tĩnh)
+  video_mode: "auto"          # Chế độ khung hình: auto, portrait_padded, landscape_fit, portrait_vertical
+  render_pan_mode: "dynamic"  # Chế độ panning cho video: dynamic (xoay vòng linh hoạt), horizontal (ngang), vertical (dọc), zoom (phóng to), static (tĩnh)
+  ffmpeg_max_concurrent: 4    # Số luồng render video clip song song
+  # max_panels: 40           # Giới hạn số lượng panel tải và xử lý (dành cho test)
 
-
-# Giới hạn độ dài kịch bản sinh ra cho mỗi khung hình (tính theo số ký tự)
+# Giới hạn độ dài kịch bản cho mỗi khung hình (tính theo số ký tự tham khảo cho Agent)
 script_limits:
-  min_length: 50            # Độ dài văn bản tối thiểu mỗi khung hình
-  max_length: 250           # Độ dài văn bản tối đa mỗi khung hình
+  min_length: 50              # Độ dài văn bản tối thiểu mỗi khung hình
+  max_length: 250             # Độ dài văn bản tối đa mỗi khung hình
 
-# Cấu hình Mô hình (Models) cho VLM và LLM
-models:
-  llm_model: "openrouter/free"
-  vlm_model: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-  # Lựa chọn VLM thay thế (gemma):
-  # vlm_model: "google/gemma-4-31b-it:free"
-
-# Cấu hình giọng đọc và tốc độ thuyết minh mặc định cho TTS
+# Cấu hình giọng đọc thuyết minh Cloud API cho TTS
 tts:
-  speed: 1.0                # Tốc độ đọc (1.0 là mặc định, > 1.0 đọc nhanh hơn, < 1.0 đọc chậm hơn)
-  voice: "xtts-vi" # Giọng đọc: xtts-vi (XTTS chuẩn), xtts-vi-female (XTTS nữ), vi_VN-vais1000-medium (Piper nam), vi_VN-vivos-x_low (Piper robot), vi_VN-25hours_single-low (Piper nữ)
+  speed: 1.0                  # Tốc độ đọc (1.0 là mặc định, > 1.0 đọc nhanh hơn, < 1.0 đọc chậm hơn)
+  voice: "edge-tts-female"    # Giọng đọc Cloud API: edge-tts-female (Hoài My), edge-tts-male (Nam Minh), gemini-2.5-flash, openai-tts-nova

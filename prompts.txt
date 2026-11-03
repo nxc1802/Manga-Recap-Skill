@@ -1,5 +1,0 @@
-Nâng cấp skill
-- https://www.webtoons.com/en/action/warrior-grandpa-and-his-supreme-granddaughter/episode-1/viewer?title_no=8953&episode_no=1 hãy thêm option để crawl từ web này
-- Hình ảnh thường bị cắt ngang (nhân vật nằm giữa 2 khung ảnh) dẫn đến việc lấy hình ảnh cần thiết rất khó khăn, cách giải quyết là sẽ thực hiện gộp toàn ảnh từ đầu
-- Hình ảnh được cắt theo tỉ lệ phụ thuộc vào tham số, có 3 giá trị thường dùng (hình chữ nhật ngang, hình vuông, dọc)
-- Đảm bảo toàn bộ tham số phải được hỏi đầy đủ trước khi thực hiện

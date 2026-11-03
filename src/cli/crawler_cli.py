@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # Add project root to path
-sys.path.append(str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.core.logger import logger
 from src.services.crawler_service import crawler_service
@@ -16,6 +16,7 @@ async def main():
     parser.add_argument("--url", type=str, default=None, help="Base chapter URL (without chapter number)")
     parser.add_argument("--project", type=str, default="Mỗi lính đánh thuê trở về đều có một kế hoạch", help="Project title in database")
     parser.add_argument("--max_panels", type=int, default=None, help="Max number of panels to crawl")
+    parser.add_argument("--context", type=str, default="Không có bối cảnh cốt truyện.", help="General story context")
     args = parser.parse_args()
 
     try:
@@ -24,8 +25,7 @@ async def main():
         
         logger.info(f"Starting crawl for Chapter {args.chapter}...")
         
-        # We pass empty context for initial crawl since Agent will write custom scripts
-        general_story_context = "Ghislain Perdium trùng sinh quay về quá khứ..."
+        general_story_context = args.context
         
         chapter_id, _ = await crawler_service.crawl_chapter(
             project_id=project_id,
@@ -36,7 +36,7 @@ async def main():
         )
         
         from src.core.utils import get_project_data_dir
-        local_dir = get_project_data_dir(args.project) / "raw_images" / f"chap_{args.chapter}"
+        local_dir = get_project_data_dir(args.project) / "image" / "recut" / f"chap_{args.chapter}"
         logger.info("=========================================================")
         logger.info(f"SUCCESS: Chapter {args.chapter} crawled successfully!")
         logger.info(f"Chapter ID in DB: {chapter_id}")
