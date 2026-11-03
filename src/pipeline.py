@@ -3,8 +3,14 @@ import asyncio
 from pathlib import Path
 from src.core.config import config
 from src.core.logger import logger
-from src.core.supabase_client import supabase
-from src.core.utils import format_sequence_id, sync_agent_script_to_db, get_project_data_dir
+from src.core.utils import (
+    format_sequence_id,
+    sync_agent_script_to_db,
+    get_project_data_dir,
+    get_next_video_path,
+    run_ffmpeg,
+    cleanup_intermediate_files,
+)
 
 from src.services.crawler_service import crawler_service
 from src.services.tts_service import tts_service
@@ -13,6 +19,22 @@ from src.render.video_engine import video_engine, VideoMode
 class MangaRecapPipeline:
     def __init__(self):
         pass
+
+    def cleanup_temp_files(self, chapter: int | str, suffix: str = "", project: str = None, keep_temp: bool = False) -> list:
+        """
+        Cleans up temporary video and subtitle files generated during chapter processing.
+        """
+        proj_name = project or "Mỗi lính đánh thuê trở về đều có một kế hoạch"
+        project_dir = get_project_data_dir(proj_name)
+        chap_dir = project_dir / "chapters" / str(chapter)
+        cleaned = []
+        if chap_dir.exists():
+            cleaned.extend(cleanup_intermediate_files(chap_dir, keep_temp=keep_temp))
+        video_chap_dir = project_dir / "video" / "chapters"
+        if video_chap_dir.exists():
+            cleaned.extend(cleanup_intermediate_files(video_chap_dir, keep_temp=keep_temp))
+        logger.info(f"Cleaned up {len(cleaned)} temporary files for chapter {chapter}: {cleaned}")
+        return cleaned
 
     async def run(
         self,
@@ -68,16 +90,19 @@ class MangaRecapPipeline:
         if progress_callback:
             await progress_callback("script_check", "Kiểm tra kịch bản Agent...", {})
             
-        # Check if already scripted in DB
-        seg_res = supabase.table("script_segments").select("id").eq("chapter_id", chapter_id).execute()
-        is_scripted = bool(seg_res.data)
+        # Check if already scripted locally
+        project_dir = get_project_data_dir(project_title)
+        chap_dir = project_dir / "chapters" / str(chapter_number)
+        script_json = chap_dir / "script.json"
+        script_csv = project_dir / "memory" / "script.csv"
+        is_scripted = script_json.exists() or script_csv.exists()
 
         if not is_scripted:
             # Check if script.txt or script.json exists on disk to auto-sync
-            logger.info("Script segments not found in DB. Checking local disk for Agent script...")
+            logger.info("Script not found in local storage. Checking local disk for Agent script...")
             synced = sync_agent_script_to_db(project_title, chapter_number)
             if synced:
-                logger.info("Agent script on disk automatically synced into database.")
+                logger.info("Agent script on disk automatically synced into local storage.")
                 is_scripted = True
             else:
                 project_dir = get_project_data_dir(project_title)
@@ -193,7 +218,7 @@ class MangaRecapPipeline:
                 seq_idx = 1
                 
             # 2. Render panel clip with FFmpeg (thread pool)
-            await asyncio.to_thread(
+            clip_success = await asyncio.to_thread(
                 video_engine.generate_panel_clip,
                 img_path=str(processed_image_path),
                 audio_path=str(audio_path),
@@ -204,6 +229,9 @@ class MangaRecapPipeline:
                 panel_text=panel_text,
                 burn_subtitles=burn_subtitles
             )
+            if not clip_success or not output_clip_path.exists() or output_clip_path.stat().st_size == 0:
+                raise RuntimeError(f"Failed to generate panel clip for sequence {seq_id}: {output_clip_path}")
+
 
         if progress_callback:
             await progress_callback(
@@ -240,14 +268,50 @@ class MangaRecapPipeline:
         project_title = get_project_title_by_chapter_id(chapter_id)
         project_dir = get_project_data_dir(project_title)
         
-        panels_res = supabase.table("panels")\
-            .select("*")\
-            .eq("chapter_id", chapter_id)\
-            .order("sequence_number")\
-            .execute()
-        panels = panels_res.data
+        chap_dir = project_dir / "chapters" / str(chapter_number)
+        manifest_path = chap_dir / "manifest.json"
+        recut_manifest = project_dir / "image" / "recut" / f"chap_{chapter_number}" / "manifest.json"
+
+        panels = []
+        if manifest_path.exists():
+            from src.core.storage import read_json
+            panels_data = read_json(manifest_path).get("panels", [])
+            for p in panels_data:
+                rel = p.get("relative_path", "")
+                full_p = str(project_dir / rel) if rel else str(p.get("filename", ""))
+                panels.append({
+                    "sequence_number": p.get("sequence_number", 1),
+                    "raw_image_url": full_p,
+                    "processed_image_url": None,
+                    "status": p.get("status", "processed")
+                })
+        elif recut_manifest.exists():
+            from src.core.storage import read_json
+            panels_data = read_json(recut_manifest).get("panels", [])
+            for p in panels_data:
+                rel = p.get("relative_path", "")
+                full_p = str(project_dir / rel) if rel else str(p.get("filename", ""))
+                panels.append({
+                    "sequence_number": p.get("sequence_number", 1),
+                    "raw_image_url": full_p,
+                    "processed_image_url": None,
+                    "status": p.get("status", "processed")
+                })
+        else:
+            # Fallback: scan recut directory
+            recut_dir = project_dir / "image" / "recut" / f"chap_{chapter_number}"
+            if recut_dir.exists():
+                img_files = sorted([f for f in recut_dir.iterdir() if f.suffix.lower() in (".jpg", ".png", ".webp")])
+                for idx, img_p in enumerate(img_files):
+                    panels.append({
+                        "sequence_number": idx + 1,
+                        "raw_image_url": str(img_p),
+                        "processed_image_url": None,
+                        "status": "processed"
+                    })
+
         if not panels:
-            raise ValueError(f"No panels found in database for chapter {chapter_id}")
+            raise ValueError(f"No panels found for chapter {chapter_number} in {chap_dir} or {recut_manifest.parent}")
             
         resolved_video_mode_str = video_mode or getattr(config.orchestrator, "video_mode", "auto")
         logger.info(f"Configured video mode: {resolved_video_mode_str}")
@@ -280,25 +344,20 @@ class MangaRecapPipeline:
                 seq_id = p.get("sequence_id") or str(p["sequence_number"])
                 panel_config_map[seq_id] = p
         else:
-            logger.info("Local script.csv not found. Falling back to Supabase script_segments.")
-            segments_res = supabase.table("script_segments")\
-                .select("*")\
-                .eq("chapter_id", chapter_id)\
-                .order("start_panel_seq")\
-                .execute()
-            segments = segments_res.data
-            if not segments:
-                raise ValueError(f"No script segments found for chapter {chapter_id}")
-                
-            for seg in segments:
-                parsed = tts_service.parse_script_text(seg["script_text"])
-                for p in parsed:
-                    seq_id = p.get("sequence_id") or str(p["sequence_number"])
+            script_json_path = chap_dir / "script.json"
+            if script_json_path.exists():
+                from src.core.storage import read_json
+                s_data = read_json(script_json_path)
+                logger.info(f"Loaded script for chapter {chapter_number} from local script.json")
+                for p in s_data.get("segments", []):
+                    seq_id = p.get("sequence_id") or str(p.get("sequence_number", 0))
                     panel_config_map[seq_id] = {
-                        "sequence_number": p["sequence_number"],
+                        "sequence_number": p.get("sequence_number", 0),
                         "sequence_id": seq_id,
-                        "text": p["text"]
+                        "text": p.get("text", "") or p.get("narrator_text", "")
                     }
+            else:
+                raise ValueError(f"No script found for chapter {chapter_number} (neither script.csv nor script.json exist)")
                     
         audio_dir = project_dir / "audio" / "clips"
         ffmpeg_max_concurrent = getattr(config.orchestrator, "ffmpeg_max_concurrent", 4)
@@ -422,7 +481,7 @@ class MangaRecapPipeline:
         srt_path = video_chapters_dir / f"chapter_{chapter_number}_subs_temp.srt"
         video_engine.generate_srt_file(script_items, str(srt_path))
         
-        final_video_path = get_next_video_path(project_dir, chapter_number)
+        final_video_path = get_next_video_path(project_dir, chapter_number, suffix=output_suffix)
         
         logger.info("Mixing BGM and burning subtitles...")
         if progress_callback:
@@ -441,7 +500,6 @@ class MangaRecapPipeline:
             chapter_audio_dir = project_dir / "audio" / "chapters"
             chapter_audio_dir.mkdir(parents=True, exist_ok=True)
             chapter_audio_path = chapter_audio_dir / f"chapter_{chapter_number}.wav"
-            import subprocess
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(final_video_path),
@@ -449,9 +507,12 @@ class MangaRecapPipeline:
                 str(chapter_audio_path)
             ]
             logger.info(f"Extracting chapter audio to {chapter_audio_path}...")
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            run_ffmpeg(cmd, description="Extract chapter audio")
+            if not chapter_audio_path.exists() or chapter_audio_path.stat().st_size == 0:
+                raise RuntimeError(f"Extracted chapter audio file is empty or missing: {chapter_audio_path}")
         except Exception as ae:
-            logger.warning(f"Failed to extract chapter audio: {ae}")
+            logger.error(f"Failed to extract chapter audio: {ae}")
+            raise
             
         try:
             if os.path.exists(str(raw_video_path)):
@@ -461,6 +522,15 @@ class MangaRecapPipeline:
         except Exception as e:
             logger.warning(f"Failed to clean up temp files: {e}")
             
+        try:
+            chapter_json_path = chap_dir / "chapter.json"
+            if chapter_json_path.exists():
+                from src.core.storage import update_checkpoint
+                update_checkpoint(chap_dir, stage="render", status="completed", artifacts=[str(Path(final_video_path).relative_to(project_dir))])
+                update_checkpoint(chap_dir, stage="finalize", status="completed")
+        except Exception as ce:
+            logger.warning(f"Could not update chapter render checkpoint: {ce}")
+
         return str(final_video_path)
 
 pipeline = MangaRecapPipeline()

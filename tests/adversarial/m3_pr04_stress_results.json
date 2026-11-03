@@ -1,0 +1,73 @@
+{
+  "stress_1_55_pages": {
+    "num_pages": 55,
+    "raw_pixels": 176000000,
+    "duration_seconds": 14.028524207882583,
+    "peak_memory_mb": 33.92995548248291,
+    "memory_threshold_mb": 60.0,
+    "total_panels": 120,
+    "active_panels": 120,
+    "passed": true
+  },
+  "stress_2_cross_page": {
+    "source_image": "page_001.jpg+page_002.jpg",
+    "width": 1080,
+    "height": 1304,
+    "seam_color_delta": 2,
+    "passed": true
+  },
+  "defects_found": {
+    "defect_1_leading_trailing_gutter_swallowed": false,
+    "defect_1_raw_intervals": [
+      [
+        88,
+        1312
+      ]
+    ],
+    "defect_1_refined_intervals": [
+      [
+        88,
+        1312
+      ]
+    ],
+    "defect_2_panels_under_756px_merged": false,
+    "defect_2_raw_intervals": [
+      [
+        0,
+        662
+      ],
+      [
+        638,
+        1300
+      ]
+    ],
+    "defect_2_refined_intervals": [
+      [
+        0,
+        662
+      ],
+      [
+        638,
+        1300
+      ]
+    ]
+  },
+  "stress_3_gutters_and_margins": {
+    "tiny_gutter_ignored": true,
+    "margin_bottom": 1262,
+    "margin_top": 1238,
+    "artwork_protected": true,
+    "passed": true
+  },
+  "stress_4_contact_sheet": {
+    "resolution": [
+      1920,
+      1920
+    ],
+    "format": "JPEG",
+    "badge_count": 16,
+    "badges_confirmed": 16,
+    "passed": true
+  },
+  "verdict": "APPROVE"
+}

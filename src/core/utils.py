@@ -1,7 +1,12 @@
 import re
 import unicodedata
 from pathlib import Path
-from src.core.supabase_client import supabase
+from src.core.storage import (
+    read_json,
+    atomic_write_json,
+    cleanup_intermediate_files,
+    StorageManager,
+)
 
 def slugify_project_title(project_title: str) -> str:
     """
@@ -17,36 +22,58 @@ def slugify_project_title(project_title: str) -> str:
     slug = re.sub(r'[\s-]+', '_', slug)
     return slug
 
-def get_project_data_dir(project_title: str) -> Path:
+def get_project_data_dir(project_slug: str) -> Path:
     """
-    Returns the project-specific data directory: data/{project_slug}
+    Returns the project data directory.
+    Canonical path is config.storage_dir / project_slug (i.e. data/projects/{project_slug}).
+    If (config.storage_dir / project_slug).exists(), return that.
+    Else if (config.data_dir / project_slug).exists(), return config.data_dir / project_slug (legacy fallback).
+    Otherwise return config.storage_dir / project_slug.
     """
-    slug = slugify_project_title(project_title)
-    return Path("data") / slug
+    from src.core.config import config
+
+    slug = slugify_project_title(str(project_slug))
+    canonical_slug = config.storage_dir / slug
+    if canonical_slug.exists():
+        return canonical_slug
+    if (config.storage_dir / str(project_slug)).exists():
+        return config.storage_dir / str(project_slug)
+
+    legacy_slug = config.data_dir / slug
+    if legacy_slug.exists():
+        return legacy_slug
+    if (config.data_dir / str(project_slug)).exists():
+        return config.data_dir / str(project_slug)
+
+    return canonical_slug
 
 def get_project_title_by_id(project_id: str) -> str:
     """
-    Queries Supabase to fetch the project title by project ID.
+    Returns the project title from local storage (project.json) or derives it from the slug/ID.
     """
-    try:
-        res = supabase.table("projects").select("title").eq("id", project_id).execute()
-        if res.data:
-            return res.data[0]["title"]
-    except Exception:
-        pass
-    return "default_project"
+    if not project_id:
+        return "default_project"
+    project_dir = get_project_data_dir(project_id)
+    project_json = project_dir / "project.json"
+    if project_json.exists():
+        try:
+            data = read_json(project_json)
+            return data.get("title", project_id)
+        except Exception:
+            pass
+    return project_id
 
 def get_project_title_by_chapter_id(chapter_id: str) -> str:
     """
-    Queries Supabase to fetch the project title by chapter ID.
+    Resolves project title by chapter identifier or path.
     """
-    try:
-        res = supabase.table("chapters").select("project_id").eq("id", chapter_id).execute()
-        if res.data:
-            return get_project_title_by_id(res.data[0]["project_id"])
-    except Exception:
-        pass
-    return "default_project"
+    if not chapter_id:
+        return "default_project"
+    # Format: {slug}_{chapter_num}
+    if "_" in chapter_id:
+        parts = chapter_id.rsplit("_", 1)
+        return get_project_title_by_id(parts[0])
+    return chapter_id
 
 def format_sequence_id(seq_id: str) -> str:
     """
@@ -63,6 +90,37 @@ def format_sequence_id(seq_id: str) -> str:
         return "_".join(parts)
 import os
 import csv
+import shutil
+import subprocess
+from typing import Union, Optional, List
+
+
+class DependencyNotFoundError(Exception):
+    """Raised when external tool (ffmpeg, ffprobe) is not installed on PATH."""
+    pass
+
+
+class FFmpegExecutionError(Exception):
+    """Raised when FFmpeg subprocess returns non-zero exit code."""
+    def __init__(self, message: str, returncode: int, stderr: str = ""):
+        super().__init__(f"{message} (exit code {returncode}): {stderr.strip()[-500:] if stderr else ''}")
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def run_ffmpeg(cmd: List[str], description: str = "FFmpeg process") -> subprocess.CompletedProcess:
+    """
+    Executes an FFmpeg command with binary existence check and non-zero exit code enforcement.
+    """
+    binary = cmd[0] if cmd else "ffmpeg"
+    if not shutil.which(binary):
+        raise DependencyNotFoundError(f"Binary '{binary}' not found on system PATH. Please install FFmpeg.")
+    
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        raise FFmpegExecutionError(f"{description} failed", result.returncode, result.stderr)
+    return result
+
 
 def get_next_character_image_path(project_dir: Path, character_name: str = "unknown") -> Path:
     """
@@ -106,23 +164,77 @@ def move_character_crop(project_dir: Path, current_path: str, character_name: st
         logger.error(f"Failed to move crop from {current_path} to {new_path}: {e}")
         return current_path
 
-def get_next_video_path(project_dir: Path, chapter: str) -> Path:
+def get_next_video_path(project_dir: Path, chapter: Union[str, int], suffix: Optional[str] = None) -> Path:
     """
-    Scans video/chapters directory and returns the next version path (e.g. chapter_1_2.mp4)
+    Scans video/chapters directory and returns the next version path.
+    If suffix is provided (e.g. 'preview', 'final', 'agent'):
+      returns video/chapters/chapter_{chapter}_{suffix}_v{next_ver}.mp4
+    If suffix is None or empty:
+      returns video/chapters/chapter_{chapter}_{next_ver}.mp4
     """
     video_dir = project_dir / "video" / "chapters"
     video_dir.mkdir(parents=True, exist_ok=True)
+    
+    chapter_str = str(chapter)
     try:
-        existing = [f for f in os.listdir(video_dir) if f.startswith(f"chapter_{chapter}_") and f.endswith(".mp4")]
+        existing = os.listdir(video_dir)
     except Exception:
         existing = []
+
+    if suffix:
+        pattern = re.compile(rf"^chapter_{re.escape(chapter_str)}_{re.escape(suffix)}_v(\d+)\.mp4$")
+        fallback_pattern = re.compile(rf"^chapter_{re.escape(chapter_str)}_{re.escape(suffix)}_(\d+)\.mp4$")
+        simple_pattern = re.compile(rf"^chapter_{re.escape(chapter_str)}_{re.escape(suffix)}\.mp4$")
+        versions = []
+        for f in existing:
+            m = pattern.match(f)
+            if m:
+                versions.append(int(m.group(1)))
+                continue
+            m2 = fallback_pattern.match(f)
+            if m2:
+                versions.append(int(m2.group(1)))
+                continue
+            if simple_pattern.match(f):
+                versions.append(1)
+        next_ver = max(versions, default=0) + 1
+        return video_dir / f"chapter_{chapter_str}_{suffix}_v{next_ver}.mp4"
+    else:
+        pattern = re.compile(rf"^chapter_{re.escape(chapter_str)}_(\d+)\.mp4$")
+        v_pattern = re.compile(rf"^chapter_{re.escape(chapter_str)}_v(\d+)\.mp4$")
+        versions = []
+        for f in existing:
+            m = pattern.match(f)
+            if m:
+                versions.append(int(m.group(1)))
+                continue
+            m2 = v_pattern.match(f)
+            if m2:
+                versions.append(int(m2.group(1)))
+        next_ver = max(versions, default=0) + 1
+        return video_dir / f"chapter_{chapter_str}_{next_ver}.mp4"
+
+def resolve_video_output_path(chapter_dir: Path, chapter_num: Union[str, int], suffix: str = "agent", version: Optional[int] = None) -> Path:
+    """
+    Resolves video output path in video/ directory: chapter_{chapter_num}_{suffix}_v{version}.mp4.
+    If version is None, auto-increments based on existing files in chapter_dir / 'video'.
+    """
+    video_dir = chapter_dir / "video"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    chap_str = str(chapter_num)
+    if version is not None:
+        return video_dir / f"chapter_{chap_str}_{suffix}_v{version}.mp4"
+    
+    # Auto-increment
+    pattern = re.compile(rf"^chapter_{re.escape(chap_str)}_{re.escape(suffix)}_v(\d+)\.mp4$")
     versions = []
-    for f in existing:
-        match = re.search(rf'chapter_{chapter}_(\d+)\.mp4', f)
-        if match:
-            versions.append(int(match.group(1)))
-    next_ver = max(versions) + 1 if versions else 1
-    return video_dir / f"chapter_{chapter}_{next_ver}.mp4"
+    if video_dir.exists():
+        for f in os.listdir(video_dir):
+            m = pattern.match(f)
+            if m:
+                versions.append(int(m.group(1)))
+    next_ver = max(versions, default=0) + 1
+    return video_dir / f"chapter_{chap_str}_{suffix}_v{next_ver}.mp4"
 
 def update_csv_script(project_dir: Path, chapter: str, script_data: list[dict]):
     """
@@ -206,23 +318,30 @@ def load_csv_script_for_chapter(project_dir: Path, chapter: str) -> list[dict]:
     results.sort(key=get_sort_key)
     return results
 
-def sync_agent_script_to_db(project_title: str, chapter_number: str, script_path: str = None) -> bool:
+def sync_agent_script_to_storage(project_title: str, chapter_number: str, script_path: str = None) -> bool:
     """
-    Imports Agent-authored script (script.txt / script.json) into Supabase DB and local script.csv.
-    Used by both import_agent_script.py and pipeline.py in the Agentic Hybrid Workflow.
+    Imports Agent-authored script (script.txt / script.json) into local storage
+    (script.json, chapter.json, and memory/script.csv).
+    Zero Supabase or database dependencies.
     """
     from src.core.logger import logger
     from src.services.tts_service import tts_service
 
     project_dir = get_project_data_dir(project_title)
+    chap_dir = project_dir / "chapters" / str(chapter_number)
+    legacy_recut_dir = project_dir / "image" / "recut" / f"chap_{chapter_number}"
+
     if not script_path:
-        json_path = project_dir / "image" / "recut" / f"chap_{chapter_number}" / "script.json"
-        txt_path = project_dir / "image" / "recut" / f"chap_{chapter_number}" / "script.txt"
-        if json_path.exists():
-            script_path = str(json_path)
-        elif txt_path.exists():
-            script_path = str(txt_path)
-        else:
+        for candidate in [
+            chap_dir / "script.json",
+            chap_dir / "script.txt",
+            legacy_recut_dir / "script.json",
+            legacy_recut_dir / "script.txt"
+        ]:
+            if candidate.exists():
+                script_path = str(candidate)
+                break
+        if not script_path:
             return False
 
     if not os.path.exists(script_path):
@@ -237,49 +356,50 @@ def sync_agent_script_to_db(project_title: str, chapter_number: str, script_path
             logger.error(f"Failed to parse script from {script_path}. No valid panel markers found.")
             return False
 
-        seq_numbers = [p["sequence_number"] for p in parsed_panels]
-        min_seq = min(seq_numbers)
-        max_seq = max(seq_numbers)
+        # 1. Save structured script.json
+        script_data = {
+            "schema_version": "3.0.0",
+            "project_title": project_title,
+            "chapter_number": str(chapter_number),
+            "segments": parsed_panels
+        }
+        dest_script_json = chap_dir / "script.json"
+        dest_script_json.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(dest_script_json, script_data)
 
-        proj_res = supabase.table("projects").select("id").eq("title", project_title).execute()
-        if not proj_res.data:
-            logger.error(f"Project '{project_title}' not found in database.")
-            return False
-        project_id = proj_res.data[0]["id"]
-
-        chap_res = supabase.table("chapters").select("id").eq("project_id", project_id).eq("chapter_number", str(chapter_number)).execute()
-        if not chap_res.data:
-            logger.error(f"Chapter {chapter_number} not found in database.")
-            return False
-        chapter_id = chap_res.data[0]["id"]
-
-        # Update panel statuses
-        for p in parsed_panels:
-            seq_num = p["sequence_number"]
-            status = p.get("status", "processed")
-            supabase.table("panels").update({"status": status}).eq("chapter_id", chapter_id).eq("sequence_number", seq_num).execute()
-
-        # Clean old script segments
-        supabase.table("script_segments").delete().eq("chapter_id", chapter_id).execute()
-
-        # Insert new script segment
-        supabase.table("script_segments").insert({
-            "chapter_id": chapter_id,
-            "start_panel_seq": min_seq,
-            "end_panel_seq": max_seq,
-            "script_text": script_content,
-            "status": "completed"
-        }).execute()
-
-        # Update script.csv
+        # 2. Update memory/script.csv for render engine compatibility
         update_csv_script(project_dir, chapter_number, parsed_panels)
 
-        # Update chapter status to 'scripted'
-        supabase.table("chapters").update({"status": "scripted"}).eq("id", chapter_id).execute()
-        logger.info(f"Agent script from {script_path} successfully synced into database for Chapter {chapter_number}.")
+        # 3. Update chapter.json checkpoint
+        chapter_json_path = chap_dir / "chapter.json"
+        if chapter_json_path.exists():
+            chap_data = read_json(chapter_json_path)
+        else:
+            chap_data = {
+                "schema_version": "3.0.0",
+                "chapter_id": f"{slugify_project_title(project_title)}_chap_{chapter_number}",
+                "chapter_number": str(chapter_number),
+                "project_slug": slugify_project_title(project_title),
+                "title": f"Chapter {chapter_number}",
+                "status": "pending",
+                "stages": {}
+            }
+        chap_data["status"] = "scripted"
+        chap_data.setdefault("stages", {})["script"] = {
+            "stage": "script",
+            "status": "completed",
+            "artifacts": [str(dest_script_json.relative_to(project_dir))]
+        }
+        atomic_write_json(chapter_json_path, chap_data)
+
+        logger.info(f"Agent script from {script_path} successfully synced to local storage for Chapter {chapter_number}.")
         return True
     except Exception as e:
-        logger.error(f"Error syncing agent script to database: {e}")
+        logger.error(f"Error syncing agent script to local storage: {e}")
         return False
+
+# Backwards compatibility alias
+sync_agent_script_to_db = sync_agent_script_to_storage
+
 
 

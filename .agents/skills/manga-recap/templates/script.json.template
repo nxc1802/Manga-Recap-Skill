@@ -1,0 +1,79 @@
+{
+  "schema_version": "3.0.0",
+  "project_slug": "warrior_grandpa",
+  "chapter_number": "2",
+  "title": "Warrior Grandpa and His Supreme Granddaughter - Episode 2",
+  "voice_strategy": "single_narrator",
+  "default_voice": "Trúc Ly",
+  "segments": [
+    {
+      "seq_id": "001",
+      "panel_ids": [
+        "panel_001.jpg"
+      ],
+      "narrator_text": "Màn đêm u tối bao trùm đỉnh núi Thiên Nhai, một luồng sát khí lạnh lẽo đột ngột giáng xuống làm rung chuyển cả sơn môn!",
+      "character": null,
+      "emotion": "dramatic",
+      "emotion_cue": null,
+      "voice_id": "Trúc Ly",
+      "camera_motion": "pan_down",
+      "focus_box": {
+        "x_min": 0.0,
+        "y_min": 0.0,
+        "x_max": 1.0,
+        "y_max": 0.8
+      },
+      "duration": null,
+      "audio_path": null,
+      "checksum": null,
+      "status": "pending"
+    },
+    {
+      "seq_id": "002",
+      "panel_ids": [
+        "panel_002.jpg",
+        "panel_003.jpg"
+      ],
+      "narrator_text": "Lão gia chủ trầm ngâm nhìn về phía chân trời [thở dài] từng vết thương năm xưa như đang nhắc nhở về món nợ máu chưa trả.",
+      "character": "Lão Gia Chủ",
+      "emotion": "sad",
+      "emotion_cue": "[thở dài]",
+      "voice_id": "Thiền Tâm Đức",
+      "camera_motion": "zoom_in",
+      "focus_box": {
+        "x_min": 0.2,
+        "y_min": 0.1,
+        "x_max": 0.8,
+        "y_max": 0.9
+      },
+      "duration": null,
+      "audio_path": null,
+      "checksum": null,
+      "status": "pending"
+    },
+    {
+      "seq_id": "003",
+      "panel_ids": [
+        "panel_004.jpg"
+      ],
+      "narrator_text": "Đột nhiên, tiếng cười lạnh lẽo vang vọng phá tan không gian tĩnh mịch!",
+      "character": null,
+      "emotion": "suspense",
+      "emotion_cue": null,
+      "voice_id": "Trúc Ly",
+      "camera_motion": "static",
+      "focus_box": null,
+      "duration": null,
+      "audio_path": null,
+      "checksum": null,
+      "status": "pending"
+    }
+  ],
+  "total_duration_seconds": 0.0,
+  "metadata": {
+    "authored_by": "coding_agent",
+    "batch_size": 5,
+    "overlap": 2,
+    "created_at": "2026-11-03T12:00:00Z"
+  }
+}

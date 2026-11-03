@@ -1,0 +1,35 @@
+{
+  "schema_version": "3.0.0",
+  "project_id": "proj_warrior_grandpa_001",
+  "slug": "warrior_grandpa",
+  "title": "Warrior Grandpa and His Supreme Granddaughter",
+  "description": "Enterprise Manga Recap V3 series for Warrior Grandpa webtoon",
+  "source_url": "https://www.webtoons.com/en/action/warrior-grandpa-and-his-supreme-granddaughter/episode-2/viewer?title_no=8953&episode_no=2",
+  "language": "vi",
+  "created_at": "2026-11-03T12:00:00Z",
+  "updated_at": "2026-11-03T12:00:00Z",
+  "render_settings": {
+    "target_width": 1280,
+    "target_height": 720,
+    "fps": 30,
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "crf": 20,
+    "preset": "medium",
+    "burn_subtitles": true,
+    "video_mode": "auto"
+  },
+  "audio_settings": {
+    "default_voice": "Trúc Ly",
+    "default_speed": 1.0,
+    "sample_rate": 48000,
+    "bgm_path": null,
+    "bgm_volume": 0.15,
+    "voice_volume": 1.0,
+    "ducking_factor": 0.30
+  },
+  "chapters": [
+    "1",
+    "2"
+  ]
+}

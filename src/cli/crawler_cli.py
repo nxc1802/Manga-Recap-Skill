@@ -14,13 +14,13 @@ async def main():
     parser = argparse.ArgumentParser(description="Crawler CLI for Manga Recap")
     parser.add_argument("--chapter", type=str, required=True, help="Chapter number (e.g., 1)")
     parser.add_argument("--url", type=str, default=None, help="Base chapter URL (without chapter number)")
-    parser.add_argument("--project", type=str, default="Mỗi lính đánh thuê trở về đều có một kế hoạch", help="Project title in database")
+    parser.add_argument("--project", type=str, default="Mỗi lính đánh thuê trở về đều có một kế hoạch", help="Project title")
     parser.add_argument("--max_panels", type=int, default=None, help="Max number of panels to crawl")
     parser.add_argument("--context", type=str, default="Không có bối cảnh cốt truyện.", help="General story context")
     args = parser.parse_args()
 
     try:
-        logger.info(f"Initializing project '{args.project}' in database...")
+        logger.info(f"Initializing local project '{args.project}'...")
         project_id = await crawler_service.get_or_create_project(args.project)
         
         logger.info(f"Starting crawl for Chapter {args.chapter}...")
@@ -39,7 +39,7 @@ async def main():
         local_dir = get_project_data_dir(args.project) / "image" / "recut" / f"chap_{args.chapter}"
         logger.info("=========================================================")
         logger.info(f"SUCCESS: Chapter {args.chapter} crawled successfully!")
-        logger.info(f"Chapter ID in DB: {chapter_id}")
+        logger.info(f"Chapter ID: {chapter_id}")
         logger.info(f"Local Image Directory: {local_dir.resolve()}")
         logger.info("=========================================================")
         

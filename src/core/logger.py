@@ -11,13 +11,23 @@ def setup_logger(name: str = "manga_recap") -> logging.Logger:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
-        # Console Handler
-        ch = logging.StreamHandler(sys.stdout)
+        # Console Handler routes exclusively to sys.stderr to maintain stdout purity
+        ch = logging.StreamHandler(sys.stderr)
         ch.setFormatter(formatter)
         logger.addHandler(ch)
         
-        pass
-        
     return logger
 
+def configure_logging(verbose: bool = False) -> None:
+    """Configures log level and ensures stderr routing across all handlers."""
+    logger = logging.getLogger("manga_recap")
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    for handler in logger.handlers:
+        if isinstance(handler, logging.StreamHandler):
+            try:
+                handler.stream = sys.stderr
+            except Exception:
+                pass
+
 logger = setup_logger()
+

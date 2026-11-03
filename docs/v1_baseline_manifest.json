@@ -1,0 +1,206 @@
+{
+  "baseline_commit": "88bb27392b332265d4d1ed9f76731ca26d27c906",
+  "baseline_tag": "v1.0-baseline",
+  "total_files": 33,
+  "generated_at": "2026-11-03T10:04:00Z",
+  "files": [
+    {
+      "path": ".env.example",
+      "size_bytes": 1398,
+      "git_blob_sha": "dae1ef5f73e7799bf1e48101c48602dff9cf893e",
+      "sha256": "fc8c3b77aebae0c668ec613518f98defc21f0fe8cbc8c4ac25e7e6d524fa9ecb"
+    },
+    {
+      "path": ".gitignore",
+      "size_bytes": 432,
+      "git_blob_sha": "3c03a35d91fa982dfb1a0329b9c779991b584a83",
+      "sha256": "40af848bba339a62c0692a9515a328d487c9940e423addf3cc1dcd6f679b8af1"
+    },
+    {
+      "path": "README.md",
+      "size_bytes": 6137,
+      "git_blob_sha": "41dcc78523c797f8a9dc47cd60afaf1f0500dadc",
+      "sha256": "d6de01df4ce8926e5ee0613d555e7f75aee99b94baf85e33108cabd23f615db7"
+    },
+    {
+      "path": "config.yaml",
+      "size_bytes": 1213,
+      "git_blob_sha": "8a0b3f4aa481a6980e5fe59f872c597b158423a5",
+      "sha256": "272705e34d76a7ad39a8473a5846aa16b1475f3ced8f21da29a300822b48b581"
+    },
+    {
+      "path": "docs/skill_manga_recap.md",
+      "size_bytes": 14329,
+      "git_blob_sha": "d96f232192e8652f834474ba1f10c35370978dad",
+      "sha256": "e3ea3e34506dc170f2cb799d060882306f20740dd358e8eb18fdf5ebbc62d457"
+    },
+    {
+      "path": "requirements.txt",
+      "size_bytes": 554,
+      "git_blob_sha": "9a034bd12c51b0a9134b77e113703e734a90cc73",
+      "sha256": "dd77cd2bffe5ee4ca29d9de11e051b7f7e5a7891e58bf07059ccb60bf4b411a6"
+    },
+    {
+      "path": "setup.bat",
+      "size_bytes": 2470,
+      "git_blob_sha": "3ac277593e3501e14247b4dc2b35b0ecaae9287f",
+      "sha256": "9dee35c183baaca564001b7da663ecc5809876a0888285a9c4f6d576cd01aae2"
+    },
+    {
+      "path": "setup.sh",
+      "size_bytes": 3304,
+      "git_blob_sha": "51623a7711fbefca8b0a7c266946477d71658c47",
+      "sha256": "cbb4dbdb3576135e564a4e5ff203f5b150677e712b8e5452cab194cc31eb70a9"
+    },
+    {
+      "path": "src/__init__.py",
+      "size_bytes": 64,
+      "git_blob_sha": "f97fdec5bc6e2f4ec7bba16f67f5e62dece29ed3",
+      "sha256": "64a318a3e27f4624c5c6c79170b7bf1a713f9decf97c09e202b80dc18b8a4fe2"
+    },
+    {
+      "path": "src/cli/compile_chapters.py",
+      "size_bytes": 4980,
+      "git_blob_sha": "ed2a4b02dba682dc7c63af56f6a13ecd379471d5",
+      "sha256": "d4b3a38ec4d49bd3999ad01aa9a3e0c72a5048a744df37b5fd30083ba6df90dd"
+    },
+    {
+      "path": "src/cli/crawler_cli.py",
+      "size_bytes": 2281,
+      "git_blob_sha": "4317952b2ddf6b369c0d40ecd140202420170259",
+      "sha256": "32f3ed5ae88631c8d8e3dfb54cbf0f98f0877d1ebf9b8f4d2c62121d516e7964"
+    },
+    {
+      "path": "src/cli/import_agent_script.py",
+      "size_bytes": 2204,
+      "git_blob_sha": "8d813ad53cf4865de77d6a7bad15320e3aad64f1",
+      "sha256": "31bd104c7a6c70e13f07543f29a4a5256331a3f47720ed03b8e96d55ad2355da"
+    },
+    {
+      "path": "src/cli/run_recap.py",
+      "size_bytes": 6110,
+      "git_blob_sha": "0627cc482ca71e0e1b7db78f3526c6945ca5ed73",
+      "sha256": "0146827dceae40ab984f7157be745ae11ec1e071b4e0de7fb92d30bec9cf68ea"
+    },
+    {
+      "path": "src/cli/youtube_uploader.py",
+      "size_bytes": 8399,
+      "git_blob_sha": "25be9080526a50cd20338a6e2c3f2afab7c1aec1",
+      "sha256": "04c54500602fc8600c7e993abebfb46b43b5e6862041d194215348294605d8ac"
+    },
+    {
+      "path": "src/core/config.py",
+      "size_bytes": 2864,
+      "git_blob_sha": "f9c50d3e2270b7b1d588324ecc976e59a5475e74",
+      "sha256": "f0e5ce4720abac368953a26b032abfdf033d3742260e965be83daf0229da0ea5"
+    },
+    {
+      "path": "src/core/logger.py",
+      "size_bytes": 603,
+      "git_blob_sha": "9432ee670ad8f4e3c716fd45d162eba487b47f26",
+      "sha256": "cb3b48928d9439b641977185288f0c43ea7313a1ac161eeed6f07762d17a8157"
+    },
+    {
+      "path": "src/core/stitch_segment.py",
+      "size_bytes": 11823,
+      "git_blob_sha": "c1f22488bcd18b94490edc09796bd9ad59cbc57b",
+      "sha256": "59b9e76990c0f1b29afadff15938d892618a868396422a4b728c9a8544c80df9"
+    },
+    {
+      "path": "src/core/supabase_client.py",
+      "size_bytes": 957,
+      "git_blob_sha": "feef747ea62d4462d7f6aa6a28c9498986a26a5a",
+      "sha256": "fd8b7d3b119612260c160084530171859cd6d23161dd8bd284bb2281bdcdc06f"
+    },
+    {
+      "path": "src/core/utils.py",
+      "size_bytes": 11093,
+      "git_blob_sha": "be847aab45aca0a6f352e5fe0cbfa7d4c798139c",
+      "sha256": "2c77376e547b42d58790e41148af0dbb11e9e98cc69f179f74e20ab16a41ad8e"
+    },
+    {
+      "path": "src/pipeline.py",
+      "size_bytes": 20215,
+      "git_blob_sha": "dc13c74aedbe0c2a5d21e6a2a68ad8449e3dd426",
+      "sha256": "cf7af9d9b30e7b0f0150ef9b69a1a5d7a442d0202598869135ae035168b48378"
+    },
+    {
+      "path": "src/render/video_engine.py",
+      "size_bytes": 26651,
+      "git_blob_sha": "4eee35242da65f8c4feab7da37b01614062855ca",
+      "sha256": "07dbc6f699aa67ee768d742e66900eb5da15e9bee43501326e1be6ba69664eb0"
+    },
+    {
+      "path": "src/services/character_dictionary.py",
+      "size_bytes": 5672,
+      "git_blob_sha": "00e17600839e9b810459713dacf7ac8d5f37d51d",
+      "sha256": "5269e362f68add6966f7a341d06a103fa0da415875ffa692a0ae99212cf07f15"
+    },
+    {
+      "path": "src/services/crawler_service.py",
+      "size_bytes": 12465,
+      "git_blob_sha": "37f8473addc1e2f25c64188c1bb3fb0fab111b65",
+      "sha256": "dcd516de5f53914117997bee46e01efaeda10afbe6a767479e56cc412cb39041"
+    },
+    {
+      "path": "src/services/tts_service.py",
+      "size_bytes": 31133,
+      "git_blob_sha": "07a16061d9888c7febc10bcd1ecb30fd9d574c1a",
+      "sha256": "dbb570da97395206c6a1b5b7cb9847a0b3233511468dfa48feafdea38eba106e"
+    },
+    {
+      "path": "tests/conftest.py",
+      "size_bytes": 1900,
+      "git_blob_sha": "7cb3f0da5f26505ac165c660371c5f6c19d48edb",
+      "sha256": "09416253ace0a68426807eacadb07a6d6d28a6197c5e33710ad1e93365adc5b6"
+    },
+    {
+      "path": "tests/generate_all_tts_references.py",
+      "size_bytes": 1444,
+      "git_blob_sha": "73bb77d4ce6690db1e0511a198e60cf7a87dc94d",
+      "sha256": "04029d927f7ed251eb0b6c5acc1a5261aed92299b6d79ec0fe3bdce1055c1332"
+    },
+    {
+      "path": "tests/restore_scripts.py",
+      "size_bytes": 2343,
+      "git_blob_sha": "971000ace67ab7915cda7493d39942404a1383e3",
+      "sha256": "726425ea53fe3c7ab664b0f2c07a2b2fe1c2925b3af05822b00d379192f13c93"
+    },
+    {
+      "path": "tests/test_stitch_segment.py",
+      "size_bytes": 1702,
+      "git_blob_sha": "0e15092f2338a3cdbe16475412202ee399c96e3e",
+      "sha256": "4ef6636c171df30ede7930e24a546aa4a7270d311d3a4759009bc995120458d6"
+    },
+    {
+      "path": "tests/test_tts_parser.py",
+      "size_bytes": 1402,
+      "git_blob_sha": "6c663c58eb8ff459664b28574ae0c0303e74e5f4",
+      "sha256": "022b5b6746b55b8a3fe17129819050d748e77a61be62baea1c89ff7a4e6a8457"
+    },
+    {
+      "path": "tests/test_utils.py",
+      "size_bytes": 1040,
+      "git_blob_sha": "bd2bfd1af94e4cdd2c140aecc886b731c353d8f0",
+      "sha256": "96373a5fb79a26dcd68024d3087d49eea8208c0c0aa3695cde52c9b6cdeaabac"
+    },
+    {
+      "path": "tests/test_video_modes.py",
+      "size_bytes": 1322,
+      "git_blob_sha": "2f2f6f3c9d34f91dfa51a0bbf1f0b01a0ec26a36",
+      "sha256": "659f279893d30af556af2503f4f415f4a3f16b24ea88cce01674124268eaa799"
+    },
+    {
+      "path": "tests/verify_tts_voices.py",
+      "size_bytes": 1433,
+      "git_blob_sha": "72ac537e0df3316b5328f26a894581e028a4377a",
+      "sha256": "c6e01749b4c52c1b475b11959ea08e01ab567951eddeb0f3451266bfd0e1530a"
+    },
+    {
+      "path": "wipe_db.py",
+      "size_bytes": 2089,
+      "git_blob_sha": "0fef2c878bbb65013a45bbed6378b8fc56b1db00",
+      "sha256": "2297544990fc2586262f71ed0faafdb17fd86e1222be081900fffd012cb89b05"
+    }
+  ]
+}

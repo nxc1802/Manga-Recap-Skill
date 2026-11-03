@@ -48,13 +48,10 @@ if not exist .env (
     if exist .env.example (
         echo Đang tạo tệp cấu hình .env từ .env.example...
         copy .env.example .env
-        echo Vui lòng mở tệp .env và cập nhật các khóa API (OpenRouter/Supabase) của bạn!
+        echo Vui lòng mở tệp .env và cấu hình các khóa API nếu cần!
     ) else (
         echo Không tìm thấy .env.example. Đang tạo tệp .env trống...
         echo OPENROUTER_API_KEY=> .env
-        echo SUPABASE_URL=>> .env
-        echo SUPABASE_ANON_KEY=>> .env
-        echo SUPABASE_SERVICE_ROLE_KEY=>> .env
     )
 ) else (
     echo Tệp cấu hình .env đã tồn tại.

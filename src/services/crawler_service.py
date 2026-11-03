@@ -5,7 +5,9 @@ from pathlib import Path
 import asyncio
 from src.core.config import config
 from src.core.logger import logger
-from src.core.supabase_client import supabase
+from src.core.storage import read_json, atomic_write_json, calculate_sha256
+from src.core.schemas import utc_iso_now
+from src.core.utils import slugify_project_title, get_project_data_dir
 
 class CrawlerService:
     def __init__(self):
@@ -16,30 +18,36 @@ class CrawlerService:
         
     async def get_or_create_project(self, title: str) -> str:
         """
-        Queries Supabase for a project with the given title.
-        Creates it if it does not exist. Returns the project UUID.
+        Manages local project record in project.json.
+        Creates it if it does not exist. Returns the project slug/identifier.
         """
         try:
-            # Query existing project
-            res = supabase.table("projects").select("id").eq("title", title).execute()
-            if res.data:
-                proj_id = res.data[0]["id"]
-                logger.info(f"Found existing project for '{title}': {proj_id}")
-                return proj_id
-                
-            # Create a new project
-            logger.info(f"Creating new project for '{title}'...")
-            insert_res = supabase.table("projects").insert({
+            proj_slug = slugify_project_title(title)
+            project_dir = get_project_data_dir(title)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            project_json = project_dir / "project.json"
+
+            if project_json.exists():
+                logger.info(f"Found existing local project for '{title}': {proj_slug}")
+                return proj_slug
+
+            logger.info(f"Creating new local project for '{title}'...")
+            init_project_data = {
+                "schema_version": "3.0.0",
+                "project_id": proj_slug,
+                "slug": proj_slug,
                 "title": title,
-                "description": f"Recap project for {title}"
-            }).execute()
-            
-            proj_id = insert_res.data[0]["id"]
-            logger.info(f"Project created with ID: {proj_id}")
-            return proj_id
+                "description": f"Recap project for {title}",
+                "created_at": utc_iso_now(),
+                "updated_at": utc_iso_now()
+            }
+            atomic_write_json(project_json, init_project_data)
+            logger.info(f"Project created with slug: {proj_slug}")
+            return proj_slug
         except Exception as e:
             logger.exception(f"Error in get_or_create_project: {e}")
             raise
+
     async def download_image(self, client: httpx.AsyncClient, img_url: str, save_path: Path, chapter_base_url: str = None) -> bool:
         """
         Downloads a single image with referrer headers, saving it locally.
@@ -69,15 +77,57 @@ class CrawlerService:
             logger.error(f"Error downloading image {img_url}: {e}")
             return False
 
+    async def crawl_raw_pages(self, url: str, output_raw_dir: Path, max_panels: int = None) -> list[str]:
+        """Crawls online chapter image URLs and downloads directly to output_raw_dir."""
+        output_raw_dir.mkdir(parents=True, exist_ok=True)
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=self.headers)
+            if resp.status_code != 200:
+                raise ValueError(f"Failed to fetch chapter page: HTTP {resp.status_code}")
+            soup = BeautifulSoup(resp.text, "html.parser")
+            img_tags = soup.find_all("img")
+            manga_imgs = []
+            for img in img_tags:
+                src = img.get("data-url") or img.get("src")
+                if src and any(d in src.lower() for d in ["webtoons.com", "pstatic.net", "comic", "manga", "chapter"]):
+                    if not any(x in src.lower() for x in ["banner", "logo", "icon", "thumb", "bg_"]):
+                        manga_imgs.append(src)
+            if not manga_imgs:
+                for img in img_tags:
+                    src = img.get("data-url") or img.get("src")
+                    if src and any(ext in src.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                        manga_imgs.append(src)
+            if max_panels and max_panels > 0:
+                manga_imgs = manga_imgs[:max_panels]
+
+            sem = asyncio.Semaphore(5)
+            downloaded = []
+            async def download_task(seq: int, img_url: str):
+                async with sem:
+                    ext = ".jpg"
+                    if ".png" in img_url.lower():
+                        ext = ".png"
+                    elif ".webp" in img_url.lower():
+                        ext = ".webp"
+                    dest_name = f"page_{seq:03d}{ext}"
+                    dest_path = output_raw_dir / dest_name
+                    success = await self.download_image(client, img_url, dest_path, url)
+                    if success:
+                        downloaded.append(dest_name)
+            tasks = [download_task(i + 1, img_url) for i, img_url in enumerate(manga_imgs)]
+            await asyncio.gather(*tasks)
+            return sorted(downloaded)
+
     async def crawl_chapter(self, project_id: str, chapter_number: str, general_story_context: str, chapter_base_url: str = None, max_panels: int = None) -> tuple[str, str]:
         """
         Orchestrates crawling a chapter:
         1. Fetch chapter HTML.
-        2. Create chapter record in Supabase (or update if exists).
+        2. Create/update chapter record in local chapter.json.
         3. Parse images.
-        4. Download images locally to data/raw_images/chap_{chapter_number}/
-        5. Insert panel records into Supabase panels table.
-        Returns (chapter_uuid, summary_context)
+        4. Download images locally to data/{project}/chapters/{num}/raw/page_*.jpg
+        5. Stitch & segment images.
+        6. Emit manifest.json.
+        Returns (chapter_id, summary_context)
         """
         url_template = chapter_base_url or config.crawler.chapter_base_url
         if "[CHAPTER_NUMBER]" in url_template:
@@ -101,32 +151,52 @@ class CrawlerService:
         # 1. Use manual story description from parameter instead of config
         summary_context = general_story_context
         
-        # 2. Get or create chapter record
+        # 2. Get or create chapter record locally
+        project_dir = get_project_data_dir(project_id)
+        chap_dir = project_dir / "chapters" / str(chapter_number)
+        chap_dir.mkdir(parents=True, exist_ok=True)
+        chapter_json_path = chap_dir / "chapter.json"
+        chapter_id = f"{slugify_project_title(project_id)}_chap_{chapter_number}"
+
         try:
-            res = supabase.table("chapters").select("id").eq("project_id", project_id).eq("chapter_number", chapter_number).execute()
-            if res.data:
-                chapter_id = res.data[0]["id"]
-                logger.info(f"Chapter {chapter_number} already exists in database: {chapter_id}")
-                # We update summary_context
-                supabase.table("chapters").update({"summary_context": summary_context}).eq("id", chapter_id).execute()
+            if chapter_json_path.exists():
+                chapter_data = read_json(chapter_json_path)
+                chapter_data["summary_context"] = summary_context
+                chapter_data["updated_at"] = utc_iso_now()
+                logger.info(f"Chapter {chapter_number} already exists locally: {chapter_id}")
             else:
-                insert_res = supabase.table("chapters").insert({
-                    "project_id": project_id,
-                    "chapter_number": chapter_number,
+                chapter_data = {
+                    "schema_version": "3.0.0",
+                    "chapter_id": chapter_id,
+                    "project_slug": slugify_project_title(project_id),
+                    "chapter_number": str(chapter_number),
+                    "title": f"Chapter {chapter_number}",
                     "summary_context": summary_context,
-                    "status": "processing"
-                }).execute()
-                chapter_id = insert_res.data[0]["id"]
-                logger.info(f"Inserted new chapter: {chapter_id}")
+                    "status": "processing",
+                    "created_at": utc_iso_now(),
+                    "updated_at": utc_iso_now(),
+                    "stages": {
+                        "crawl": {"stage": "crawl", "status": "running", "started_at": utc_iso_now()},
+                        "segment": {"stage": "segment", "status": "pending"},
+                        "script": {"stage": "script", "status": "pending"},
+                        "tts": {"stage": "tts", "status": "pending"},
+                        "render": {"stage": "render", "status": "pending"},
+                        "finalize": {"stage": "finalize", "status": "pending"}
+                    }
+                }
+            atomic_write_json(chapter_json_path, chapter_data)
         except Exception as e:
-            logger.exception(f"Failed to handle chapter record in Supabase: {e}")
+            logger.exception(f"Failed to handle chapter record in local storage: {e}")
             raise
 
         # 3. Fetch chapter HTML
         async with httpx.AsyncClient(follow_redirects=True, headers=self.headers, timeout=20.0) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
-                supabase.table("chapters").update({"status": "failed"}).eq("id", chapter_id).execute()
+                chapter_data["status"] = "failed"
+                chapter_data["stages"]["crawl"]["status"] = "failed"
+                chapter_data["stages"]["crawl"]["error_message"] = f"Failed to fetch chapter page: Status {resp.status_code}"
+                atomic_write_json(chapter_json_path, chapter_data)
                 raise RuntimeError(f"Failed to fetch chapter page: Status {resp.status_code}")
                 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -168,7 +238,10 @@ class CrawlerService:
                             
             if not manga_imgs:
                 logger.error("No manga panels found to download.")
-                supabase.table("chapters").update({"status": "failed"}).eq("id", chapter_id).execute()
+                chapter_data["status"] = "failed"
+                chapter_data["stages"]["crawl"]["status"] = "failed"
+                chapter_data["stages"]["crawl"]["error_message"] = "No panels found in chapter page HTML."
+                atomic_write_json(chapter_json_path, chapter_data)
                 raise ValueError("No panels found in chapter page HTML.")
                 
             # Apply limit if max_panels parameter or configuration is set
@@ -185,12 +258,8 @@ class CrawlerService:
             # 4. Download images sequentially or concurrently to raw_pages/
             sem = asyncio.Semaphore(5) # limit concurrency to 5 requests
             
-            from src.core.utils import get_project_title_by_id, get_project_data_dir
-            project_title = get_project_title_by_id(project_id)
-            project_dir = get_project_data_dir(project_title)
-            
-            # Temporary directory for raw unsliced pages
-            raw_pages_dir = project_dir / "image" / "raw" / f"chap_{chapter_number}"
+            # V3 layout: save directly to chapters/<num>/raw/page_*.jpg
+            raw_pages_dir = chap_dir / "raw"
             raw_pages_dir.mkdir(parents=True, exist_ok=True)
             
             async def download_task(seq: int, img_url: str):
@@ -201,7 +270,7 @@ class CrawlerService:
                     elif ".webp" in img_url.lower():
                         ext = ".webp"
                     
-                    file_name = f"image_{chapter_number}_{seq}{ext}"
+                    file_name = f"page_{seq:03d}{ext}"
                     save_path = raw_pages_dir / file_name
                     
                     success = await self.download_image(client, img_url, save_path, url)
@@ -215,7 +284,7 @@ class CrawlerService:
             
             # 5. Run Stitch & Segment on the downloaded pages
             logger.info("--- Preprocessing: Stitch & Segment Chapter Pages ---")
-            raw_images_dir = project_dir / "image" / "recut" / f"chap_{chapter_number}"
+            raw_images_dir = chap_dir / "panels"
             raw_images_dir.mkdir(parents=True, exist_ok=True)
             
             from src.core.stitch_segment import preprocess_and_segment_images
@@ -225,28 +294,54 @@ class CrawlerService:
             )
             
             if not segmented_panels:
+                chapter_data["status"] = "failed"
+                chapter_data["stages"]["segment"]["status"] = "failed"
+                chapter_data["stages"]["segment"]["error_message"] = "Stitch & Segment failed to produce any valid panel images."
+                atomic_write_json(chapter_json_path, chapter_data)
                 raise ValueError("Stitch & Segment failed to produce any valid panel images.")
                 
-            # 6. Insert segmented panels into Supabase
-            logger.info(f"Registering {len(segmented_panels)} segmented panels in database...")
-            
-            # First, clean existing database panel records to prevent duplicates on re-run
-            supabase.table("panels").delete().eq("chapter_id", chapter_id).execute()
-            
+            # 6. Save manifest.json locally
+            logger.info(f"Registering {len(segmented_panels)} segmented panels in local manifest...")
+            panels_manifest = []
             for idx, panel_path in enumerate(segmented_panels):
                 seq = idx + 1
-                try:
-                    supabase.table("panels").insert({
-                        "chapter_id": chapter_id,
-                        "sequence_number": seq,
-                        "raw_image_url": str(panel_path),
-                        "status": "pending"
-                    }).execute()
-                except Exception as e:
-                    logger.error(f"Failed to record panel {seq} in Supabase: {e}")
+                p_path = Path(panel_path)
+                panels_manifest.append({
+                    "panel_id": f"panel_{seq:03d}",
+                    "sequence_number": seq,
+                    "filename": p_path.name,
+                    "relative_path": str(p_path.relative_to(project_dir)),
+                    "source_image": p_path.name,
+                    "crop_box": [0, 0, 0, 0],
+                    "width": 800,
+                    "height": 1000,
+                    "aspect_ratio": 0.8,
+                    "sha256": calculate_sha256(p_path) if p_path.exists() else "",
+                    "status": "active"
+                })
+
+            manifest_data = {
+                "schema_version": "3.0.0",
+                "project_slug": slugify_project_title(project_id),
+                "chapter_number": str(chapter_number),
+                "source_url": url,
+                "created_at": utc_iso_now(),
+                "total_panels": len(segmented_panels),
+                "panels": panels_manifest
+            }
+            atomic_write_json(chap_dir / "manifest.json", manifest_data)
+            # Backward-compatibility copy in recut directory
+            atomic_write_json(raw_images_dir / "manifest.json", manifest_data)
             
-            # Update chapter status to crawled (processing in DB)
-            supabase.table("chapters").update({"status": "processing"}).eq("id", chapter_id).execute()
+            # Update chapter status to crawled
+            chapter_data["status"] = "crawled"
+            chapter_data["stages"]["crawl"]["status"] = "completed"
+            chapter_data["stages"]["crawl"]["completed_at"] = utc_iso_now()
+            chapter_data["stages"]["segment"]["status"] = "completed"
+            chapter_data["stages"]["segment"]["completed_at"] = utc_iso_now()
+            chapter_data["stages"]["segment"]["artifacts"] = [str(Path(p).relative_to(project_dir)) for p in segmented_panels]
+            atomic_write_json(chapter_json_path, chapter_data)
+
             logger.info(f"Chapter {chapter_number} crawl and segmentation completed successfully.")
             return chapter_id, summary_context
 

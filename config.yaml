@@ -12,7 +12,7 @@ script_limits:
   min_length: 50              # Độ dài văn bản tối thiểu mỗi khung hình
   max_length: 250             # Độ dài văn bản tối đa mỗi khung hình
 
-# Cấu hình giọng đọc thuyết minh Cloud API cho TTS
+# Cấu hình giọng đọc thuyết minh VieNeu-TTS v3 Turbo
 tts:
   speed: 1.0                  # Tốc độ đọc (1.0 là mặc định, > 1.0 đọc nhanh hơn, < 1.0 đọc chậm hơn)
-  voice: "edge-tts-female"    # Giọng đọc Cloud API: edge-tts-female (Hoài My), edge-tts-male (Nam Minh), gemini-2.5-flash, openai-tts-nova
+  voice: "Trúc Ly"            # Giọng đọc VieNeu preset: Trúc Ly (Nữ Bắc mặc định), Hải Đăng (Nam), Thiền Tâm Đức, v.v.

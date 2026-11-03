@@ -9,35 +9,44 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.core.logger import logger
-from src.core.supabase_client import supabase
-from src.core.utils import get_project_data_dir
+from src.core.utils import get_project_data_dir, run_ffmpeg
 
 def main():
     parser = argparse.ArgumentParser(description="Compile and Concat Chapter Videos into a Final Recap Video")
-    parser.add_argument("--project", type=str, default="Mỗi lính đánh thuê trở về đều có một kế hoạch", help="Project title in database")
+    parser.add_argument("--project", type=str, default="Mỗi lính đánh thuê trở về đều có một kế hoạch", help="Project title")
     args = parser.parse_args()
 
     try:
-        # 1. Fetch project ID to verify it exists
-        proj_res = supabase.table("projects").select("id").eq("title", args.project).execute()
-        if not proj_res.data:
-            logger.error(f"Project '{args.project}' not found in database.")
-            sys.exit(1)
-        
+        # 1. Verify project directory exists locally
         project_dir = get_project_data_dir(args.project)
+        if not project_dir.exists():
+            logger.error(f"Project directory '{project_dir}' not found for project '{args.project}'.")
+            sys.exit(1)
+
+        project_json = project_dir / "project.json"
+        if project_json.exists():
+            from src.core.storage import read_json
+            try:
+                proj_data = read_json(project_json)
+                logger.info(f"Compiling chapters for project: {proj_data.get('title', args.project)}")
+            except Exception:
+                pass
+
         video_dir = project_dir / "video" / "chapters"
         
         if not video_dir.exists():
             logger.error(f"Video folder does not exist: {video_dir}")
             sys.exit(1)
             
-        # 2. Scan video directory for files like chapter_1_1.mp4, chapter_10_2.mp4
+        # 2. Scan video directory for files like chapter_1_1.mp4, chapter_1_final_v1.mp4
         files = os.listdir(video_dir)
         chapter_videos = {} # chapter_num (int) -> (version_num (int), file_path)
         
         for f in files:
-            # Match chapter_[CHAPTER]_[VERSION].mp4 but NOT raw temp clips or other patterns
-            match = re.match(r"^chapter_(\d+)_(\d+)\.mp4$", f)
+            # Match chapter_[CHAPTER]...[VERSION].mp4 but NOT raw temp clips
+            if "_raw_temp" in f or not f.endswith(".mp4"):
+                continue
+            match = re.match(r"^chapter_(\d+)(?:_.*?)?_(?:v)?(\d+)\.mp4$", f)
             if match:
                 chap_num = int(match.group(1))
                 version = int(match.group(2))
@@ -46,6 +55,15 @@ def main():
                 # If we haven't seen this chapter, or if this version is higher, update it
                 if chap_num not in chapter_videos or version > chapter_videos[chap_num][0]:
                     chapter_videos[chap_num] = (version, file_path)
+                continue
+            
+            simple_match = re.match(r"^chapter_(\d+)(?:_(.+))?\.mp4$", f)
+            if simple_match:
+                chap_num = int(simple_match.group(1))
+                file_path = video_dir / f
+                if chap_num not in chapter_videos:
+                    chapter_videos[chap_num] = (1, file_path)
+
                     
         if not chapter_videos:
             logger.error(f"No chapter videos found in {video_dir}")
@@ -82,17 +100,14 @@ def main():
         ]
         
         logger.info(f"Combining chapters into final recap video: {final_video_path}...")
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Clean up temp file
-        if concat_list_path.exists():
-            concat_list_path.unlink()
-            
-        if result.returncode != 0:
-            logger.error("Failed to combine videos using FFmpeg.")
-            if result.stderr:
-                logger.error(result.stderr.decode("utf-8", errors="ignore"))
-            sys.exit(1)
+        try:
+            run_ffmpeg(cmd, description="FFmpeg video concatenation")
+            if not final_video_path.exists() or final_video_path.stat().st_size == 0:
+                raise RuntimeError(f"Concatenated final video is empty or missing: {final_video_path}")
+        finally:
+            # Clean up temp file
+            if concat_list_path.exists():
+                concat_list_path.unlink()
             
         # 6. Extract final audio to audio/final.wav
         final_audio_path = project_dir / "audio" / "final.wav"
@@ -105,7 +120,10 @@ def main():
             "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
             str(final_audio_path)
         ]
-        subprocess.run(cmd_audio, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        run_ffmpeg(cmd_audio, description="FFmpeg final audio extraction")
+        if not final_audio_path.exists() or final_audio_path.stat().st_size == 0:
+            raise RuntimeError(f"Extracted final audio is empty or missing: {final_audio_path}")
+
         
         logger.info("=========================================================")
         logger.info("SUCCESS: Final recap video & audio combined successfully!")

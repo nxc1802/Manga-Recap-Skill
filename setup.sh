@@ -64,10 +64,10 @@ if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         echo -e "Đang tạo tệp cấu hình ${GREEN}.env${NC} từ ${GREEN}.env.example${NC}..."
         cp .env.example .env
-        echo -e "${YELLOW}Vui lòng mở tệp .env và cập nhật các khóa API (OpenRouter/Supabase) của bạn!${NC}"
+        echo -e "${YELLOW}Vui lòng mở tệp .env và cấu hình các khóa API nếu cần!${NC}"
     else
         echo -e "Không tìm thấy .env.example. Đang tạo tệp .env trống..."
-        echo -e "OPENROUTER_API_KEY=\nSUPABASE_URL=\nSUPABASE_ANON_KEY=\nSUPABASE_SERVICE_ROLE_KEY=" > .env
+        echo -e "OPENROUTER_API_KEY=" > .env
     fi
 else
     echo -e "Tệp cấu hình ${GREEN}.env${NC} đã tồn tại."

@@ -17,5 +17,16 @@ def test_slugify_project_title():
     assert slugify_project_title("  Simple   Title  ") == "simple_title"
 
 def test_get_project_data_dir():
-    expected_path = Path("data") / "ong_vo_gia_va_chau_chi_ton"
-    assert get_project_data_dir("Ông Vô Giá Và Cháu Chí Tôn") == expected_path
+    from src.core.config import config
+    # 1. Default canonical path when directory does not exist
+    expected_canonical = config.storage_dir / "ong_vo_gia_va_chau_chi_ton"
+    assert get_project_data_dir("Ông Vô Giá Và Cháu Chí Tôn") == expected_canonical
+
+    # 2. Legacy fallback when data/{slug} exists and data/projects/{slug} does not
+    legacy_dir = config.data_dir / "legacy_test_project"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        assert get_project_data_dir("legacy_test_project") == legacy_dir
+    finally:
+        if legacy_dir.exists():
+            legacy_dir.rmdir()

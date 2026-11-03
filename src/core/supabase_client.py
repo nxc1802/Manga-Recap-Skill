@@ -1,27 +1,25 @@
-from supabase import create_client, Client
-from src.core.config import config
-from src.core.logger import logger
+"""
+Deprecated Supabase Client Stub for Manga Recap V3.
+All data persistence has been migrated to local JSON storage (src.core.storage).
+This stub prevents breaking legacy imports during transition and provides clear migration error messages.
+"""
+import warnings
 
-def get_supabase_client(use_admin: bool = True) -> Client:
-    """
-    Initializes and returns a Supabase client.
-    By default, uses the service_role key (admin) to bypass RLS policies
-    for backend automated processing.
-    """
-    url = config.supabase_url
-    # Use service_role key for admin actions, fallback to anon key
-    key = config.supabase_service_role_key if use_admin else config.supabase_anon_key
-    
-    if not url or not key:
-        logger.error("Supabase URL or Key is missing from configuration!")
-        raise ValueError("Supabase URL or Key is missing")
-        
-    try:
-        client = create_client(url, key)
-        return client
-    except Exception as e:
-        logger.exception("Failed to connect to Supabase: %s", e)
-        raise
+warnings.warn(
+    "src.core.supabase_client is deprecated and will be removed in PR-09. "
+    "Use src.core.storage functions (read_json, atomic_write_json) instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-# Global client instances
-supabase = get_supabase_client(use_admin=True)
+class DeprecatedSupabaseClient:
+    def __getattr__(self, name: str):
+        raise RuntimeError(
+            f"Supabase has been eradicated from Manga Recap V3. Access to '{name}' is unsupported. "
+            "Please migrate to local JSON storage via src.core.storage."
+        )
+
+supabase = DeprecatedSupabaseClient()
+
+def get_supabase_client(use_admin: bool = True):
+    return supabase

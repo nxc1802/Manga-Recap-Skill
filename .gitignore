@@ -26,6 +26,8 @@ models/
 
 # Runtime data (inputs, outputs, database cache, logs)
 data/
+tts_references/
+.agents/teamwork/
 *.log
 *.mp4
 *.wav

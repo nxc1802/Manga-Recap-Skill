@@ -1,17 +1,23 @@
 import os
 import json
+from pathlib import Path
 from src.core.logger import logger
+from src.core.storage import read_json, atomic_write_json
+from src.core.utils import get_project_title_by_id, get_project_data_dir
 
 class CharacterDictionaryService:
     def __init__(self):
         self.dict_cache = {}
         self.current_project_id = None
 
-    def _get_file_path(self, project_id: str) -> str:
-        from src.core.utils import get_project_title_by_id, get_project_data_dir
+    def _get_file_path(self, project_id: str) -> Path:
         project_title = get_project_title_by_id(project_id)
         project_dir = get_project_data_dir(project_title)
-        return str(project_dir / "memory" / "character_dictionary.json")
+        v3_path = project_dir / "characters.json"
+        legacy_path = project_dir / "memory" / "character_dictionary.json"
+        if not v3_path.exists() and legacy_path.exists():
+            return legacy_path
+        return v3_path
 
     def load_dictionary(self, project_id: str) -> dict:
         """
@@ -19,10 +25,14 @@ class CharacterDictionaryService:
         """
         self.current_project_id = project_id
         file_path = self._get_file_path(project_id)
-        if os.path.exists(file_path):
+        if file_path.exists():
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    self.dict_cache = json.load(f)
+                data = read_json(file_path)
+                # Support both raw dict or CharacterDictionary schema format
+                if isinstance(data, dict) and "characters" in data and isinstance(data["characters"], dict):
+                    self.dict_cache = data["characters"]
+                else:
+                    self.dict_cache = data
                 logger.info(f"Loaded character dictionary from {file_path} (contains {len(self.dict_cache)} characters).")
             except Exception as e:
                 logger.error(f"Failed to load character dictionary from {file_path}: {e}")
@@ -42,7 +52,7 @@ class CharacterDictionaryService:
 
     def update_dictionary(self, project_id: str, updates: dict):
         """
-        Merges updates into the RAM cache and flushes to disk immediately (Hybrid Approach).
+        Merges updates into the RAM cache and flushes to disk immediately using atomic_write_json.
         """
         if not updates:
             return
@@ -77,18 +87,6 @@ class CharacterDictionaryService:
                 self.dict_cache[target_name]["core_features"] = new_core
                 self.dict_cache[target_name]["current_outfit"] = new_outfit
                 
-                # Rename in Supabase character_embeddings table
-                try:
-                    from src.core.supabase_client import supabase
-                    supabase.table("character_embeddings")\
-                        .update({"character_name": target_name})\
-                        .eq("project_id", project_id)\
-                        .eq("character_name", char_name)\
-                        .execute()
-                    logger.info(f"Renamed character '{char_name}' to '{target_name}' in Supabase character_embeddings.")
-                except Exception as db_err:
-                    logger.error(f"Failed to rename character in Supabase character_embeddings: {db_err}")
-                    
                 # Delete the old temporary key if it exists
                 if char_name in self.dict_cache:
                     del self.dict_cache[char_name]
@@ -106,13 +104,11 @@ class CharacterDictionaryService:
                     
                 logger.info(f"Updated character '{char_name}' in cache: {self.dict_cache[char_name]}")
 
-        # Flush to disk immediately
+        # Flush to disk immediately with atomic write
         file_path = self._get_file_path(project_id)
-        os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else ".", exist_ok=True)
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(self.dict_cache, f, ensure_ascii=False, indent=2)
-            logger.info(f"Flushed character dictionary to {file_path}.")
+            atomic_write_json(file_path, self.dict_cache)
+            logger.info(f"Flushed character dictionary atomically to {file_path}.")
         except Exception as e:
             logger.error(f"Failed to save character dictionary to {file_path}: {e}")
 

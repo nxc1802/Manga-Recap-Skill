@@ -1,19 +1,18 @@
 # ==============================================================================
-# Manga Recap Pipeline Orchestrator Requirements (100% Cloud API Architecture)
+# Manga Recap Pipeline Orchestrator Requirements (Local JSON Storage Engine)
 # ==============================================================================
 
-# Core Application & API Clients
+# Core Application & Storage
 httpx
 pydantic
-supabase
 pillow
 pyyaml
 python-dotenv
 numpy
 beautifulsoup4
 
-# Cloud TTS (Text-to-Speech via Microsoft Edge-TTS API)
-edge-tts
+# Local TTS (Text-to-Speech via local VieNeu-TTS v3 Turbo engine in src/tts/)
+# Local offline ONNX inference / pure-Python mock backend
 
 # YouTube Data API v3 Integration
 google-api-python-client

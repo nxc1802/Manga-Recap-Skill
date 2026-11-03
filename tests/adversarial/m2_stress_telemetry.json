@@ -1,0 +1,145 @@
+[
+  {
+    "scenario": "Version flag (no json)",
+    "expected_exit_code": 0,
+    "actual_exit_codes": [
+      0
+    ],
+    "exit_code_pass": true,
+    "json_tested": false,
+    "json_parse_rate": "0/10",
+    "parse_errors": [],
+    "mean_latency_ms": 78.1,
+    "p95_latency_ms": 81.62
+  },
+  {
+    "scenario": "Status chapter (valid)",
+    "expected_exit_code": 0,
+    "actual_exit_codes": [
+      0
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 93.66,
+    "p95_latency_ms": 108.84
+  },
+  {
+    "scenario": "Inspect chapter (valid)",
+    "expected_exit_code": 0,
+    "actual_exit_codes": [
+      0
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 89.57,
+    "p95_latency_ms": 98.3
+  },
+  {
+    "scenario": "TTS benchmark (valid)",
+    "expected_exit_code": 0,
+    "actual_exit_codes": [
+      0
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 82.7,
+    "p95_latency_ms": 110.87
+  },
+  {
+    "scenario": "Inspect missing project (IO_ERROR)",
+    "expected_exit_code": 3,
+    "actual_exit_codes": [
+      3
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 98.21,
+    "p95_latency_ms": 136.29
+  },
+  {
+    "scenario": "Status missing project (IO_ERROR)",
+    "expected_exit_code": 3,
+    "actual_exit_codes": [
+      3
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 86.38,
+    "p95_latency_ms": 101.57
+  },
+  {
+    "scenario": "Validate missing project (IO_ERROR)",
+    "expected_exit_code": 3,
+    "actual_exit_codes": [
+      3
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 89.39,
+    "p95_latency_ms": 123.87
+  },
+  {
+    "scenario": "Missing required project arg (VALIDATION_ERROR)",
+    "expected_exit_code": 2,
+    "actual_exit_codes": [
+      2
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 77.13,
+    "p95_latency_ms": 83.94
+  },
+  {
+    "scenario": "Crawl missing url and import-dir (VALIDATION_ERROR)",
+    "expected_exit_code": 2,
+    "actual_exit_codes": [
+      2
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 76.07,
+    "p95_latency_ms": 77.18
+  },
+  {
+    "scenario": "Fuzz invalid flag (DUPLICATE JSON BUG)",
+    "expected_exit_code": 2,
+    "actual_exit_codes": [
+      2
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 76.54,
+    "p95_latency_ms": 95.19
+  },
+  {
+    "scenario": "Missing subcommand (DUPLICATE JSON BUG)",
+    "expected_exit_code": 2,
+    "actual_exit_codes": [
+      2
+    ],
+    "exit_code_pass": true,
+    "json_tested": true,
+    "json_parse_rate": "10/10",
+    "parse_errors": [],
+    "mean_latency_ms": 75.04,
+    "p95_latency_ms": 76.15
+  }
+]

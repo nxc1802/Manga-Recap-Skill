@@ -28,10 +28,14 @@ class CrawlerConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     speed: float = 1.0
-    voice: str = "edge-tts-female"
+    voice: str = "Trúc Ly"
 
 class AppConfig(BaseModel):
-    # From environment
+    # Local Storage Root
+    storage_dir: Path = Field(default=Path("data/projects"))
+    data_dir: Path = Field(default=Path("data"))
+
+    # Deprecated Cloud API keys (optional, not required)
     openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
     supabase_url: str = Field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
     supabase_anon_key: str = Field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
@@ -64,10 +68,8 @@ def load_config(config_path: str = "config.yaml") -> AppConfig:
         initial_scripts=yaml_data.get("initial_scripts", {})
     )
     
-    # Validation checks
-    if not config.supabase_url or not config.supabase_anon_key:
-        raise ValueError("SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env")
-        
+    # Validation checks: Local storage directory initialization
+    config.storage_dir.mkdir(parents=True, exist_ok=True)
     return config
 
 # Global config instance
