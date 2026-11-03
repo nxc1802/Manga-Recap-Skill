@@ -13,6 +13,7 @@ beautifulsoup4
 
 # Local TTS (Text-to-Speech via local VieNeu-TTS v3 Turbo engine in src/tts/)
 # Local offline ONNX inference / pure-Python mock backend
+vieneu>=3.8.3
 
 # YouTube Data API v3 Integration
 google-api-python-client

@@ -298,9 +298,16 @@ class FileLock:
                 # Open lock file descriptor
                 self._fd = os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR, 0o666)
 
-                # Attempt non-blocking exclusive lock
-                import fcntl
-                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # Attempt non-blocking exclusive lock (POSIX fcntl or Windows msvcrt)
+                try:
+                    import fcntl
+                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except ImportError:
+                    try:
+                        import msvcrt
+                        msvcrt.locking(self._fd, msvcrt.LK_NBLCK, 1)
+                    except ImportError:
+                        pass  # Basic file existence lock fallback
 
                 # Write PID into lock file for debugging
                 os.write(self._fd, f"{os.getpid()}\n".encode("utf-8"))
@@ -325,8 +332,15 @@ class FileLock:
             return
 
         try:
-            import fcntl
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            try:
+                import fcntl
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            except ImportError:
+                try:
+                    import msvcrt
+                    msvcrt.locking(self._fd, msvcrt.LK_UNLCK, 1)
+                except ImportError:
+                    pass
             os.close(self._fd)
         finally:
             self._fd = None

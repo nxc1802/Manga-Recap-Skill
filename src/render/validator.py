@@ -16,6 +16,11 @@ from src.core.logger import logger
 from src.core.utils import DependencyNotFoundError
 
 
+class VideoValidationError(ValueError):
+    """Raised when rendered video fails stream/container integrity checks."""
+    pass
+
+
 class FFprobeValidator:
     """
     Validates rendered MP4 files via FFprobe:
@@ -195,7 +200,7 @@ class FFprobeValidator:
 
         should_raise = raise_on_error or (strict is True)
         if should_raise and not valid:
-            raise ValueError(f"FFprobe validation failed for {path.name}: " + "; ".join(errors))
+            raise VideoValidationError(f"FFprobe validation failed for {path.name}: " + "; ".join(errors))
 
         return report
 

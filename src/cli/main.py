@@ -110,6 +110,8 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("--voice", default=None, help="Preset voice override")
     p_tts.add_argument("--speed", type=float, default=None, help="Speech speed override")
     p_tts.add_argument("--force", action="store_true", help="Ignore utterance cache and re-synthesize")
+    p_tts.add_argument("--engine", choices=["neural", "mock", "auto"], default="neural", help="TTS synthesis engine backend (default: neural)")
+    p_tts.add_argument("--mock", action="store_true", help="Shortcut for --engine mock (testing only)")
 
     # 6. tts_benchmark
     p_bm = subparsers.add_parser("tts_benchmark", help="Run TTS voice and emotion screening benchmark", parents=[common_parent])
@@ -131,6 +133,8 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
+    p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (for testing/CI)")
+    p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
 
     # 8. compile
     p_com = subparsers.add_parser("compile", help="Concatenate chapter videos into final recap", parents=[common_parent])

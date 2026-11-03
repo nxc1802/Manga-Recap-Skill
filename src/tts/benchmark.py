@@ -13,7 +13,10 @@ import math
 import os
 from pathlib import Path
 import platform
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import struct
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -221,11 +224,14 @@ class TTSBenchmarkRunner:
         start_time = time.perf_counter()
         benchmark_id = f"bench_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
+        tts_engine = get_tts_engine(force_mode=None if not self.use_mock else None)
+        active_backend = "mock" if self.use_mock else tts_engine.mode
+
         hardware_info = {
             "platform": platform.platform(),
             "machine": platform.machine(),
             "python_version": platform.python_version(),
-            "backend": "mock" if self.use_mock else ("mps" if platform.system() == "Darwin" and platform.machine() == "arm64" else "cpu"),
+            "backend": active_backend,
             "sample_rate_target": 48000,
         }
 
@@ -287,8 +293,11 @@ class TTSBenchmarkRunner:
                 samples_data.append(sample_item)
 
         total_wall = time.perf_counter() - start_time
-        max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        rss_mb = round(max_rss / (1024 * 1024) if platform.system() == "Darwin" else max_rss / 1024, 2)
+        if resource is not None:
+            max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            rss_mb = round(max_rss / (1024 * 1024) if platform.system() == "Darwin" else max_rss / 1024, 2)
+        else:
+            rss_mb = 0.0
         hardware_info["peak_ram_mb"] = rss_mb
 
         valid_rtfs = [s["rtf"] for s in samples_data if s["rtf"] > 0]
@@ -402,6 +411,8 @@ class TTSBenchmarkRunner:
                 voice_id=voice_name,
                 output_path=sample_path,
                 speed=1.0,
+                emotion=emotion,
+                force=True,
             )
             peaks = compute_waveform_peaks(sample_path)
             audio_duration = get_wav_duration_seconds(sample_path)

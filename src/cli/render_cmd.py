@@ -44,6 +44,8 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     burn_subs = getattr(args, "burn_subtitles", True)
     allow_animation = getattr(args, "animation", True)
     force = getattr(args, "force", False)
+    skip_review = getattr(args, "skip_review", False)
+    allow_placeholders = getattr(args, "allow_placeholders", False)
 
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
@@ -76,6 +78,20 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
             f"script.json not found in chapter directory: {chap_dir}"
         )
 
+    # Human Review Gate 1 verification: before final 1080p render, ensure voice_selection.json exists and is approved
+    if quality == "final" and not skip_review:
+        voice_sel_path = project_dir / "voice_selection.json"
+        if not voice_sel_path.exists():
+            chap_voice_sel = chap_dir / "voice_selection.json"
+            if chap_voice_sel.exists():
+                voice_sel_path = chap_voice_sel
+
+        if not voice_sel_path.exists():
+            raise CliValidationError(
+                "Human Review Gate 1 not satisfied: 'voice_selection.json' not found. "
+                "Voice strategy must be approved before final render, or specify --skip-review."
+            )
+
     # Execute full Video Engine V2 render pipeline
     engine = VideoEngine()
     render_result = engine.render_chapter(
@@ -88,6 +104,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         force=force,
         suffix=suffix,
         allow_animation=allow_animation,
+        allow_placeholders=allow_placeholders,
     )
 
     # Clean intermediate files if keep_temp is False

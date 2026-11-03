@@ -4,7 +4,7 @@
 [![Architecture](https://img.shields.io/badge/architecture-Agent--Native%20Decoupled-green.svg)](docs/plan.md)
 [![Audio](https://img.shields.io/badge/TTS-VieNeu--TTS%20v3%20Turbo%20Local-orange.svg)](docs/lab/index.html)
 [![Storage](https://img.shields.io/badge/storage-Local%20Atomic%20JSON-purple.svg)](src/core/storage.py)
-[![Tests](https://img.shields.io/badge/tests-296%20passed-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-302%20passed-brightgreen.svg)](tests/)
 
 An autonomous, agent-native manga and webtoon recap video creation pipeline. Engineered around a **strict separation of intelligence and execution**: AI coding agents handle vision, visual OCR, narrative recap scripting, and continuity; deterministic offline Python CLI tools handle media ingestion, long-strip streaming segmentation, local VieNeu-TTS v3 Turbo synthesis, and cinematic FFmpeg video rendering.
 
@@ -209,7 +209,7 @@ Run the test suite:
 ```bash
 pytest
 ```
-*Current test suite status: **296/296 passed** in ~63 seconds (100% pass rate).*
+*Current test suite status: **302/302 passed** in ~82 seconds (100% pass rate).*
 
 ---
 

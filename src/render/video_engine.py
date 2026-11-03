@@ -50,7 +50,7 @@ from src.core.utils import (
 from src.render.audio_mixer import AudioMixer
 from src.render.camera import CameraMotionGenerator
 from src.render.subtitle import SubtitleGenerator, sanitize_subtitle_text
-from src.render.validator import StreamValidator
+from src.render.validator import StreamValidator, VideoValidationError
 from src.tts.engine import get_wav_duration_seconds
 
 
@@ -645,6 +645,7 @@ class VideoEngine:
         suffix: str = "final",
         output_path: Optional[Union[str, Path]] = None,
         allow_animation: bool = True,
+        allow_placeholders: bool = False,
     ) -> Dict[str, Any]:
         """
         Orchestrates full chapter video rendering using Video Engine V2.
@@ -691,9 +692,13 @@ class VideoEngine:
             if quality_clean == "preview":
                 preset = "ultrafast"
                 crf = "28"
+                self.width = 1280
+                self.height = 720
             else:
                 preset = "medium"
                 crf = "20"
+                self.width = 1920
+                self.height = 1080
 
             video_dir = chap_dir / "video"
             clips_dir = video_dir / "clips"
@@ -740,6 +745,12 @@ class VideoEngine:
 
                 # Create synthetic panel placeholder if none found
                 if not panel_p:
+                    if not allow_placeholders:
+                        raise StorageFileNotFoundError(
+                            f"Missing panel image for segment {seg.seq_id} in chapter {chapter_num}. "
+                            f"Searched candidates: {candidate_panel_names}. "
+                            "Placeholders are disabled for video render integrity."
+                        )
                     panels_default_dir = chap_dir / "panels"
                     panels_default_dir.mkdir(parents=True, exist_ok=True)
                     panel_p = panels_default_dir / f"panel_{seg.seq_id}.jpg"
@@ -776,6 +787,12 @@ class VideoEngine:
 
                 # If WAV missing, synthesize 48kHz silence WAV for segment duration
                 if not wav_p:
+                    if not allow_placeholders:
+                        raise StorageFileNotFoundError(
+                            f"Missing audio clip for segment {seg.seq_id} in chapter {chapter_num}. "
+                            f"Searched: {[str(c) for c in audio_search_cands]}. "
+                            "Silence placeholders are disabled for video render integrity."
+                        )
                     clip_audio_dir = chap_dir / "audio" / "clips"
                     clip_audio_dir.mkdir(parents=True, exist_ok=True)
                     wav_p = clip_audio_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
@@ -904,7 +921,7 @@ class VideoEngine:
                 except Exception:
                     pass
 
-            # 8. Stream Validation via ffprobe
+            # 8. Stream Validation via ffprobe (must be valid to proceed)
             validation_res = self.validator.validate_video(
                 video_path=final_video_path,
                 expected_duration=total_speech_dur,
@@ -912,7 +929,7 @@ class VideoEngine:
                 expected_width=self.width,
                 expected_height=self.height,
                 expected_fps=float(self.fps),
-                raise_on_error=False,
+                raise_on_error=True,
             )
 
             # 9. Clean intermediate clips if keep_temp is False

@@ -154,8 +154,11 @@ class NeuralTTSBackend(BaseTTSBackend):
         self._init_sdk()
 
     def _init_sdk(self):
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        # Only enable offline mode if HF cache directory already exists and has contents
+        hf_cache = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface" / "hub"))
+        if hf_cache.exists() and any(hf_cache.iterdir()):
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
         try:
             from vieneu import Vieneu
@@ -187,11 +190,34 @@ class NeuralTTSBackend(BaseTTSBackend):
         audio_data = self._sdk.infer(
             text=input_text,
             voice=resolved_voice,
-            speed=speed,
             **kwargs,
         )
         self._sdk.save(audio_data, str(output_path))
+
+        # Speed adjustment via FFmpeg atempo if speed differs from 1.0
+        target_speed = max(0.5, min(2.0, float(speed)))
+        if abs(target_speed - 1.0) > 0.01:
+            self._apply_speed(output_path, target_speed)
+
         return get_wav_duration_seconds(output_path)
+
+    def _apply_speed(self, wav_path: Path, speed: float) -> None:
+        """Applies pitch-preserving time stretching via ffmpeg atempo filter."""
+        import subprocess
+        tmp_out = wav_path.with_name(f".{wav_path.name}.speed.tmp.wav")
+        cmd = [
+            "ffmpeg", "-y", "-i", str(wav_path),
+            "-filter:a", f"atempo={speed}",
+            "-ar", "48000",
+            str(tmp_out)
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            tmp_out.replace(wav_path)
+        except Exception as e:
+            logger.warning(f"Failed to apply atempo speed filter via ffmpeg: {e}")
+            if tmp_out.exists():
+                tmp_out.unlink()
 
     def list_voices(self) -> List[Tuple[str, str]]:
         if self._sdk and hasattr(self._sdk, "list_preset_voices"):
@@ -225,21 +251,22 @@ class VieNeuEngine:
             logger.info("VieNeuEngine: Using MockTTSBackend (configured explicitly).")
             return MockTTSBackend()
 
+        if self.force_mode == EngineMode.NEURAL or os.getenv("VIENEU_FORCE_NEURAL") == "1":
+            # Strict mode: must succeed or raise, zero silent fallback!
+            try:
+                return NeuralTTSBackend()
+            except Exception as e:
+                raise RuntimeError(
+                    f"VieNeuEngine: Neural TTS backend requested but failed to initialize: {e}. "
+                    "Ensure 'vieneu' is installed and weights are downloaded."
+                ) from e
+
+        # Auto mode: attempt neural first
         try:
             import vieneu
-            hf_cache = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface" / "hub"))
-            has_weights = hf_cache.exists() and any(hf_cache.iterdir())
-
-            if not has_weights and os.getenv("VIENEU_FORCE_NEURAL") != "1":
-                logger.info(
-                    f"VieNeuEngine: HuggingFace cache empty at {hf_cache}. "
-                    "Auto-fallback to MockTTSBackend for deterministic offline execution."
-                )
-                return MockTTSBackend()
-
             return NeuralTTSBackend()
         except ImportError:
-            logger.info("VieNeuEngine: 'vieneu' package not available. Falling back to MockTTSBackend.")
+            logger.warning("VieNeuEngine: 'vieneu' package not available. Falling back to MockTTSBackend.")
             return MockTTSBackend()
         except Exception as e:
             logger.warning(f"VieNeuEngine: Neural initialization failed ({e}). Falling back to MockTTSBackend.")
@@ -257,7 +284,7 @@ class VieNeuEngine:
         force: bool = False,
     ) -> Tuple[float, str, bool]:
         """
-        Synthesizes an utterance with SHA-256 caching.
+        Synthesizes an utterance with SHA-256 caching and sidecar cache validation.
         Returns: (duration_seconds, sha256_checksum, was_cached)
         """
         resolved_voice = resolve_voice_id(voice)
@@ -271,20 +298,26 @@ class VieNeuEngine:
         )
 
         output_path = Path(output_path).resolve()
+        key_file = output_path.with_suffix(".cache_key")
 
-        # Check existing destination file
+        # Check existing destination file with strict cache key matching
         if not force and use_cache and output_path.exists():
-            try:
-                dur = get_wav_duration_seconds(output_path)
-                return dur, cache_key, True
-            except Exception:
-                pass  # Corrupt file; re-synthesize
+            if key_file.exists() and key_file.read_text(encoding="utf-8").strip() == cache_key:
+                try:
+                    dur = get_wav_duration_seconds(output_path)
+                    return dur, cache_key, True
+                except Exception:
+                    pass  # Corrupt file; re-synthesize
 
         # Check global cache pool
         cached_file = get_cached_audio_path(cache_key)
         if not force and use_cache and cached_file and cached_file.exists():
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(cached_file, output_path)
+            try:
+                key_file.write_text(cache_key, encoding="utf-8")
+            except Exception:
+                pass
             dur = get_wav_duration_seconds(output_path)
             return dur, cache_key, True
 
@@ -297,6 +330,10 @@ class VieNeuEngine:
             emotion=emotion,
             emotion_cue=emotion_cue,
         )
+        try:
+            key_file.write_text(cache_key, encoding="utf-8")
+        except Exception:
+            pass
 
         # Store in global cache pool
         if use_cache:

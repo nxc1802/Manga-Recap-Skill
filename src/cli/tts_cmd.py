@@ -73,7 +73,19 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     audio_clips_dir.mkdir(parents=True, exist_ok=True)
 
     default_voice = voice_override or script_obj.default_voice or "Trúc Ly"
-    engine = get_tts_engine()
+    
+    # Resolve requested engine mode
+    requested_engine = getattr(args, "engine", "neural")
+    if getattr(args, "mock", False):
+        requested_engine = "mock"
+
+    from src.tts.engine import EngineMode
+    if requested_engine == "neural":
+        engine = get_tts_engine(force_mode=EngineMode.NEURAL)
+    elif requested_engine == "mock":
+        engine = get_tts_engine(force_mode=EngineMode.MOCK)
+    else:
+        engine = get_tts_engine()
 
     synthesized_count = 0
     cached_count = 0

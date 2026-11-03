@@ -1,6 +1,7 @@
 """
 src/tts/voice_profiles.py
 Authoritative catalog and metadata for VieNeu-TTS v3 Turbo preset voices.
+Directly aligned with official VieNeu v3 Turbo preset voices.
 """
 
 from __future__ import annotations
@@ -37,34 +38,34 @@ class VoiceProfile:
 
 # Authoritative 25-Voice Catalog
 VOICE_CATALOG_25: List[VoiceProfile] = [
-    # Top 10 Recommended Voices
+    # Top 10 Recommended Voices (Official ⭐ Editors' Picks)
+    VoiceProfile("Adam bựa", "Adam bựa", AccentRegion.NORTH, VoiceGender.MALE, True, "Comic Relief / Sarcastic Narrator", "Dynamic pitch, colloquial, punchy, humorous"),
     VoiceProfile("Trúc Ly", "Trúc Ly", AccentRegion.NORTH, VoiceGender.FEMALE, True, "Primary Narrator", "Warm, steady pacing, natural flow, clear enunciation"),
-    VoiceProfile("Hải Đăng", "Hải Đăng", AccentRegion.SOUTH, VoiceGender.MALE, True, "Protagonist / Male Lead", "Energetic, resolute, youthful, bright projection"),
+    VoiceProfile("Thiện Minh", "Thiện Minh", AccentRegion.NORTH, VoiceGender.MALE, True, "Mentor / Heroic Narrator", "Calm, measured, composed, philosophical and authoritative"),
+    VoiceProfile("Mai Anh", "Mai Anh", AccentRegion.NORTH, VoiceGender.FEMALE, True, "Heroine / News Anchor", "Gentle, melodious, innocent, bright and sweet"),
+    VoiceProfile("Hải Đăng", "Hải Đăng", AccentRegion.NORTH, VoiceGender.MALE, True, "Protagonist / Male Lead", "Energetic, resolute, youthful, bright projection"),
+    VoiceProfile("Thùy Dung", "Thùy Dung", AccentRegion.SOUTH, VoiceGender.FEMALE, True, "Expressive Narrator / News", "Rich vocal range, poignant emotion, high clarity"),
     VoiceProfile("Thiền Tâm Đức", "Thiền Tâm Đức", AccentRegion.NORTH, VoiceGender.MALE, True, "Veteran / Elder / Sect Leader", "Deep, grave, archaic dignity, resonant authority"),
-    VoiceProfile("Thiện Minh", "Thiện Minh", AccentRegion.NORTH, VoiceGender.MALE, True, "Mentor / Strategist / Scholar", "Calm, measured, composed, philosophical"),
-    VoiceProfile("Quang Sơn", "Quang Sơn", AccentRegion.NORTH, VoiceGender.MALE, True, "Villain / Rival / Antagonist", "Sharp, cold, menacing, calculated, biting edge"),
-    VoiceProfile("Mai Anh", "Mai Anh", AccentRegion.NORTH, VoiceGender.FEMALE, True, "Heroine / Female Lead", "Gentle, melodious, innocent, bright and sweet"),
-    VoiceProfile("Ngọc Trân", "Ngọc Trân", AccentRegion.SOUTH, VoiceGender.FEMALE, True, "Noble / Empress / Senior Cultivator", "Regal, proud, poised, commanding elegance"),
-    VoiceProfile("Adam bựa", "Adam bựa", AccentRegion.SOUTH, VoiceGender.MALE, True, "Comic Relief / Sarcastic Narrator", "Dynamic pitch, colloquial, punchy, humorous"),
-    VoiceProfile("Thùy Dung", "Thùy Dung", AccentRegion.NORTH, VoiceGender.FEMALE, True, "Expressive Narrator / Dramatic Lead", "Rich vocal range, poignant emotion, high clarity"),
     VoiceProfile("Ngọc Huyền", "Ngọc Huyền", AccentRegion.NORTH, VoiceGender.FEMALE, True, "Cheerful Companion / Lively Female", "Crisp, youthful, upbeat, clear enunciation"),
+    VoiceProfile("Quang Sơn", "Quang Sơn", AccentRegion.CENTRAL, VoiceGender.MALE, True, "Villain / Central Storyteller", "Sharp, cold, menacing, calculated, biting edge"),
+    VoiceProfile("Ngọc Trân", "Ngọc Trân", AccentRegion.CENTRAL, VoiceGender.FEMALE, True, "Noble / Central Female Lead", "Regal, proud, poised, commanding elegance"),
 
-    # Remaining 15 Presets
-    VoiceProfile("Thế Khang", "Thế Khang", AccentRegion.SOUTH, VoiceGender.MALE, False, "Supporting Male / Loyal Companion", "Direct, spirited, frank, grounded"),
-    VoiceProfile("Bảo Châu", "Bảo Châu", AccentRegion.SOUTH, VoiceGender.FEMALE, False, "Playful Girl / Lively Companion", "Vivacious, sweet, fast rhythmic delivery"),
-    VoiceProfile("Minh Hoàng", "Minh Hoàng", AccentRegion.NORTH, VoiceGender.MALE, False, "Heroic General / Decisive Warrior", "Bold, authoritative projection, martial tone"),
-    VoiceProfile("Vân Anh", "Vân Anh", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Classical Female / Poetic Narrator", "Soft, fluid, melancholic undertone, smooth"),
-    VoiceProfile("Hoàng Nam", "Hoàng Nam", AccentRegion.SOUTH, VoiceGender.MALE, False, "Modern Narrator / Casual Recapper", "Approachable, smooth, conversational pace"),
-    VoiceProfile("Khánh Linh", "Khánh Linh", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Intellectual Mage / Female Strategist", "Articulate, precise, cool and analytical"),
-    VoiceProfile("Tuấn Kiệt", "Tuấn Kiệt", AccentRegion.NORTH, VoiceGender.MALE, False, "Fiery Rival / Impulsive Swordsman", "Rapid delivery, sharp consonants, intense"),
-    VoiceProfile("Phương Thảo", "Phương Thảo", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Maternal Elder / Healer", "Soothing, empathetic, slow measured cadence"),
-    VoiceProfile("Đức Huy", "Đức Huy", AccentRegion.NORTH, VoiceGender.MALE, False, "Shadow Assassin / Stoic Guard", "Low pitch, curt, monotone, stealthy composure"),
-    VoiceProfile("Hương Giang", "Hương Giang", AccentRegion.CENTRAL, VoiceGender.FEMALE, False, "Mystic Seer / Central Storyteller", "Unique Central accent, lyrical, atmospheric"),
-    VoiceProfile("Việt Dũng", "Việt Dũng", AccentRegion.NORTH, VoiceGender.MALE, False, "Veteran Commander / Old Guard", "Gritty, experienced, commanding presence"),
-    VoiceProfile("Thanh Trúc", "Thanh Trúc", AccentRegion.SOUTH, VoiceGender.FEMALE, False, "Adventurer / Independent Heroine", "Resolute, clear, modern Southern accent"),
-    VoiceProfile("Gia Bảo", "Gia Bảo", AccentRegion.SOUTH, VoiceGender.MALE, False, "Young Disciple / Inquisitive Boy", "High pitch, energetic, naive, quick-paced"),
-    VoiceProfile("Thu Hà", "Thu Hà", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Lore Keeper / Serious Narrator", "Solemn, formal, steady, dramatic depth"),
-    VoiceProfile("Trọng Hiếu", "Trọng Hiếu", AccentRegion.SOUTH, VoiceGender.MALE, False, "Wandering Rogue / Charming Sword", "Relaxed, confident, charismatic drawl"),
+    # Remaining 15 Official Presets
+    VoiceProfile("Minh Đức", "Minh Đức", AccentRegion.NORTH, VoiceGender.MALE, False, "Documentary / News Reporter", "Formal, articulate, deep and balanced"),
+    VoiceProfile("Phạm Tuyên", "Phạm Tuyên", AccentRegion.NORTH, VoiceGender.MALE, False, "Supporting Male / Natural Flow", "Authentic, grounded, conversational"),
+    VoiceProfile("Thái Sơn", "Thái Sơn", AccentRegion.SOUTH, VoiceGender.MALE, False, "Southern Lead / Dramatic Storyteller", "Resolute, energetic Southern masculine delivery"),
+    VoiceProfile("Xuân Vĩnh", "Xuân Vĩnh", AccentRegion.NORTH, VoiceGender.MALE, False, "Veteran Commander / Old Guard", "Mature, experienced, calm cadence"),
+    VoiceProfile("Thanh Bình", "Thanh Bình", AccentRegion.NORTH, VoiceGender.MALE, False, "Peaceful Narrator / Scholar", "Gentle, lyrical, reflective tone"),
+    VoiceProfile("Ngọc Linh", "Ngọc Linh", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Classical Female / Poetic Narrator", "Soft, fluid, graceful Northern accent"),
+    VoiceProfile("Đoan Trang", "Đoan Trang", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Noble Lady / Analytical Strategist", "Poised, elegant, measured pacing"),
+    VoiceProfile("Thục Đoan", "Thục Đoan", AccentRegion.SOUTH, VoiceGender.FEMALE, False, "Warm Southern Narrator", "Affectionate, melodious Southern charm"),
+    VoiceProfile("Minh Triết", "Minh Triết", AccentRegion.SOUTH, VoiceGender.MALE, False, "Modern Reporter / Southern Intellect", "Crisp, confident, informative tone"),
+    VoiceProfile("Mỹ Duyên", "Mỹ Duyên", AccentRegion.SOUTH, VoiceGender.FEMALE, False, "Audiobook Female / Emotional Drama", "Tender, expressive, narrative depth"),
+    VoiceProfile("Quỳnh Anh", "Quỳnh Anh", AccentRegion.NORTH, VoiceGender.FEMALE, False, "Audiobook Reader / Storybook Heroine", "Clear, engaging, evocative pacing"),
+    VoiceProfile("Đức Trí", "Đức Trí", AccentRegion.SOUTH, VoiceGender.MALE, False, "Audiobook Reader / Supporting Companion", "Warm, mellow, soothing timber"),
+    VoiceProfile("Kim Thanh", "Kim Thanh", AccentRegion.SOUTH, VoiceGender.FEMALE, False, "Lore Keeper / Experienced Matron", "Rich, dignified, emotional resonance"),
+    VoiceProfile("Adam", "Adam", AccentRegion.SOUTH, VoiceGender.MALE, False, "Casual Dialogue / Modern Protagonist", "Natural, informal, easy-going projection"),
+    VoiceProfile("Quốc Tuấn", "Quốc Tuấn", AccentRegion.NORTH, VoiceGender.MALE, False, "Fiery Swordsman / Martial Artist", "Bold, commanding, intense projection"),
 ]
 
 VOICE_BY_NAME: Dict[str, VoiceProfile] = {vp.name: vp for vp in VOICE_CATALOG_25}
