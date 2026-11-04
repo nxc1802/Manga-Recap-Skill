@@ -31,7 +31,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.cli.main import main
 from src.core.schemas import RecapScript, ScriptSegment
-from src.core.storage import atomic_write_json, init_chapter_layout, init_project_layout, read_json
+from src.core.storage import atomic_write_json, calculate_sha256, init_chapter_layout, init_project_layout, read_json
 from src.tts.benchmark import TTSBenchmarkRunner
 from src.tts.catalog import CATALOG_VOICES
 from src.tts.engine import EngineMode, MockTTSBackend, VieNeuEngine, get_tts_engine, get_wav_duration_seconds
@@ -75,13 +75,13 @@ def run_challenge_1_cache_overwrite():
     dur1, key1, cached1 = engine.synthesize_utterance(test_text, voice, temp_out1, force=False)
     assert not cached1, "Synthesis must report was_cached=False"
     assert temp_out1.exists(), f"Output file {temp_out1} was not created!"
-    assert key1 == "", "Key must be empty string in zero-cache architecture"
+    assert len(key1) == 64 and key1 == calculate_sha256(temp_out1), "Key must be real SHA-256 hex string"
     hdr1 = unpack_wav_header(temp_out1)
     assert hdr1["riff"] == "RIFF"
     assert hdr1["sample_rate"] == 48000
     print(f"1. Initial direct synthesis: size={len(temp_out1.read_bytes())} bytes, sample_rate={hdr1['sample_rate']}")
 
-    # Subtest 1A: CLI --force direct synthesis and overwrite test
+    # Subtest 1A: CLI resume without --force and re-synthesis on --force
     temp_proj = f"proj_c1_cli_{int(time.time())}"
     init_project_layout(temp_proj, "CLI Test")
     chap_dir = init_chapter_layout(temp_proj, 1)
@@ -115,7 +115,17 @@ def run_challenge_1_cache_overwrite():
     assert not list(chap_dir.glob("**/*.cache_key")), "Must not generate any .cache_key files"
     cli_mtime1 = audio_file.stat().st_mtime_ns
 
-    # Re-run CLI with --force
+    # Re-run CLI without --force -> should resume existing clip without re-synthesizing
+    time.sleep(0.05)
+    code_resume = main(["tts", "-p", temp_proj, "-c", "1", "--json"])
+    assert code_resume == 0, f"CLI tts resume failed with code {code_resume}"
+    cli_mtime_resumed = audio_file.stat().st_mtime_ns
+    assert cli_mtime_resumed == cli_mtime1, (
+        f"CLI tts without --force touched audio file! {cli_mtime1} vs {cli_mtime_resumed}"
+    )
+    print(f"2. CLI manga-recap tts resume: existing clip preserved ({cli_mtime_resumed} == {cli_mtime1})")
+
+    # Re-run CLI with --force -> must re-synthesize
     time.sleep(0.05)
     code_force = main(["tts", "-p", temp_proj, "-c", "1", "--force", "--json"])
     assert code_force == 0, f"CLI tts --force failed with code {code_force}"
@@ -124,7 +134,7 @@ def run_challenge_1_cache_overwrite():
         f"CRITICAL DEFECT: CLI tts --force did not update audio mtime! {cli_mtime1} vs {cli_mtime2}"
     )
     assert not list(chap_dir.glob("**/*.cache_key")), "Must not generate any .cache_key files on force"
-    print(f"2. CLI manga-recap tts --force: audio re-synthesized cleanly ({cli_mtime2} >= {cli_mtime1})")
+    print(f"3. CLI manga-recap tts --force: audio re-synthesized cleanly ({cli_mtime2} >= {cli_mtime1})")
 
     # Cleanup temp project
     proj_dir = Path("data/projects") / temp_proj

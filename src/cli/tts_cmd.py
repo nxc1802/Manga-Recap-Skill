@@ -15,13 +15,14 @@ from src.core.schemas import CheckpointStatus, RecapScript, ScriptSegment, Stage
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
+    calculate_sha256,
     get_chapter_dir,
     get_project_dir,
     read_json,
     update_checkpoint,
 )
 from src.core.utils import get_project_data_dir
-from src.tts.engine import get_tts_engine
+from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
 
 def resolve_segment_voice(
@@ -160,6 +161,29 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
         speed = speed_override or default_speed
         seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
 
+        # Check if segment can be resumed / skipped when --force is omitted
+        can_resume = False
+        if not force_resynth and seg_audio_file.exists() and seg_audio_file.stat().st_size > 44:
+            if seg.status == "synthesized" and (seg.synthesized_voice == voice or seg.voice_id == voice):
+                try:
+                    dur = get_wav_duration_seconds(seg_audio_file)
+                    if dur > 0:
+                        actual_checksum = calculate_sha256(seg_audio_file)
+                        if not seg.checksum or seg.checksum == actual_checksum:
+                            can_resume = True
+                            seg.checksum = actual_checksum
+                            seg.duration = dur
+                            seg.synthesized_voice = voice
+                            seg.audio_path = str(seg_audio_file.relative_to(chap_dir))
+                except Exception:
+                    can_resume = False
+
+        if can_resume:
+            cached_count += 1
+            total_duration += seg.duration
+            artifacts.append(seg.audio_path)
+            continue
+
         dur, checksum, was_cached = engine.synthesize_utterance(
             text=seg.narrator_text,
             voice=voice,
@@ -186,6 +210,9 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
 
         synthesized_count += 1
         artifacts.append(seg.audio_path)
+
+        # Checkpoint script after each newly synthesized segment for crash-safety
+        atomic_write_json(script_path, script_obj)
 
     script_obj.total_duration_seconds = round(total_duration, 3)
 

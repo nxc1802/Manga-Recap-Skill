@@ -38,6 +38,7 @@ from src.core.schemas import (
 )
 from src.core.storage import (
     atomic_write_json,
+    calculate_sha256,
     init_chapter_layout,
     init_project_layout,
     read_json,
@@ -199,7 +200,7 @@ class TestDirectSynthesisInvariantsChallenger2:
         assert not cached1
         assert out1.exists()
         assert dur1 > 0
-        assert key1 == ""
+        assert len(key1) == 64 and key1 == calculate_sha256(out1)
 
         out2 = tmp_path / "run2.wav"
         dur2, key2, cached2 = engine.synthesize_utterance(
@@ -208,6 +209,7 @@ class TestDirectSynthesisInvariantsChallenger2:
         assert not cached2
         assert out2.exists()
         assert dur2 > 0
+        assert len(key2) == 64 and key2 == calculate_sha256(out2)
         # No .cache_key files created
         assert not list(tmp_path.glob("**/*.cache_key"))
 
@@ -298,9 +300,12 @@ class TestDirectSynthesisInvariantsChallenger2:
         assert audio_clip1.exists()
         mtime1 = audio_clip1.stat().st_mtime_ns
 
-        # Run 2: Cached TTS CLI without --force
+        # Run 2: Resume without --force
         code2 = main(["tts", "-p", project_slug, "-c", str(chapter_num), "--json"])
         assert code2 == 0
+        audio_clip2 = chap_dir / script_after1.segments[0].audio_path
+        mtime2 = audio_clip2.stat().st_mtime_ns
+        assert mtime2 == mtime1, "Non-force re-run must resume without re-synthesizing existing clip"
 
         # Run 3: Forced TTS CLI with --force
         time.sleep(0.01)  # Ensure filesystem mtime resolution
@@ -309,6 +314,7 @@ class TestDirectSynthesisInvariantsChallenger2:
 
         script_after3 = RecapScript.model_validate(read_json(chap_dir / "script.json"))
         assert script_after3.segments[0].status == "synthesized"
+        assert len(script_after3.segments[0].checksum) == 64
         audio_clip3 = chap_dir / script_after3.segments[0].audio_path
         mtime3 = audio_clip3.stat().st_mtime_ns
         # With force=True, file was re-written

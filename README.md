@@ -66,8 +66,7 @@ An autonomous, agent-native manga and webtoon recap video creation pipeline. Eng
 │   │   ├── contact_sheet.py             # 1920x1920 4x4 image grid generator with crimson badges
 │   │   └── utils.py                     # Media fingerprinting and FFmpeg subprocess wrappers
 │   ├── tts/                             # Local VieNeu-TTS v3 Turbo engine
-│   │   ├── engine.py                    # VieNeu offline engine runner and 48 kHz WAV synthesis
-│   │   ├── cache.py                     # Content-addressed SHA-256 utterance cache with --force support
+│   │   ├── engine.py                    # VieNeu offline engine runner, atomic WAV synthesis & checksums
 │   │   ├── catalog.py                   # Catalog of 25 Vietnamese preset voices and regional profiles
 │   │   └── benchmark.py                 # Screening runner, emotion suite, and hardware telemetry
 │   └── render/                          # Cinematic Video Engine V2

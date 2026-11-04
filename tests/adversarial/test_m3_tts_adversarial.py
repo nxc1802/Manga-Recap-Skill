@@ -31,7 +31,7 @@ import pytest
 from src.cli.exit_codes import ExitCode
 from src.cli.main import main
 from src.core.schemas import CheckpointStatus, StageType
-from src.core.storage import get_chapter_dir, get_project_dir, init_chapter_layout, init_project_layout, read_json
+from src.core.storage import calculate_sha256, get_chapter_dir, get_project_dir, init_chapter_layout, init_project_layout, read_json
 from src.tts.benchmark import EMOTION_BENCHMARK_PROMPTS, REFERENCE_PROMPTS, TTSBenchmarkRunner, generate_mock_wav
 from src.tts.catalog import CATALOG_VOICES, get_voice_profile, resolve_voice_id
 from src.tts.engine import (
@@ -227,7 +227,7 @@ class TestDirectSynthesisInvariants:
         assert not cached1
         assert out_1.exists()
         assert dur1 > 0
-        assert key1 == ""
+        assert len(key1) == 64 and key1 == calculate_sha256(out_1)
 
         # Validate byte-for-byte RIFF header
         hdr = parse_riff_wave_header(out_1)

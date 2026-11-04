@@ -10,6 +10,7 @@ import math
 import os
 import shutil
 import struct
+import uuid
 import wave
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -288,22 +289,38 @@ class VieNeuEngine:
         **kwargs: Any,
     ) -> Tuple[float, str, bool]:
         """
-        Synthesizes an utterance directly to output_path without cache sidecars or global caching.
-        Returns: (duration_seconds, checksum, was_cached)
+        Synthesizes an utterance directly to output_path using atomic write safety.
+        Returns: (duration_seconds, sha256_checksum, was_cached)
         """
+        from src.core.storage import calculate_sha256
+
         resolved_voice = resolve_voice_id(voice)
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        dur = self.backend.synthesize(
-            text=text,
-            voice=resolved_voice,
-            output_path=output_path,
-            speed=speed,
-            emotion=emotion,
-            emotion_cue=emotion_cue,
-        )
-        return dur, "", False
+        tmp_id = uuid.uuid4().hex[:8]
+        tmp_path = output_path.with_name(f".{output_path.stem}.tmp.{tmp_id}.wav")
+
+        try:
+            dur = self.backend.synthesize(
+                text=text,
+                voice=resolved_voice,
+                output_path=tmp_path,
+                speed=speed,
+                emotion=emotion,
+                emotion_cue=emotion_cue,
+                **kwargs,
+            )
+            if not tmp_path.exists() or tmp_path.stat().st_size <= 44:
+                raise RuntimeError(f"TTS synthesis produced invalid or empty file at {tmp_path}")
+
+            tmp_path.replace(output_path)
+            checksum = calculate_sha256(output_path)
+            return dur, checksum, False
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            raise
 
     def synthesize_to_file(
         self,

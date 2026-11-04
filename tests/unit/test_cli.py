@@ -432,18 +432,24 @@ class TestSubcommandImplementations:
             assert wf.getnchannels() == 1
             assert wf.getsampwidth() == 2
 
-        # Second run: direct synthesis without cache sidecars
+        # Second run: resume valid segments without re-synthesis
         code2 = main(["tts", "-p", "demo_manga", "-c", "1", "--json"])
         assert code2 == ExitCode.SUCCESS
         captured2 = capsys.readouterr()
         data2 = json.loads(captured2.out)["data"]
-        assert data2["segments_synthesized"] == 2
-        assert data2["segments_cached"] == 0
+        assert data2["segments_synthesized"] == 0
+        assert data2["segments_cached"] == 2
+
+        # Verify real SHA-256 checksum is populated in script.json
+        script_after = json.loads((chap_dir / "script.json").read_text())
+        for s in script_after["segments"]:
+            assert s["checksum"] is not None
+            assert len(s["checksum"]) == 64
 
         # Verify no .cache_key sidecars are created
         assert not list(chap_dir.glob("**/*.cache_key"))
 
-        # Third run with --force
+        # Third run with --force: forces full re-synthesis
         code3 = main(["tts", "-p", "demo_manga", "-c", "1", "--force", "--json"])
         assert code3 == ExitCode.SUCCESS
         captured3 = capsys.readouterr()

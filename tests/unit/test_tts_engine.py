@@ -91,3 +91,57 @@ def test_vieneu_engine_force_neural_precedence_over_mock_env(monkeypatch):
     with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
         get_tts_engine(force_mode=EngineMode.NEURAL)
 
+
+def test_synthesize_utterance_atomic_write_and_sha256(tmp_path):
+    from src.core.storage import calculate_sha256
+    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    dest = tmp_path / "atomic_clip.wav"
+
+    dur, checksum, was_cached = engine.synthesize_utterance(
+        text="Kiểm tra ghi tệp an toàn và trả về mã băm SHA-256.",
+        voice="Trúc Ly",
+        output_path=dest,
+    )
+
+    assert dest.exists()
+    assert dur > 0.5
+    assert was_cached is False
+    assert len(checksum) == 64
+    assert checksum == calculate_sha256(dest)
+    # Ensure no temporary files remained
+    tmp_files = list(tmp_path.glob(".*.tmp.*"))
+    assert len(tmp_files) == 0
+
+
+def test_synthesize_utterance_atomic_failure_resilience(tmp_path, monkeypatch):
+    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    dest = tmp_path / "original_clip.wav"
+
+    # Create original valid file
+    dur1, checksum1, _ = engine.synthesize_utterance(
+        text="Nội dung ban đầu nguyên vẹn.",
+        voice="Trúc Ly",
+        output_path=dest,
+    )
+    original_bytes = dest.read_bytes()
+
+    # Simulate crash/failure inside backend.synthesize
+    def failing_synthesize(*args, **kwargs):
+        raise IOError("Simulated sudden I/O or power failure during inference")
+
+    monkeypatch.setattr(engine.backend, "synthesize", failing_synthesize)
+
+    with pytest.raises(IOError, match="Simulated sudden I/O"):
+        engine.synthesize_utterance(
+            text="Nội dung mới bị lỗi giữa chừng.",
+            voice="Trúc Ly",
+            output_path=dest,
+        )
+
+    # Destination file must be completely untouched and uncorrupted
+    assert dest.exists()
+    assert dest.read_bytes() == original_bytes
+    # No dangling temporary files
+    tmp_files = list(tmp_path.glob(".*.tmp.*"))
+    assert len(tmp_files) == 0
+

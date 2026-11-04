@@ -120,10 +120,10 @@ manga-recap validate --project <project_slug> --chapter <chapter_num> --json
 ### Stage 6: Local VieNeu-TTS Audio Generation
 Synthesize 48 kHz uncompressed WAV utterances using the local VieNeu-TTS v3 Turbo engine:
 ```bash
-manga-recap tts --project <project_slug> --chapter <chapter_num> --json
+manga-recap tts --project <project_slug> --chapter <chapter_num> [--force] --json
 ```
-- Generated utterances are stored in `audio/clips/` with exact measured waveform durations recorded into `script.json`.
-- Caching: Utterances are content-addressed by SHA-256 (`text|voice_id|speed|48000`). Re-runs skip already-synthesized clips.
+- Generated utterances are written directly to `audio/clips/audio_<chapter>_<seq_id>.wav` via crash-safe atomic replacement, with exact measured waveform durations and actual SHA-256 file checksums recorded into `script.json`.
+- Resumability: By default, re-running TTS resumes without re-synthesizing segments that already possess valid, verified audio matching the current voice. Pass `--force` to re-synthesize all chapter segments.
 
 ### Stage 7: Human Review Gate 1 (Voice & Emotion Strategy)
 Prior to full video rendering, present synthesized voice samples to the human user at Review Gate 1:
