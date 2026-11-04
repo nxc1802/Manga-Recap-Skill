@@ -279,13 +279,23 @@ class ScriptSegment(BaseModel):
     character: Optional[str] = Field(default=None, description="Character speaker name or None for narrator")
     emotion: Optional[str] = Field(default="neutral", description="Emotion intent: neutral, dramatic, sad, excited, etc.")
     emotion_cue: Optional[str] = Field(default=None, description="Audible cue: [cười], [thở dài], [hắng giọng], or None")
-    voice_id: Optional[str] = Field(default=None, description="VieNeu preset voice ID")
+    voice_id: Optional[str] = Field(default=None, description="VieNeu preset voice ID explicitly assigned to segment")
+    synthesized_voice: Optional[str] = Field(default=None, description="Voice ID used during last TTS synthesis")
+    voice_source: Optional[str] = Field(default=None, description="'manual' if set by Agent, 'tts' if auto-saved by TTS, 'approved' if from approval")
     camera_motion: CameraMotionType = Field(default=CameraMotionType.STATIC)
     focus_box: Optional[FocusBox] = None
     duration: Optional[float] = Field(default=None, ge=0.0, description="Measured waveform duration in seconds")
     audio_path: Optional[str] = Field(default=None, description="Relative path to synthesized utterance WAV")
     checksum: Optional[str] = Field(default=None, description="SHA-256 fingerprint of utterance audio/text")
     status: str = Field(default="pending", description="Segment status: pending, synthesized, verified, needs_review")
+
+    def is_manual_voice(self) -> bool:
+        """Returns True if voice_id was explicitly set by the Agent rather than auto-populated by TTS."""
+        if self.voice_source == "manual":
+            return True
+        if self.voice_source == "tts":
+            return False
+        return bool(self.voice_id and self.voice_id != self.synthesized_voice)
 
     @field_validator("seq_id")
     @classmethod

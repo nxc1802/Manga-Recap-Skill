@@ -55,6 +55,18 @@ from src.render.validator import StreamValidator, VideoValidationError
 from src.tts.engine import get_wav_duration_seconds
 
 
+def compute_file_sha256(file_path: Union[str, Path], chunk_size: int = 65536) -> str:
+    """Computes SHA-256 checksum of a file in streaming chunks for memory safety."""
+    p = Path(file_path)
+    if not p.exists() or not p.is_file():
+        return ""
+    hasher = hashlib.sha256()
+    with open(p, "rb") as f:
+        while chunk := f.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 class VideoMode(Enum):
     PORTRAIT_PADDED = "portrait_padded"
     LANDSCAPE_FIT = "landscape_fit"
@@ -856,16 +868,13 @@ class VideoEngine:
 
                 duration_ms = int(round(exact_clip_dur * 1000.0))
 
-                # Compute clip render fingerprint based on quality, resolution, motion, text, audio, and subtitle settings
+                # Compute clip render fingerprint based on quality, resolution, motion, text, audio, image, and subtitle settings
                 audio_stat = wav_p.stat() if wav_p.exists() else None
                 panel_stat = panel_p.stat() if panel_p.exists() else None
-                audio_hash = ""
-                if wav_p.exists():
-                    try:
-                        audio_hash = hashlib.sha256(wav_p.read_bytes()).hexdigest()
-                    except Exception:
-                        pass
+                audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
+                panel_hash = compute_file_sha256(panel_p) if panel_p and panel_p.exists() else ""
                 script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
+                focus_box_spec = seg.focus_box.model_dump() if seg.focus_box else None
 
                 current_fingerprint = {
                     "quality": quality_clean,
@@ -876,7 +885,9 @@ class VideoEngine:
                     "narrator_text": seg.narrator_text.strip(),
                     "script_hash": script_hash,
                     "audio_hash": audio_hash,
+                    "panel_hash": panel_hash,
                     "camera_motion": seg.camera_motion.value if hasattr(seg.camera_motion, "value") else str(seg.camera_motion),
+                    "focus_box": focus_box_spec,
                     "burn_subtitles": burn_subtitles,
                     "allow_animation": allow_animation,
                     "audio_size": audio_stat.st_size if audio_stat else 0,
@@ -911,10 +922,22 @@ class VideoEngine:
                     allow_animation=allow_animation,
                 )
 
+                # Verify render output before committing metadata sidecar
+                if not clip_p.exists() or clip_p.stat().st_size <= 1000:
+                    if clip_meta_p.exists():
+                        try:
+                            clip_meta_p.unlink()
+                        except Exception:
+                            pass
+                    raise RuntimeError(
+                        f"Render verification failed for segment {seg.seq_id}: "
+                        f"output clip {clip_p} is missing or corrupted (size: {clip_p.stat().st_size if clip_p.exists() else 0} bytes)."
+                    )
+
                 try:
                     clip_meta_p.write_text(json.dumps(current_fingerprint, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to write clip metadata fingerprint for {clip_p}: {e}")
 
             # 5. Lossless Visual Stream Concatenation
             raw_video_path = video_dir / f"raw_video_{chapter_num}.mp4"

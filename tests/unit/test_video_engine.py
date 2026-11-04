@@ -24,6 +24,7 @@ from src.core.storage import (
     init_chapter_layout,
     init_project_layout,
     load_chapter_metadata,
+    load_recap_script,
     save_recap_script,
 )
 from src.render.video_engine import VideoEngine, VideoMode, video_engine
@@ -239,7 +240,9 @@ class TestVideoEngineChapterRender:
 
         meta_data = json.loads(meta_p.read_text(encoding="utf-8"))
         assert "audio_hash" in meta_data and len(meta_data["audio_hash"]) == 64
+        assert "panel_hash" in meta_data and len(meta_data["panel_hash"]) == 64
         assert "script_hash" in meta_data and len(meta_data["script_hash"]) == 64
+        assert meta_data["focus_box"] is not None
 
         mtime_initial = clip_p.stat().st_mtime_ns
 
@@ -264,6 +267,76 @@ class TestVideoEngineChapterRender:
         )
         assert res3["validation"]["valid"] is True
         assert clip_p.stat().st_mtime_ns != mtime_initial
+
+    def test_render_cache_invalidates_on_audio_wav_mutation(self, setup_synthetic_chapter):
+        """Regression test: mutating WAV content invalidates clip cache via audio_hash."""
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+        engine = VideoEngine()
+
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        mtime_before = clip_p.stat().st_mtime_ns
+        hash_before = json.loads(meta_p.read_text(encoding="utf-8"))["audio_hash"]
+
+        # Mutate audio WAV file
+        wav_p = chap_dir / "audio" / "clips" / "audio_1_001.wav"
+        make_test_wav(wav_p, duration_sec=2.2)
+
+        # Re-render with force=False -> audio_hash mismatch MUST trigger re-render
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        mtime_after = clip_p.stat().st_mtime_ns
+        hash_after = json.loads(meta_p.read_text(encoding="utf-8"))["audio_hash"]
+
+        assert mtime_after != mtime_before
+        assert hash_after != hash_before
+
+    def test_render_cache_invalidates_on_panel_image_mutation(self, setup_synthetic_chapter):
+        """Regression test: mutating panel image invalidates clip cache via panel_hash."""
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+        engine = VideoEngine()
+
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        mtime_before = clip_p.stat().st_mtime_ns
+        hash_before = json.loads(meta_p.read_text(encoding="utf-8"))["panel_hash"]
+
+        # Mutate panel image
+        img_p = chap_dir / "panels" / "panel_001.jpg"
+        make_test_image(img_p, width=800, height=1200, color=(255, 255, 0))
+
+        # Re-render with force=False -> panel_hash mismatch MUST trigger re-render
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        mtime_after = clip_p.stat().st_mtime_ns
+        hash_after = json.loads(meta_p.read_text(encoding="utf-8"))["panel_hash"]
+
+        assert mtime_after != mtime_before
+        assert hash_after != hash_before
+
+    def test_render_cache_invalidates_on_focus_box_change(self, setup_synthetic_chapter):
+        """Regression test: modifying focus_box invalidates clip cache and re-renders with new focal point."""
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+        engine = VideoEngine()
+
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        mtime_before = clip_p.stat().st_mtime_ns
+
+        # Mutate focus box in script.json
+        script = load_recap_script(chap_dir)
+        script.segments[0].focus_box = FocusBox(x_min=0.5, y_min=0.5, x_max=0.9, y_max=0.9)
+        save_recap_script(chap_dir, script)
+
+        # Re-render with force=False -> focus_box mismatch MUST trigger re-render
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+        mtime_after = clip_p.stat().st_mtime_ns
+        meta_after = json.loads(meta_p.read_text(encoding="utf-8"))
+
+        assert mtime_after != mtime_before
+        assert meta_after["focus_box"]["x_min"] == 0.5
+        assert meta_after["focus_box"]["y_min"] == 0.5
 
     def test_render_cli_command_with_force(self, setup_synthetic_chapter, capsys):
         proj_slug, proj_dir, chap_dir = setup_synthetic_chapter

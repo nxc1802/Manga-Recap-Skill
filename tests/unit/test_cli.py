@@ -508,6 +508,91 @@ class TestSubcommandImplementations:
         # Second segment uses approved primary voice Mai Anh
         assert saved_script["segments"][1]["voice_id"] == "Mai Anh"
 
+    def test_tts_voice_priority_manual_vs_approval_update(self, tmp_path, capsys, monkeypatch):
+        """
+        Regression test: updating voice_selection.json always takes effect on auto-saved segments,
+        while strictly preserving segments that the Agent manually assigned a custom voice to.
+        """
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("priority_proj", "Priority Project")
+        init_chapter_layout("priority_proj", "1")
+
+        proj_dir = tmp_path / "data" / "projects" / "priority_proj"
+        chap_dir = proj_dir / "chapters" / "1"
+
+        script_data = {
+            "project_slug": "priority_proj",
+            "chapter_number": "1",
+            "title": "Voice Priority Test",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "character": "Protagonist",
+                    "narrator_text": "Ta là nhân vật chính!",
+                },
+                {
+                    "seq_id": "02",
+                    "panel_ids": ["panel_02.jpg"],
+                    "voice_id": "Bá Thao",
+                    "voice_source": "manual",
+                    "narrator_text": "Giọng phản diện này do tác giả đặt thủ công.",
+                },
+                {
+                    "seq_id": "03",
+                    "panel_ids": ["panel_03.jpg"],
+                    "narrator_text": "Lời dẫn truyện chung của tác phẩm.",
+                },
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        # Initial Approval (V1): Primary voice = "Trúc Ly", Protagonist = "Thiện Minh"
+        approval_v1 = {
+            "project_slug": "priority_proj",
+            "primary_voice": "Trúc Ly",
+            "approved_by": "Reviewer A",
+            "status": "approved",
+            "character_voice_mapping": {
+                "Protagonist": "Thiện Minh",
+            },
+        }
+        (proj_dir / "voice_selection.json").write_text(json.dumps(approval_v1), encoding="utf-8")
+
+        # Run TTS initial synthesis
+        code = main(["tts", "-p", "priority_proj", "-c", "1", "--mock", "--force", "--json"])
+        assert code == ExitCode.SUCCESS
+
+        saved_v1 = json.loads((chap_dir / "script.json").read_text(encoding="utf-8"))
+        assert saved_v1["segments"][0]["voice_id"] == "Thiện Minh"
+        assert saved_v1["segments"][1]["voice_id"] == "Bá Thao"
+        assert saved_v1["segments"][2]["voice_id"] == "Trúc Ly"
+
+        # User updates approval in Evaluation Lab (V2):
+        # Change Primary voice to "Mai Anh" and Protagonist to "Quốc Tuấn"
+        approval_v2 = {
+            "project_slug": "priority_proj",
+            "primary_voice": "Mai Anh",
+            "approved_by": "Senior Reviewer",
+            "status": "approved",
+            "character_voice_mapping": {
+                "Protagonist": "Quốc Tuấn",
+            },
+        }
+        (proj_dir / "voice_selection.json").write_text(json.dumps(approval_v2), encoding="utf-8")
+
+        # Re-run TTS with --force -> approval updates MUST take effect!
+        code2 = main(["tts", "-p", "priority_proj", "-c", "1", "--mock", "--force", "--json"])
+        assert code2 == ExitCode.SUCCESS
+
+        saved_v2 = json.loads((chap_dir / "script.json").read_text(encoding="utf-8"))
+        # Segment 01 (Protagonist) adopted new mapped voice "Quốc Tuấn"
+        assert saved_v2["segments"][0]["voice_id"] == "Quốc Tuấn"
+        # Segment 02 (Manual voice) preserved manual assignment "Bá Thao"
+        assert saved_v2["segments"][1]["voice_id"] == "Bá Thao"
+        # Segment 03 (Narrator) adopted new primary voice "Mai Anh" instead of being stuck on "Trúc Ly"
+        assert saved_v2["segments"][2]["voice_id"] == "Mai Anh"
+
 
     def test_tts_benchmark_command(self, tmp_path, capsys):
         """Verifies tts_benchmark runs with isolated output dir and does not clobber docs/lab/."""

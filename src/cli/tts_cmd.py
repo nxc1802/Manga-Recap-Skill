@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from src.cli.exit_codes import CliValidationError
-from src.core.schemas import CheckpointStatus, RecapScript, StageType
+from src.core.schemas import CheckpointStatus, RecapScript, ScriptSegment, StageType
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
@@ -22,6 +22,41 @@ from src.core.storage import (
 )
 from src.core.utils import get_project_data_dir
 from src.tts.engine import get_tts_engine
+
+
+def resolve_segment_voice(
+    seg: ScriptSegment,
+    voice_override: Optional[str] = None,
+    approved_voice: Optional[str] = None,
+    approved_character_mapping: Optional[Dict[str, str]] = None,
+    default_voice: Optional[str] = None,
+) -> Tuple[str, str]:
+    """
+    Resolves the exact voice to use for a segment based on strict priority:
+    1. CLI explicit voice override (--voice) -> source: 'override'
+    2. Character voice mapping from approved Review Gate 1 -> source: 'approved'
+    3. Manually assigned voice by Agent (voice_source == 'manual' or is_manual_voice()) -> source: 'manual'
+    4. Primary approved voice from Review Gate 1 (voice_selection.json) -> source: 'approved'
+    5. Fallback default voice (from script or system default) -> source: 'default'
+
+    Returns (resolved_voice, voice_source).
+    """
+    if voice_override:
+        return voice_override, "override"
+
+    if seg.character and approved_character_mapping and seg.character in approved_character_mapping:
+        return approved_character_mapping[seg.character], "approved"
+
+    if seg.is_manual_voice() and seg.voice_id:
+        return seg.voice_id, "manual"
+
+    if approved_voice:
+        return approved_voice, "approved"
+
+    if seg.voice_id and seg.voice_source != "tts":
+        return seg.voice_id, "manual"
+
+    return default_voice or "Trúc Ly", "default"
 
 
 def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
@@ -115,8 +150,13 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     total_duration = 0.0
 
     for seg in script_obj.segments:
-        char_mapped_voice = approved_character_mapping.get(seg.character) if seg.character else None
-        voice = voice_override or seg.voice_id or char_mapped_voice or default_voice
+        voice, v_source = resolve_segment_voice(
+            seg=seg,
+            voice_override=voice_override,
+            approved_voice=approved_voice,
+            approved_character_mapping=approved_character_mapping,
+            default_voice=default_voice,
+        )
         speed = speed_override or default_speed
         seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
 
@@ -131,7 +171,14 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             force=force_resynth,
         )
 
-        seg.voice_id = voice
+        seg.synthesized_voice = voice
+        if v_source == "manual":
+            seg.voice_id = voice
+            seg.voice_source = "manual"
+        else:
+            seg.voice_id = voice
+            seg.voice_source = "tts"
+
         seg.audio_path = str(seg_audio_file.relative_to(chap_dir))
         seg.duration = dur
         seg.checksum = checksum
