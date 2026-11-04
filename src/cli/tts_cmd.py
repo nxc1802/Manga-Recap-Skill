@@ -167,7 +167,6 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             speed=speed,
             emotion=seg.emotion,
             emotion_cue=seg.emotion_cue,
-            use_cache=True,
             force=force_resynth,
         )
 
@@ -185,10 +184,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
         seg.status = "synthesized"
         total_duration += dur
 
-        if was_cached:
-            cached_count += 1
-        else:
-            synthesized_count += 1
+        synthesized_count += 1
         artifacts.append(seg.audio_path)
 
     script_obj.total_duration_seconds = round(total_duration, 3)

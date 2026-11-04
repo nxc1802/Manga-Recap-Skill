@@ -183,21 +183,6 @@ def verify_checksum(file_path: Path, expected_hash: str) -> bool:
     return actual_hash == expected_hash.strip().lower()
 
 
-def calculate_utterance_cache_key(
-    text: str,
-    voice_id: str,
-    speed: float = 1.0,
-    sample_rate: int = 48000
-) -> str:
-    """
-    Generates deterministic utterance cache key for VieNeu-TTS v3 Turbo.
-    Formula: sha256("{text}|{voice_id}|{speed}|{sample_rate}")
-    """
-    normalized_text = " ".join(text.strip().split())
-    raw_payload = f"{normalized_text}|{voice_id.strip()}|{speed:.2f}|{sample_rate}"
-    return hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
-
-
 # ==============================================================================
 # 4. Atomic Write Engine
 # ==============================================================================

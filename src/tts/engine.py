@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.core.logger import logger
-from src.tts.cache import compute_utterance_cache_key, get_cached_audio_path, save_to_cache
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 
 
@@ -280,54 +279,22 @@ class VieNeuEngine:
         self,
         text: str,
         voice: str,
-        output_path: Path,
+        output_path: Union[str, Path],
         speed: float = 1.0,
         emotion: Optional[str] = None,
         emotion_cue: Optional[str] = None,
-        use_cache: bool = True,
+        use_cache: bool = False,
         force: bool = False,
+        **kwargs: Any,
     ) -> Tuple[float, str, bool]:
         """
-        Synthesizes an utterance with SHA-256 caching and sidecar cache validation.
-        Returns: (duration_seconds, sha256_checksum, was_cached)
+        Synthesizes an utterance directly to output_path without cache sidecars or global caching.
+        Returns: (duration_seconds, checksum, was_cached)
         """
-        current_backend = self.mode
         resolved_voice = resolve_voice_id(voice)
-        cache_key = compute_utterance_cache_key(
-            text=text,
-            voice_id=resolved_voice,
-            speed=speed,
-            emotion=emotion,
-            emotion_cue=emotion_cue,
-            model_version="v3turbo",
-            backend_mode=current_backend,
-        )
-
         output_path = Path(output_path).resolve()
-        key_file = output_path.with_suffix(".cache_key")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Check existing destination file with strict cache key matching
-        if not force and use_cache and output_path.exists():
-            if key_file.exists() and key_file.read_text(encoding="utf-8").strip() == cache_key:
-                try:
-                    dur = get_wav_duration_seconds(output_path)
-                    return dur, cache_key, True
-                except Exception:
-                    pass  # Corrupt file; re-synthesize
-
-        # Check global cache pool isolated by backend mode
-        cached_file = get_cached_audio_path(cache_key, backend_mode=current_backend)
-        if not force and use_cache and cached_file and cached_file.exists():
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(cached_file, output_path)
-            try:
-                key_file.write_text(cache_key, encoding="utf-8")
-            except Exception:
-                pass
-            dur = get_wav_duration_seconds(output_path)
-            return dur, cache_key, True
-
-        # Synthesize fresh
         dur = self.backend.synthesize(
             text=text,
             voice=resolved_voice,
@@ -336,15 +303,7 @@ class VieNeuEngine:
             emotion=emotion,
             emotion_cue=emotion_cue,
         )
-        try:
-            key_file.write_text(cache_key, encoding="utf-8")
-        except Exception:
-            pass
-
-        # Store in global cache pool under specific backend mode
-        if use_cache:
-            save_to_cache(cache_key, output_path, backend_mode=current_backend, overwrite=force)
-        return dur, cache_key, False
+        return dur, "", False
 
     def synthesize_to_file(
         self,

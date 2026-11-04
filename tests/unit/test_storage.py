@@ -25,7 +25,6 @@ from src.core.storage import (
     acquire_lock,
     atomic_write_json,
     calculate_sha256,
-    calculate_utterance_cache_key,
     get_chapter_dir,
     get_project_dir,
     get_resumable_stage,
@@ -256,13 +255,3 @@ class TestFingerprinting:
         h = calculate_sha256(f)
         assert verify_checksum(f, h) is True
         assert verify_checksum(f, "bad_hash") is False
-
-    def test_calculate_utterance_cache_key(self):
-        key1 = calculate_utterance_cache_key("Xin chào", "Trúc Ly", 1.0, 48000)
-        key2 = calculate_utterance_cache_key("  Xin   chào  ", "Trúc Ly", 1.0, 48000)
-        key3 = calculate_utterance_cache_key("Xin chào", "Adam bựa", 1.0, 48000)
-
-        # Whitespace normalization ensures equal cache keys
-        assert key1 == key2
-        # Different voice yields different cache key
-        assert key1 != key3

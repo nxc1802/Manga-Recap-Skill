@@ -1,14 +1,8 @@
 """
 src/tts package
-Offline local VieNeu-TTS v3 Turbo engine, 25-voice catalog, and SHA-256 caching.
+Offline local VieNeu-TTS v3 Turbo engine and 25-voice catalog.
 """
 
-from src.tts.cache import (
-    compute_utterance_cache_key,
-    get_cache_root,
-    get_cached_audio_path,
-    save_to_cache,
-)
 from src.tts.catalog import (
     CATALOG_VOICES,
     VOICE_ALIASES,
@@ -35,10 +29,6 @@ __all__ = [
     "MockTTSBackend",
     "NeuralTTSBackend",
     "get_wav_duration_seconds",
-    "compute_utterance_cache_key",
-    "get_cache_root",
-    "get_cached_audio_path",
-    "save_to_cache",
     "VoiceProfile",
     "VoiceRegion",
     "VoiceGender",

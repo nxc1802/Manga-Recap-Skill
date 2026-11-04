@@ -109,7 +109,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_tts.add_argument("--voice", default=None, help="Preset voice override")
     p_tts.add_argument("--speed", type=float, default=None, help="Speech speed override")
-    p_tts.add_argument("--force", action="store_true", help="Ignore utterance cache and re-synthesize")
+    p_tts.add_argument("--force", action="store_true", help="Re-synthesize all audio segments even if existing")
     p_tts.add_argument("--engine", choices=["neural", "mock", "auto"], default="neural", help="TTS synthesis engine backend (default: neural)")
     p_tts.add_argument("--mock", action="store_true", help="Shortcut for --engine mock (testing only)")
 

@@ -33,7 +33,6 @@ from src.cli.main import main
 from src.core.schemas import CheckpointStatus, StageType
 from src.core.storage import get_chapter_dir, get_project_dir, init_chapter_layout, init_project_layout, read_json
 from src.tts.benchmark import EMOTION_BENCHMARK_PROMPTS, REFERENCE_PROMPTS, TTSBenchmarkRunner, generate_mock_wav
-from src.tts.cache import compute_utterance_cache_key, get_cache_root, get_cached_audio_path, save_to_cache
 from src.tts.catalog import CATALOG_VOICES, get_voice_profile, resolve_voice_id
 from src.tts.engine import (
     EngineMode,
@@ -49,17 +48,8 @@ from src.tts.engine import (
 # ==============================================================================
 
 @pytest.fixture
-def clean_tts_cache(monkeypatch, tmp_path):
-    """Isolates the global TTS cache directory to a temporary path."""
-    cache_dir = tmp_path / "tts_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("MANGA_RECAP_TTS_CACHE_DIR", str(cache_dir))
-    return cache_dir
-
-
-@pytest.fixture
-def mock_engine(clean_tts_cache):
-    """Returns a fresh VieNeuEngine running in Mock mode with clean cache."""
+def mock_engine():
+    """Returns a fresh VieNeuEngine running in Mock mode."""
     return VieNeuEngine(force_mode=EngineMode.MOCK)
 
 
@@ -221,180 +211,101 @@ class TestMasterAudioFormatAdversarial:
 
 
 # ==============================================================================
-# 2. Utterance Caching Invariants
+# 2. Direct Synthesis Invariants (Zero-Cache Architecture)
 # ==============================================================================
 
-class TestUtteranceCachingInvariants:
-    """Stress tests on SHA-256 caching: determinism, hit/miss, invalidation, force override, self-healing."""
+class TestDirectSynthesisInvariants:
+    """Empirical verification of direct TTS synthesis: zero cache sidecars, direct output, parameter sensitivity, multithread safety."""
 
-    def test_identical_inputs_produce_cache_hit_and_reused_file(self, mock_engine, tmp_path):
-        """Identical text, voice, speed, emotion produce cache hit without re-synthesis."""
+    def test_direct_synthesis_produces_valid_wav_and_no_cache_sidecars(self, mock_engine, tmp_path):
+        """Direct synthesis writes uncompressed 48 kHz mono PCM directly to output without any cache sidecars."""
         text = "Nhân vật chính bước vào đại điện với khí thế áp đảo."
         voice = "Trúc Ly"
         out_1 = tmp_path / "out_1.wav"
-        out_2 = tmp_path / "out_2.wav"
 
         dur1, key1, cached1 = mock_engine.synthesize_utterance(text=text, voice=voice, output_path=out_1)
         assert not cached1
         assert out_1.exists()
+        assert dur1 > 0
+        assert key1 == ""
 
-        dur2, key2, cached2 = mock_engine.synthesize_utterance(text=text, voice=voice, output_path=out_2)
-        assert cached2
-        assert out_2.exists()
-        assert key1 == key2
-        assert dur1 == dur2
-
-        # Binary content of reused file must match original exactly
-        assert out_1.read_bytes() == out_2.read_bytes()
-
-    def test_cache_invalidation_matrix(self, mock_engine, tmp_path):
-        """Verifies that changing any parameter generates a distinct cache key and fresh synthesis."""
-        base_params = {
-            "text": "Một ngày đẹp trời trên đỉnh núi Vân Lạc.",
-            "voice": "Trúc Ly",
-            "speed": 1.0,
-            "emotion": "neutral",
-            "emotion_cue": None,
-        }
-
-        base_key = compute_utterance_cache_key(
-            text=base_params["text"],
-            voice_id=base_params["voice"],
-            speed=base_params["speed"],
-            emotion=base_params["emotion"],
-            emotion_cue=base_params["emotion_cue"],
-        )
-
-        # 1. Mutate text
-        key_mut_text = compute_utterance_cache_key(
-            text=base_params["text"] + " Nhưng giông bão sắp tới.",
-            voice_id=base_params["voice"],
-            speed=base_params["speed"],
-        )
-        assert key_mut_text != base_key
-
-        # 2. Mutate voice
-        key_mut_voice = compute_utterance_cache_key(
-            text=base_params["text"],
-            voice_id="Mai Anh",
-            speed=base_params["speed"],
-        )
-        assert key_mut_voice != base_key
-
-        # 3. Mutate speed
-        key_mut_speed = compute_utterance_cache_key(
-            text=base_params["text"],
-            voice_id=base_params["voice"],
-            speed=1.1,
-        )
-        assert key_mut_speed != base_key
-
-        # 4. Mutate emotion
-        key_mut_emo = compute_utterance_cache_key(
-            text=base_params["text"],
-            voice_id=base_params["voice"],
-            speed=base_params["speed"],
-            emotion="excited",
-        )
-        assert key_mut_emo != base_key
-
-        # 5. Mutate emotion cue
-        key_mut_cue = compute_utterance_cache_key(
-            text=base_params["text"],
-            voice_id=base_params["voice"],
-            speed=base_params["speed"],
-            emotion_cue="[thở dài]",
-        )
-        assert key_mut_cue != base_key
-
-    def test_force_override_bypasses_cache_and_resynthesizes(self, mock_engine, tmp_path):
-        """force=True forces fresh synthesis even when identical utterance is cached."""
-        text = "Lệnh này bắt buộc phải tái tạo dù đã có trong cache."
-        out_file = tmp_path / "force_test.wav"
-
-        # 1st call: fresh
-        dur1, key1, cached1 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file, force=False
-        )
-        assert not cached1
-
-        # 2nd call without force: cached
-        dur2, key2, cached2 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file, force=False
-        )
-        assert cached2
-
-        # 3rd call with force=True: must NOT be cached
-        dur3, key3, cached3 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file, force=True
-        )
-        assert not cached3, "force=True must bypass cache"
-        assert key3 == key1
-
-    def test_force_override_updates_global_cache_pool(self, mock_engine, tmp_path):
-        """Empirically validates that force=True re-synthesis overwrites the global pool file."""
-        text = "Đoạn thoại kiểm tra cập nhật global cache pool khi dùng force."
-        out_file = tmp_path / "force_pool_test.wav"
-
-        dur1, key1, cached1 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file, force=False
-        )
-        assert not cached1
-        cached_file = get_cached_audio_path(key1)
-        assert cached_file is not None and cached_file.exists()
-
-        # Poison the cached file to simulate stale data
-        cached_file.write_bytes(b"RIFF" + b"\x00"*40 + b"STALE_AUDIO_DATA_FOR_POISON")
-
-        # Synthesize with force=True
-        dur2, key2, cached2 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file, force=True
-        )
-        assert not cached2
-        assert key2 == key1
-
-        # The cached pool file must be updated with fresh audio, eliminating stale data
-        updated_cached_bytes = cached_file.read_bytes()
-        assert b"STALE_AUDIO_DATA_FOR_POISON" not in updated_cached_bytes, (
-            "FAIL: Global cache pool still contains stale data after force=True synthesis!"
-        )
-
-        # Subsequent call with force=False must fetch the freshly overwritten audio
-        out_file_2 = tmp_path / "fetch_from_pool.wav"
-        dur3, key3, cached3 = mock_engine.synthesize_utterance(
-            text=text, voice="Trúc Ly", output_path=out_file_2, force=False
-        )
-        assert cached3 is True
-        assert out_file_2.read_bytes() == updated_cached_bytes
-
-    def test_cache_corruption_self_healing(self, mock_engine, tmp_path):
-        """If a cached WAV in the pool is corrupted or truncated, engine recovers by re-synthesizing."""
-        text = "Đoạn thoại kiểm tra khả năng tự hồi phục khi file cache bị hỏng."
-        out_file = tmp_path / "corrupt_test.wav"
-
-        dur1, key1, _ = mock_engine.synthesize_utterance(text=text, voice="Trúc Ly", output_path=out_file)
-        cached_file = get_cached_audio_path(key1)
-        assert cached_file is not None and cached_file.exists()
-
-        # Adversarially corrupt the cached file by truncating to 10 bytes
-        cached_file.write_bytes(b"CORRUPT!")
-
-        # Next call to another output destination
-        out_file_2 = tmp_path / "corrupt_recovered.wav"
-        dur2, key2, was_cached = mock_engine.synthesize_utterance(text=text, voice="Trúc Ly", output_path=out_file_2)
-
-        # Because cache was corrupted, it should re-synthesize fresh audio rather than crashing
-        assert not was_cached
-        assert out_file_2.exists()
-        hdr = parse_riff_wave_header(out_file_2)
+        # Validate byte-for-byte RIFF header
+        hdr = parse_riff_wave_header(out_1)
         assert hdr["riff_id"] == b"RIFF"
         assert hdr["sample_rate"] == 48000
+        assert hdr["num_channels"] == 1
+        assert hdr["bits_per_sample"] == 16
 
-    def test_multithreaded_cache_concurrency_stress(self, mock_engine, tmp_path):
-        """Stress tests 10 concurrent threads synthesizing utterances against the same cache pool."""
+        # Zero .cache_key sidecars anywhere in directory tree
+        cache_files = list(tmp_path.glob("**/*.cache_key"))
+        assert len(cache_files) == 0, f"Found unexpected cache key sidecars: {cache_files}"
+
+    def test_direct_synthesis_parameter_variation(self, mock_engine, tmp_path):
+        """Varying text, voice, speed, emotion directly synthesizes valid independent WAV files."""
+        base_text = "Một ngày đẹp trời trên đỉnh núi Vân Lạc."
+        
+        # 1. Base synthesis
+        out_base = tmp_path / "base.wav"
+        dur_base, _, _ = mock_engine.synthesize_utterance(
+            text=base_text, voice="Trúc Ly", output_path=out_base, speed=1.0
+        )
+        assert out_base.exists()
+
+        # 2. Mutated text (longer text -> longer duration)
+        out_long = tmp_path / "long.wav"
+        dur_long, _, _ = mock_engine.synthesize_utterance(
+            text=base_text + " Nhưng giông bão sấm sét đang kéo tới bất ngờ từ phía chân trời.",
+            voice="Trúc Ly",
+            output_path=out_long,
+            speed=1.0,
+        )
+        assert out_long.exists()
+        assert dur_long > dur_base
+
+        # 3. Mutated speed (faster speed -> shorter duration)
+        out_fast = tmp_path / "fast.wav"
+        dur_fast, _, _ = mock_engine.synthesize_utterance(
+            text=base_text, voice="Trúc Ly", output_path=out_fast, speed=1.5
+        )
+        assert out_fast.exists()
+        assert dur_fast < dur_base
+
+        # 4. Mutated voice
+        out_voice = tmp_path / "voice.wav"
+        dur_voice, _, _ = mock_engine.synthesize_utterance(
+            text=base_text, voice="Mai Anh", output_path=out_voice, speed=1.0
+        )
+        assert out_voice.exists()
+        assert dur_voice > 0
+
+    def test_direct_resynthesis_overwrites_output_file(self, mock_engine, tmp_path):
+        """Repeated synthesis to the same destination cleanly overwrites and updates the file."""
+        out_file = tmp_path / "overwrite_test.wav"
+
+        # 1st call
+        dur1, _, cached1 = mock_engine.synthesize_utterance(
+            text="Lời thoại một ngắn.", voice="Trúc Ly", output_path=out_file
+        )
+        assert not cached1
+        assert out_file.exists()
+        size1 = out_file.stat().st_size
+
+        # 2nd call with different text to same destination
+        dur2, _, cached2 = mock_engine.synthesize_utterance(
+            text="Lời thoại hai dài hơn rất nhiều để kiểm tra khả năng ghi đè trực tiếp hoàn toàn sạch sẽ.",
+            voice="Trúc Ly",
+            output_path=out_file,
+        )
+        assert not cached2
+        assert out_file.exists()
+        size2 = out_file.stat().st_size
+        assert size2 != size1
+        assert dur2 > dur1
+
+    def test_multithreaded_synthesis_concurrency_stress(self, mock_engine, tmp_path):
+        """Stress tests 10 concurrent threads synthesizing utterances to separate files simultaneously."""
         def worker_task(idx: int) -> Dict[str, Any]:
-            # 5 threads share prompt A (cache contention), 5 threads have unique prompts
-            prompt = "Đoạn thoại tranh chấp đa luồng." if idx % 2 == 0 else f"Đoạn thoại riêng biệt {idx}."
+            prompt = f"Đoạn thoại đa luồng độc lập chỉ số {idx}."
             dest = tmp_path / f"thread_{idx}.wav"
             dur, key, cached = mock_engine.synthesize_utterance(
                 text=prompt,
@@ -410,6 +321,7 @@ class TestUtteranceCachingInvariants:
         assert len(results) == 10
         for res in results:
             assert res["dest"].exists()
+            assert not res["cached"]
             hdr = parse_riff_wave_header(res["dest"])
             assert hdr["riff_id"] == b"RIFF"
             assert hdr["sample_rate"] == 48000

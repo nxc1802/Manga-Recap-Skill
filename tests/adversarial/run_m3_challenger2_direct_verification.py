@@ -33,7 +33,6 @@ from src.cli.main import main
 from src.core.schemas import RecapScript, ScriptSegment
 from src.core.storage import atomic_write_json, init_chapter_layout, init_project_layout, read_json
 from src.tts.benchmark import TTSBenchmarkRunner
-from src.tts.cache import compute_utterance_cache_key, get_cache_root, get_cached_audio_path, save_to_cache
 from src.tts.catalog import CATALOG_VOICES
 from src.tts.engine import EngineMode, MockTTSBackend, VieNeuEngine, get_tts_engine, get_wav_duration_seconds
 
@@ -65,76 +64,28 @@ def unpack_wav_header(path: Path) -> dict:
 
 def run_challenge_1_cache_overwrite():
     print("\n" + "=" * 70)
-    print("CHALLENGE 1: Utterance Cache Overwrite on --force")
+    print("CHALLENGE 1: Direct Synthesis & Overwrite on --force (Zero-Cache Architecture)")
     print("=" * 70)
 
     engine = get_tts_engine(force_mode=EngineMode.MOCK)
-    test_text = "Thử nghiệm thách thức ép ghi đè bộ nhớ đệm toàn cục."
+    test_text = "Thử nghiệm thách thức ép ghi đè âm thanh trực tiếp."
     voice = "Trúc Ly"
-    cache_key = compute_utterance_cache_key(test_text, voice)
-    cache_root = get_cache_root()
-    cache_file = cache_root / f"{cache_key}.wav"
-
-    # Clean existing cache if any
-    if cache_file.exists():
-        cache_file.unlink()
 
     temp_out1 = Path(tempfile.gettempdir()) / f"c1_test1_{time.time_ns()}.wav"
     dur1, key1, cached1 = engine.synthesize_utterance(test_text, voice, temp_out1, force=False)
-    assert not cached1, "First synthesis must be a cache miss"
-    assert cache_file.exists(), f"Cache file {cache_file} was not created!"
-    
-    mtime_initial = cache_file.stat().st_mtime_ns
-    bytes_initial = cache_file.read_bytes()
-    print(f"1. Initial synthesis: cache created, size={len(bytes_initial)} bytes, mtime_ns={mtime_initial}")
+    assert not cached1, "Synthesis must report was_cached=False"
+    assert temp_out1.exists(), f"Output file {temp_out1} was not created!"
+    assert key1 == "", "Key must be empty string in zero-cache architecture"
+    hdr1 = unpack_wav_header(temp_out1)
+    assert hdr1["riff"] == "RIFF"
+    assert hdr1["sample_rate"] == 48000
+    print(f"1. Initial direct synthesis: size={len(temp_out1.read_bytes())} bytes, sample_rate={hdr1['sample_rate']}")
 
-    # Subtest 1A: Non-force synthesis -> cache hit, mtime MUST remain identical
-    time.sleep(0.05)
-    temp_out2 = Path(tempfile.gettempdir()) / f"c1_test2_{time.time_ns()}.wav"
-    dur2, key2, cached2 = engine.synthesize_utterance(test_text, voice, temp_out2, force=False)
-    assert cached2 is True, "Second synthesis without force MUST be cached"
-    mtime_cached = cache_file.stat().st_mtime_ns
-    assert mtime_cached == mtime_initial, (
-        f"Cache file was touched during cache hit! old={mtime_initial}, new={mtime_cached}"
-    )
-    print(f"2. Non-force retrieval: cache hit verified, mtime untouched ({mtime_cached})")
-
-    # Subtest 1B: Force synthesis -> MUST overwrite cache file, mtime MUST change
-    time.sleep(0.05)
-    temp_out3 = Path(tempfile.gettempdir()) / f"c1_test3_{time.time_ns()}.wav"
-    dur3, key3, cached3 = engine.synthesize_utterance(test_text, voice, temp_out3, force=True)
-    assert cached3 is False, "Synthesis with force=True must report cached=False"
-    mtime_forced = cache_file.stat().st_mtime_ns
-    assert mtime_forced > mtime_initial, (
-        f"CRITICAL DEFECT: Cache file {cache_file} was NOT overwritten on force! "
-        f"mtime_initial={mtime_initial}, mtime_forced={mtime_forced}"
-    )
-    print(f"3. Force synthesis: cache file OVERWRITTEN, new mtime_ns={mtime_forced} (> {mtime_initial})")
-
-    # Subtest 1C: Cache corruption recovery on force
-    # Replace cache with dummy bytes
-    cache_file.write_bytes(b"DUMMY_CORRUPTED_CACHE_CONTENT_FOR_CHALLENGE")
-    assert cache_file.read_bytes() == b"DUMMY_CORRUPTED_CACHE_CONTENT_FOR_CHALLENGE"
-    time.sleep(0.05)
-    temp_out4 = Path(tempfile.gettempdir()) / f"c1_test4_{time.time_ns()}.wav"
-    engine.synthesize_utterance(test_text, voice, temp_out4, force=True)
-    bytes_recovered = cache_file.read_bytes()
-    assert bytes_recovered != b"DUMMY_CORRUPTED_CACHE_CONTENT_FOR_CHALLENGE", (
-        "Force synthesis failed to overwrite corrupted cache file!"
-    )
-    hdr = unpack_wav_header(cache_file)
-    assert hdr["riff"] == "RIFF"
-    print("4. Corrupted cache overwrite: successfully replaced dummy content with valid WAV")
-
-    # Subtest 1D: CLI --force cache overwrite test
+    # Subtest 1A: CLI --force direct synthesis and overwrite test
     temp_proj = f"proj_c1_cli_{int(time.time())}"
     init_project_layout(temp_proj, "CLI Test")
     chap_dir = init_chapter_layout(temp_proj, 1)
-    cli_text = "Thoại kiểm tra cờ force qua CLI."
-    cli_key = compute_utterance_cache_key(cli_text, "Trúc Ly")
-    cli_cache_wav = cache_root / f"{cli_key}.wav"
-    if cli_cache_wav.exists():
-        cli_cache_wav.unlink()
+    cli_text = "Thoại kiểm tra cờ force qua CLI không sinh file cache rác."
 
     script = RecapScript(
         schema_version="3.0.0",
@@ -159,25 +110,28 @@ def run_challenge_1_cache_overwrite():
     # Initial CLI run
     code_init = main(["tts", "-p", temp_proj, "-c", "1", "--json"])
     assert code_init == 0, f"Initial CLI tts failed with code {code_init}"
-    assert cli_cache_wav.exists()
-    cli_mtime1 = cli_cache_wav.stat().st_mtime_ns
+    audio_file = chap_dir / "audio" / "clips" / "audio_1_1.wav"
+    assert audio_file.exists()
+    assert not list(chap_dir.glob("**/*.cache_key")), "Must not generate any .cache_key files"
+    cli_mtime1 = audio_file.stat().st_mtime_ns
 
     # Re-run CLI with --force
     time.sleep(0.05)
     code_force = main(["tts", "-p", temp_proj, "-c", "1", "--force", "--json"])
     assert code_force == 0, f"CLI tts --force failed with code {code_force}"
-    cli_mtime2 = cli_cache_wav.stat().st_mtime_ns
-    assert cli_mtime2 > cli_mtime1, (
-        f"CRITICAL DEFECT: CLI tts --force did not update cache mtime! {cli_mtime1} vs {cli_mtime2}"
+    cli_mtime2 = audio_file.stat().st_mtime_ns
+    assert cli_mtime2 >= cli_mtime1, (
+        f"CRITICAL DEFECT: CLI tts --force did not update audio mtime! {cli_mtime1} vs {cli_mtime2}"
     )
-    print(f"5. CLI manga-recap tts --force: cache overwritten in global pool ({cli_mtime2} > {cli_mtime1})")
+    assert not list(chap_dir.glob("**/*.cache_key")), "Must not generate any .cache_key files on force"
+    print(f"2. CLI manga-recap tts --force: audio re-synthesized cleanly ({cli_mtime2} >= {cli_mtime1})")
 
     # Cleanup temp project
     proj_dir = Path("data/projects") / temp_proj
     if proj_dir.exists():
         shutil.rmtree(proj_dir)
 
-    print("CHALLENGE 1 RESULT: PASS (All cache overwrite invariants confirmed)")
+    print("CHALLENGE 1 RESULT: PASS (All direct synthesis invariants confirmed)")
     return True
 
 

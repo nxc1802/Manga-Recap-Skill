@@ -48,12 +48,6 @@ from src.tts.benchmark import (
     TTSBenchmarkRunner,
     generate_mock_wav,
 )
-from src.tts.cache import (
-    compute_utterance_cache_key,
-    get_cache_root,
-    get_cached_audio_path,
-    save_to_cache,
-)
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 from src.tts.engine import (
     EngineMode,
@@ -188,81 +182,73 @@ class TestMasterAudioFormatInvariantsChallenger2:
 # Challenge 2: PR-05 Utterance Caching Invariants
 # ==============================================================================
 
-class TestUtteranceCachingInvariantsChallenger2:
-    """Rigorous challenge of caching: cache hits, misses on modifications, and --force flag bypass."""
+class TestDirectSynthesisInvariantsChallenger2:
+    """Rigorous challenge of direct synthesis: direct output, parameter sensitivity, and --force flag re-synthesis."""
 
-    @pytest.fixture(autouse=True)
-    def setup_cache_env(self, monkeypatch, tmp_path):
-        self.cache_dir = tmp_path / "tts_cache_pool"
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        monkeypatch.setenv("MANGA_RECAP_TTS_CACHE_DIR", str(self.cache_dir))
-
-    def test_identical_inputs_instant_cache_hit(self, tmp_path):
-        """Synthesize same text twice with identical voice and speed -> verify second call is instant cache hit."""
+    def test_direct_synthesis_writes_independent_audio(self, tmp_path):
+        """Direct synthesis produces valid audio directly without cache sidecars."""
         engine = VieNeuEngine(force_mode=EngineMode.MOCK)
         text = "Nhân vật chính phát hiện ra bí mật cổ xưa bị chôn vùi."
         voice = "Trúc Ly"
         speed = 1.0
 
         out1 = tmp_path / "run1.wav"
-        t0 = time.perf_counter()
         dur1, key1, cached1 = engine.synthesize_utterance(
             text=text, voice=voice, output_path=out1, speed=speed
         )
-        t_cold = time.perf_counter() - t0
         assert not cached1
         assert out1.exists()
+        assert dur1 > 0
+        assert key1 == ""
 
         out2 = tmp_path / "run2.wav"
-        t0 = time.perf_counter()
         dur2, key2, cached2 = engine.synthesize_utterance(
             text=text, voice=voice, output_path=out2, speed=speed
         )
-        t_warm = time.perf_counter() - t0
-        assert cached2 is True, "Second call must report was_cached == True"
-        assert key1 == key2
-        assert dur1 == dur2
-        assert t_warm < t_cold or t_warm < 0.01, f"Cached retrieval must be near-instant, took {t_warm}s"
-        assert out1.read_bytes() == out2.read_bytes()
+        assert not cached2
+        assert out2.exists()
+        assert dur2 > 0
+        # No .cache_key files created
+        assert not list(tmp_path.glob("**/*.cache_key"))
 
-    def test_cache_miss_on_text_voice_or_speed_change(self, tmp_path):
-        """Changing text, voice, or speed must cause a cache miss and fresh synthesis."""
+    def test_direct_synthesis_parameter_variations(self, tmp_path):
+        """Changing text, voice, or speed directly synthesizes distinct WAV files."""
         engine = VieNeuEngine(force_mode=EngineMode.MOCK)
-        base_text = "Lời thoại gốc để kiểm tra tính nhạy của mã băm."
+        base_text = "Lời thoại gốc để kiểm tra tính nhạy của tham số."
         base_voice = "Trúc Ly"
         base_speed = 1.0
 
         out_base = tmp_path / "base.wav"
-        _, key_base, _ = engine.synthesize_utterance(
+        dur_base, _, _ = engine.synthesize_utterance(
             text=base_text, voice=base_voice, output_path=out_base, speed=base_speed
         )
 
         # 1. Change text
         out_text = tmp_path / "diff_text.wav"
-        _, key_text, cached_text = engine.synthesize_utterance(
-            text=base_text + " Thay đổi nội dung.", voice=base_voice, output_path=out_text, speed=base_speed
+        dur_text, _, cached_text = engine.synthesize_utterance(
+            text=base_text + " Thay đổi nội dung mở rộng.", voice=base_voice, output_path=out_text, speed=base_speed
         )
         assert cached_text is False
-        assert key_text != key_base
+        assert dur_text > dur_base
 
         # 2. Change voice
         out_voice = tmp_path / "diff_voice.wav"
-        _, key_voice, cached_voice = engine.synthesize_utterance(
+        dur_voice, _, cached_voice = engine.synthesize_utterance(
             text=base_text, voice="Hải Đăng", output_path=out_voice, speed=base_speed
         )
         assert cached_voice is False
-        assert key_voice != key_base
+        assert out_voice.exists()
 
         # 3. Change speed
         out_speed = tmp_path / "diff_speed.wav"
-        _, key_speed, cached_speed = engine.synthesize_utterance(
-            text=base_text, voice=base_voice, output_path=out_speed, speed=1.2
+        dur_speed, _, cached_speed = engine.synthesize_utterance(
+            text=base_text, voice=base_voice, output_path=out_speed, speed=1.5
         )
         assert cached_speed is False
-        assert key_speed != key_base
+        assert dur_speed < dur_base
 
     def test_cli_tts_force_flag_bypasses_cache(self, tmp_path, monkeypatch):
-        """Tests that manga-recap tts --force bypasses cache and re-synthesizes all segments."""
+        """Tests that manga-recap tts --force re-synthesizes all segments directly without cache sidecars."""
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(data_dir))
@@ -327,6 +313,8 @@ class TestUtteranceCachingInvariantsChallenger2:
         mtime3 = audio_clip3.stat().st_mtime_ns
         # With force=True, file was re-written
         assert mtime3 >= mtime1
+        # Zero .cache_key sidecars exist
+        assert not list(chap_dir.glob("**/*.cache_key"))
 
 
 # ==============================================================================
