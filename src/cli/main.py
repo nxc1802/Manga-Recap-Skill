@@ -133,6 +133,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
     p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
+    p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
     p_ren.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
     p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (for testing/CI)")
     p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")

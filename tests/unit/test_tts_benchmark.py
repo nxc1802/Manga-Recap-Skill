@@ -89,3 +89,25 @@ def test_tts_benchmark_cli_with_mock(tmp_path, capsys):
     assert payload["data"]["total_voices_tested"] == 2
     assert payload["data"]["voices"][0] == "Trúc Ly"
     assert Path(payload["data"]["report_json"]).exists()
+
+
+def test_benchmark_runner_neural_fails_if_neural_unavailable(tmp_path, monkeypatch):
+    import src.tts.engine as eng
+
+    def failing_neural_init(self):
+        raise ImportError("Simulated missing vieneu package")
+
+    monkeypatch.setattr(eng.NeuralTTSBackend, "__init__", failing_neural_init)
+
+    out_dir = tmp_path / "bench_neural_fail"
+    runner = TTSBenchmarkRunner(
+        output_dir=out_dir,
+        voices=["Trúc Ly"],
+        emotions=["neutral"],
+        use_mock=False,
+        copy_to_lab=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
+        runner.run()
+

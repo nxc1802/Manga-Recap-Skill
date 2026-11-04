@@ -250,12 +250,8 @@ class VieNeuEngine:
         return EngineMode.MOCK.value if isinstance(self.backend, MockTTSBackend) else EngineMode.NEURAL.value
 
     def _create_backend(self) -> BaseTTSBackend:
-        if self.force_mode == EngineMode.MOCK or os.getenv("VIENEU_MOCK") == "1":
-            logger.info("VieNeuEngine: Using MockTTSBackend (configured explicitly).")
-            return MockTTSBackend()
-
+        # 1. Explicit Neural enforcement takes absolute precedence over VIENEU_MOCK
         if self.force_mode == EngineMode.NEURAL or os.getenv("VIENEU_FORCE_NEURAL") == "1":
-            # Strict mode: must succeed or raise, zero silent fallback!
             try:
                 return NeuralTTSBackend()
             except Exception as e:
@@ -264,7 +260,12 @@ class VieNeuEngine:
                     "Ensure 'vieneu' is installed and weights are downloaded."
                 ) from e
 
-        # Auto mode: attempt neural first
+        # 2. Explicit Mock enforcement (only if Neural is not strictly forced)
+        if self.force_mode == EngineMode.MOCK or os.getenv("VIENEU_MOCK") == "1":
+            logger.info("VieNeuEngine: Using MockTTSBackend (configured explicitly).")
+            return MockTTSBackend()
+
+        # 3. Auto mode: attempt neural first
         try:
             import vieneu
             return NeuralTTSBackend()

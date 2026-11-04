@@ -24,7 +24,7 @@ import wave
 
 from src.core.logger import logger
 from src.core.storage import atomic_write_json
-from src.tts.engine import get_tts_engine, get_wav_duration_seconds
+from src.tts.engine import EngineMode, get_tts_engine, get_wav_duration_seconds
 from src.tts.voice_profiles import VOICE_BY_NAME, VOICE_CATALOG_25, VoiceProfile
 
 # Standard Reference Prompts for Voice Screening
@@ -270,8 +270,16 @@ class TTSBenchmarkRunner:
         start_time = time.perf_counter()
         benchmark_id = f"bench_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
-        tts_engine = get_tts_engine(force_mode=None if not self.use_mock else None)
-        active_backend = "mock" if self.use_mock else tts_engine.mode
+        if self.use_mock:
+            tts_engine = get_tts_engine(force_mode=EngineMode.MOCK)
+            active_backend = "mock"
+        else:
+            tts_engine = get_tts_engine(force_mode=EngineMode.NEURAL)
+            if tts_engine.mode != EngineMode.NEURAL.value:
+                raise RuntimeError(
+                    f"TTSBenchmarkRunner: Neural backend required when --mock is not specified, but active mode is '{tts_engine.mode}'."
+                )
+            active_backend = "neural"
 
         hardware_info = {
             "platform": platform.platform(),
@@ -478,7 +486,7 @@ class TTSBenchmarkRunner:
                 freq=220.0 + (abs(hash(voice_name)) % 200),
             )
         else:
-            engine = get_tts_engine()
+            engine = get_tts_engine(force_mode=EngineMode.NEURAL)
             dur = engine.synthesize_to_file(
                 text=text,
                 voice_id=voice_name,

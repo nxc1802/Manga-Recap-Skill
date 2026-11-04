@@ -849,14 +849,42 @@ class VideoEngine:
                 clip_frames = max(1, f_end - f_start)
                 exact_clip_dur = clip_frames / float(self.fps)
 
-                clip_p = clips_dir / f"clip_{seg.seq_id}.mp4"
+                clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
+                clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
                 clip_paths.append(clip_p)
 
-                # Skip if already rendered and force is False
-                if clip_p.exists() and clip_p.stat().st_size > 0 and not force:
+                duration_ms = int(round(exact_clip_dur * 1000.0))
+
+                # Compute clip render fingerprint based on quality, resolution, motion, text, audio, and subtitle settings
+                audio_stat = wav_p.stat() if wav_p.exists() else None
+                panel_stat = panel_p.stat() if panel_p.exists() else None
+                current_fingerprint = {
+                    "quality": quality_clean,
+                    "target_width": self.width,
+                    "target_height": self.height,
+                    "fps": self.fps,
+                    "duration_ms": duration_ms,
+                    "narrator_text": seg.narrator_text.strip(),
+                    "camera_motion": seg.camera_motion.value if hasattr(seg.camera_motion, "value") else str(seg.camera_motion),
+                    "burn_subtitles": burn_subtitles,
+                    "allow_animation": allow_animation,
+                    "audio_size": audio_stat.st_size if audio_stat else 0,
+                    "panel_size": panel_stat.st_size if panel_stat else 0,
+                }
+
+                # Skip if already rendered, fingerprint matches, and force is False
+                is_cached = False
+                if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
+                    try:
+                        cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
+                        if cached_meta == current_fingerprint:
+                            is_cached = True
+                    except Exception:
+                        is_cached = False
+
+                if is_cached:
                     continue
 
-                duration_ms = int(round(exact_clip_dur * 1000.0))
                 self.generate_panel_clip(
                     img_path=str(panel_p),
                     audio_path=str(wav_p),
@@ -871,6 +899,11 @@ class VideoEngine:
                     crf=crf,
                     allow_animation=allow_animation,
                 )
+
+                try:
+                    clip_meta_p.write_text(json.dumps(current_fingerprint, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
 
             # 5. Lossless Visual Stream Concatenation
             raw_video_path = video_dir / f"raw_video_{chapter_num}.mp4"
@@ -944,6 +977,13 @@ class VideoEngine:
                     if c.exists():
                         try:
                             c.unlink()
+                            cleaned_count += 1
+                        except Exception:
+                            pass
+                    meta_c = c.with_suffix(".meta.json")
+                    if meta_c.exists():
+                        try:
+                            meta_c.unlink()
                             cleaned_count += 1
                         except Exception:
                             pass

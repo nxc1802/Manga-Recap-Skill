@@ -94,7 +94,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
 
         import json
         from src.core.schemas import VoiceSelectionApproval
-        from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
+        from src.tts.catalog import CATALOG_VOICES, is_valid_voice_id, resolve_voice_id
 
         try:
             raw_sel = json.loads(voice_sel_path.read_text(encoding="utf-8"))
@@ -110,8 +110,13 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                 "A valid reviewer identifier ('reviewer' or 'approved_by') and primary voice are required."
             )
 
-        resolved_v = resolve_voice_id(approval.primary_voice)
-        if resolved_v not in CATALOG_VOICES:
+        if approval.project_slug and approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
+            raise CliValidationError(
+                f"Human Review Gate 1 project mismatch: 'voice_selection.json' is for project '{approval.project_slug}', "
+                f"but current render target is '{project_slug}'."
+            )
+
+        if not is_valid_voice_id(approval.primary_voice):
             raise CliValidationError(
                 f"Human Review Gate 1 invalid: approved voice '{approval.primary_voice}' is not recognized in official catalog."
             )

@@ -451,19 +451,59 @@ class PanelManifest(BaseModel):
 # ==============================================================================
 
 class VoiceSelectionApproval(BaseModel):
-    """Schema for Review Gate 1 voice selection approval."""
+    """
+    Schema for Review Gate 1 voice selection approval.
+    Fully synchronized with Lab UI export and backend validation contract.
+    """
     model_config = ConfigDict(extra="ignore")
 
-    approved_strategy: str = Field(default="single_narrator", description="Approved strategy (single_narrator, dual_voice, multi_voice)")
-    primary_voice: str = Field(..., description="Approved primary narrator voice name")
-    speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Approved narration speed")
-    reviewer: Optional[str] = Field(default=None, description="Human reviewer identifier")
-    approved_by: Optional[str] = Field(default=None, description="Alias for reviewer")
-    approved_at: Optional[str] = Field(default=None, description="ISO timestamp of approval")
-    notes: Optional[str] = Field(default=None, description="Human reviewer notes")
+    schema_version: str = "3.0.0"
+    project_slug: Optional[str] = None
+    voice_strategy: str = Field(default="single_narrator", description="Approved strategy (single_narrator, multi_voice, emotion_aware)")
+    primary_voice: str = Field(..., description="Approved primary narrator voice name from official catalog")
+    speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Approved narration speed (0.5 - 2.0x)")
+    reviewer: str = Field(..., min_length=1, description="Explicit human reviewer or approver identifier")
+    approved_at: str = Field(default_factory=utc_iso_now, description="ISO timestamp of approval")
+    status: str = Field(default="approved", description="Approval status (must be 'approved')")
+    notes: Optional[str] = Field(default=None, description="Human reviewer assessment notes")
+    character_voice_mapping: Dict[str, str] = Field(default_factory=dict)
+    audio_spec: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+
+        # Map strategy aliases
+        if "approved_strategy" in d and "voice_strategy" not in d:
+            d["voice_strategy"] = d["approved_strategy"]
+
+        # Map speed aliases
+        if "default_speed" in d and "speed" not in d:
+            d["speed"] = d["default_speed"]
+
+        # Map reviewer aliases
+        if "approved_by" in d and "reviewer" not in d:
+            d["reviewer"] = d["approved_by"]
+
+        # Map timestamp aliases
+        if "reviewed_at" in d and "approved_at" not in d:
+            d["approved_at"] = d["reviewed_at"]
+
+        # Map notes aliases
+        if "decision_notes" in d and "notes" not in d:
+            d["notes"] = d["decision_notes"]
+
+        # Ensure reviewer is not None or whitespace
+        if not d.get("reviewer") and d.get("approved_by"):
+            d["reviewer"] = d["approved_by"]
+
+        return d
 
     def get_reviewer(self) -> str:
-        return (self.reviewer or self.approved_by or "").strip()
+        return self.reviewer.strip()
 
     def is_approved(self) -> bool:
-        return bool(self.get_reviewer() and self.primary_voice.strip())
+        return bool(self.status.lower().strip() == "approved" and self.get_reviewer() and self.primary_voice.strip())

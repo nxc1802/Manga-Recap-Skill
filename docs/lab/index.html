@@ -527,6 +527,11 @@
         </div>
 
         <div class="form-group">
+          <label>Reviewer Name / Approver Signature:</label>
+          <input type="text" id="gate-reviewer-name" value="Human Reviewer" placeholder="Your name or team ID">
+        </div>
+
+        <div class="form-group">
           <label>Reviewer Decision Notes / Quality Assessment:</label>
           <textarea id="gate-notes" placeholder="e.g. Trúc Ly voice approved for primary storytelling. Warm tone, excellent diacritic clarity and rhythmic cadence."></textarea>
         </div>
@@ -1125,12 +1130,14 @@
       const primaryVoice = document.getElementById('gate-primary-voice').value;
       const speed = parseFloat(document.getElementById('gate-speed').value);
       const notes = document.getElementById('gate-notes').value.trim();
+      const reviewerEl = document.getElementById('gate-reviewer-name');
+      const reviewer = (reviewerEl && reviewerEl.value.trim()) ? reviewerEl.value.trim() : "Human Reviewer";
 
       const configPayload = {
         schema_version: "3.0.0",
         project_slug: projectSlug,
         reviewed_at: new Date().toISOString(),
-        reviewer: "Human Reviewer (Gate 1)",
+        reviewer: reviewer,
         voice_strategy: strategy,
         primary_voice: primaryVoice,
         default_speed: speed,

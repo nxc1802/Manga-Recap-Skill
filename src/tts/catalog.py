@@ -361,6 +361,22 @@ VOICE_ALIASES: Dict[str, str] = {
 }
 
 
+def is_valid_voice_id(name: Optional[str]) -> bool:
+    """Checks whether the given voice name directly matches an official catalog voice or recognized alias."""
+    if not name or not isinstance(name, str):
+        return False
+    cleaned = name.strip()
+    if cleaned in CATALOG_VOICES:
+        return True
+    lower_norm = cleaned.lower().replace("-", "_").replace(" ", "_")
+    if lower_norm in VOICE_ALIASES or cleaned in VOICE_ALIASES:
+        return True
+    for vid in CATALOG_VOICES:
+        if vid.lower() == cleaned.lower():
+            return True
+    return False
+
+
 def resolve_voice_id(name: Optional[str]) -> str:
     """Resolves arbitrary voice string, alias, or legacy name to valid VieNeu voice_id."""
     if not name:

@@ -24,6 +24,7 @@ from src.core.schemas import (
     ScriptSegment,
     StageCheckpoint,
     StageType,
+    VoiceSelectionApproval,
     VoiceStrategy,
 )
 
@@ -176,3 +177,55 @@ class TestPanelManifest:
         )
         assert manifest.total_panels == 1
         assert manifest.panels[0].aspect_ratio == 2.0
+
+
+class TestVoiceSelectionApproval:
+    def test_direct_valid_approval(self):
+        approval = VoiceSelectionApproval(
+            project_slug="test_manga",
+            voice_strategy="single_narrator",
+            primary_voice="Trúc Ly",
+            speed=1.1,
+            reviewer="Lead Reviewer",
+            status="approved",
+            notes="Clear diction and balanced emotion",
+        )
+        assert approval.primary_voice == "Trúc Ly"
+        assert approval.speed == 1.1
+        assert approval.get_reviewer() == "Lead Reviewer"
+        assert approval.is_approved() is True
+
+    def test_ui_alias_normalization(self):
+        ui_data = {
+            "project_slug": "test_manga",
+            "approved_strategy": "single_narrator",
+            "primary_voice": "Hải Đăng",
+            "default_speed": 1.15,
+            "approved_by": "Senior Editor",
+            "reviewed_at": "2026-11-04T05:00:00Z",
+            "decision_notes": "Very punchy tone for action chapters",
+            "character_voice_mapping": {"main": "Hải Đăng"},
+            "audio_spec": {"sample_rate": 48000, "channels": 1},
+        }
+        approval = VoiceSelectionApproval.model_validate(ui_data)
+        assert approval.voice_strategy == "single_narrator"
+        assert approval.primary_voice == "Hải Đăng"
+        assert approval.speed == 1.15
+        assert approval.reviewer == "Senior Editor"
+        assert approval.notes == "Very punchy tone for action chapters"
+        assert approval.is_approved() is True
+
+    def test_rejection_or_pending_status(self):
+        pending = VoiceSelectionApproval(
+            primary_voice="Trúc Ly",
+            reviewer="Reviewer A",
+            status="pending",
+        )
+        assert pending.is_approved() is False
+
+    def test_missing_required_fields_raises(self):
+        with pytest.raises(ValidationError):
+            VoiceSelectionApproval.model_validate({"primary_voice": "Trúc Ly"})  # missing reviewer
+        with pytest.raises(ValidationError):
+            VoiceSelectionApproval.model_validate({"reviewer": "Reviewer B"})  # missing primary_voice
+

@@ -72,7 +72,27 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     audio_clips_dir = chap_dir / "audio" / "clips"
     audio_clips_dir.mkdir(parents=True, exist_ok=True)
 
-    default_voice = voice_override or script_obj.default_voice or "Trúc Ly"
+    # Check if voice_selection.json exists to load approved strategy, voice, and speed
+    voice_sel_file = project_dir / "voice_selection.json"
+    if not voice_sel_file.exists():
+        voice_sel_file = chap_dir / "voice_selection.json"
+
+    approved_voice = None
+    approved_speed = None
+    if voice_sel_file.exists():
+        try:
+            import json
+            from src.core.schemas import VoiceSelectionApproval
+            sel_data = json.loads(voice_sel_file.read_text(encoding="utf-8"))
+            appr = VoiceSelectionApproval.model_validate(sel_data)
+            if appr.is_approved():
+                approved_voice = appr.primary_voice
+                approved_speed = appr.speed
+        except Exception:
+            pass
+
+    default_voice = voice_override or approved_voice or script_obj.default_voice or "Trúc Ly"
+    default_speed = speed_override or approved_speed or 1.0
     
     # Resolve requested engine mode
     requested_engine = getattr(args, "engine", "neural")
@@ -94,7 +114,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
 
     for seg in script_obj.segments:
         voice = voice_override or seg.voice_id or default_voice
-        speed = speed_override or 1.0
+        speed = speed_override or default_speed
         seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
 
         dur, checksum, was_cached = engine.synthesize_utterance(

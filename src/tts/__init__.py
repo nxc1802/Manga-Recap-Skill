@@ -16,6 +16,7 @@ from src.tts.catalog import (
     VoiceProfile,
     VoiceRegion,
     get_voice_profile,
+    is_valid_voice_id,
     resolve_voice_id,
 )
 from src.tts.engine import (
@@ -44,5 +45,6 @@ __all__ = [
     "CATALOG_VOICES",
     "VOICE_ALIASES",
     "get_voice_profile",
+    "is_valid_voice_id",
     "resolve_voice_id",
 ]

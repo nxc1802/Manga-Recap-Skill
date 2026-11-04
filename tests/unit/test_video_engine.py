@@ -217,3 +217,60 @@ class TestVideoEngineChapterRender:
         assert "video_path" in response["data"]
         assert Path(response["data"]["video_path"]).exists()
         assert response["data"]["validation"]["valid"] is True
+
+    def test_render_chapter_clip_cache_and_force(self, setup_synthetic_chapter):
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+        engine = VideoEngine()
+
+        # Initial render with keep_temp=True so clips and metadata remain
+        res1 = engine.render_chapter(
+            project_dir=proj_dir,
+            chapter_num="1",
+            quality="preview",
+            keep_temp=True,
+            force=False,
+        )
+        assert res1["validation"]["valid"] is True
+
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        assert clip_p.exists()
+        assert meta_p.exists()
+
+        mtime_initial = clip_p.stat().st_mtime_ns
+
+        # Second render with force=False -> Cache Hit (mtime unchanged)
+        res2 = engine.render_chapter(
+            project_dir=proj_dir,
+            chapter_num="1",
+            quality="preview",
+            keep_temp=True,
+            force=False,
+        )
+        assert res2["validation"]["valid"] is True
+        assert clip_p.stat().st_mtime_ns == mtime_initial
+
+        # Third render with force=True -> Cache Bypassed (clip re-rendered)
+        res3 = engine.render_chapter(
+            project_dir=proj_dir,
+            chapter_num="1",
+            quality="preview",
+            keep_temp=True,
+            force=True,
+        )
+        assert res3["validation"]["valid"] is True
+        assert clip_p.stat().st_mtime_ns != mtime_initial
+
+    def test_render_cli_command_with_force(self, setup_synthetic_chapter, capsys):
+        proj_slug, proj_dir, chap_dir = setup_synthetic_chapter
+
+        code = main(["render", "-p", proj_slug, "-c", "1", "--quality", "preview", "--force", "--json"])
+        assert code == 0
+
+        captured = capsys.readouterr()
+        response = json.loads(captured.out.strip())
+        assert response["status"] == "success"
+        assert response["command"] == "render"
+        assert response["exit_code"] == 0
+        assert response["data"]["validation"]["valid"] is True
+

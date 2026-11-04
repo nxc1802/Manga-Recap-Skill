@@ -75,3 +75,19 @@ def test_vieneu_engine_singleton_and_mock_mode():
 
     engine2 = get_tts_engine()
     assert engine is engine2
+
+
+def test_vieneu_engine_force_neural_precedence_over_mock_env(monkeypatch):
+    monkeypatch.setenv("VIENEU_MOCK", "1")
+    # Even if VIENEU_MOCK=1 is in environment, force_mode=EngineMode.NEURAL MUST attempt neural
+    # and fail loudly rather than silently returning MockTTSBackend.
+    import src.tts.engine as eng
+
+    def failing_neural_init(self):
+        raise ImportError("Simulated missing vieneu package")
+
+    monkeypatch.setattr(eng.NeuralTTSBackend, "__init__", failing_neural_init)
+
+    with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
+        get_tts_engine(force_mode=EngineMode.NEURAL)
+

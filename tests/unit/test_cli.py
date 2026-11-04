@@ -549,3 +549,82 @@ class TestSubcommandImplementations:
             }
             code = main(["render", "-p", "skip_proj", "-c", "1", "--quality", "final", "--skip-review", "--json"])
             assert code == ExitCode.SUCCESS
+
+    def test_render_final_succeeds_with_valid_voice_selection_approval(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render succeeds when approved voice_selection.json is provided."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("approved_proj", "Approved Proj")
+        init_chapter_layout("approved_proj", "1")
+
+        proj_dir = tmp_path / "data" / "projects" / "approved_proj"
+        chap_dir = proj_dir / "chapters" / "1"
+        script_data = {
+            "project_slug": "approved_proj",
+            "chapter_number": "1",
+            "title": "Approved Chapter",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "narrator_text": "Sample text",
+                    "duration": 2.0,
+                }
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        approval_data = {
+            "project_slug": "approved_proj",
+            "approved_strategy": "single_narrator",
+            "primary_voice": "Trúc Ly",
+            "default_speed": 1.0,
+            "approved_by": "Senior Editor",
+            "status": "approved",
+        }
+        (proj_dir / "voice_selection.json").write_text(json.dumps(approval_data), encoding="utf-8")
+
+        with patch("src.cli.render_cmd.VideoEngine") as mock_engine:
+            mock_inst = mock_engine.return_value
+            mock_inst.render_chapter.return_value = {
+                "video_path": str(chap_dir / "video" / "test.mp4"),
+                "subtitle_path": str(chap_dir / "subtitles" / "test.srt"),
+            }
+            code = main(["render", "-p", "approved_proj", "-c", "1", "--quality", "final", "--json"])
+            assert code == ExitCode.SUCCESS
+
+    def test_render_final_fails_with_invalid_catalog_voice(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render fails when voice_selection.json specifies an unknown voice."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("bad_voice_proj", "Bad Voice Proj")
+        init_chapter_layout("bad_voice_proj", "1")
+
+        proj_dir = tmp_path / "data" / "projects" / "bad_voice_proj"
+        chap_dir = proj_dir / "chapters" / "1"
+        script_data = {
+            "project_slug": "bad_voice_proj",
+            "chapter_number": "1",
+            "title": "Bad Voice Project",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "narrator_text": "Sample text",
+                    "duration": 2.0,
+                }
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        bad_approval = {
+            "project_slug": "bad_voice_proj",
+            "primary_voice": "Unknown_Fake_Voice_99",
+            "reviewer": "Reviewer X",
+            "status": "approved",
+        }
+        (proj_dir / "voice_selection.json").write_text(json.dumps(bad_approval), encoding="utf-8")
+
+        code = main(["render", "-p", "bad_voice_proj", "-c", "1", "--quality", "final", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        captured = capsys.readouterr()
+        assert "not recognized in official catalog" in captured.out
+
