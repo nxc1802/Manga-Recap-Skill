@@ -450,6 +450,65 @@ class TestSubcommandImplementations:
         assert data3["segments_synthesized"] == 2
         assert data3["segments_cached"] == 0
 
+    def test_tts_uses_approved_voice_and_character_mapping(self, tmp_path, capsys, monkeypatch):
+        """Verifies that tts subcommand adopts primary voice, speed, and character mappings from approved voice_selection.json."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("voice_strat_proj", "Voice Strategy Project")
+        init_chapter_layout("voice_strat_proj", "1")
+
+        proj_dir = tmp_path / "data" / "projects" / "voice_strat_proj"
+        chap_dir = proj_dir / "chapters" / "1"
+
+        script_data = {
+            "project_slug": "voice_strat_proj",
+            "chapter_number": "1",
+            "title": "Strategy Ep 1",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "character": "Protagonist",
+                    "narrator_text": "Ta nhất định phải chiến thắng!",
+                    "duration": 2.0,
+                },
+                {
+                    "seq_id": "02",
+                    "panel_ids": ["panel_02.jpg"],
+                    "narrator_text": "Trận chiến tiếp tục diễn ra vô cùng ác liệt.",
+                    "duration": 2.0,
+                },
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        approval_data = {
+            "project_slug": "voice_strat_proj",
+            "primary_voice": "Mai Anh",
+            "default_speed": 1.15,
+            "approved_by": "Narrator Director",
+            "status": "approved",
+            "character_voice_mapping": {
+                "Protagonist": "Thiện Minh",
+            },
+        }
+        (proj_dir / "voice_selection.json").write_text(json.dumps(approval_data), encoding="utf-8")
+
+        code = main(["tts", "-p", "voice_strat_proj", "-c", "1", "--mock", "--json"])
+        assert code == ExitCode.SUCCESS
+
+        captured = capsys.readouterr()
+        res = json.loads(captured.out)
+        assert res["status"] == "success"
+        assert res["data"]["segments_synthesized"] + res["data"]["segments_cached"] == 2
+
+        # Check updated script.json recording exact voices used
+        saved_script = json.loads((chap_dir / "script.json").read_text(encoding="utf-8"))
+        # First segment (Protagonist) uses character mapping Thiện Minh
+        assert saved_script["segments"][0]["voice_id"] == "Thiện Minh"
+        # Second segment uses approved primary voice Mai Anh
+        assert saved_script["segments"][1]["voice_id"] == "Mai Anh"
+
+
     def test_tts_benchmark_command(self, tmp_path, capsys):
         """Verifies tts_benchmark runs with isolated output dir and does not clobber docs/lab/."""
         bench_out = tmp_path / "cli_bench_out"

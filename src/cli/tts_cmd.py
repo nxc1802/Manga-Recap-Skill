@@ -79,6 +79,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
 
     approved_voice = None
     approved_speed = None
+    approved_character_mapping: Dict[str, str] = {}
     if voice_sel_file.exists():
         try:
             import json
@@ -88,6 +89,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             if appr.is_approved():
                 approved_voice = appr.primary_voice
                 approved_speed = appr.speed
+                approved_character_mapping = appr.character_voice_mapping or {}
         except Exception:
             pass
 
@@ -113,7 +115,8 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     total_duration = 0.0
 
     for seg in script_obj.segments:
-        voice = voice_override or seg.voice_id or default_voice
+        char_mapped_voice = approved_character_mapping.get(seg.character) if seg.character else None
+        voice = voice_override or seg.voice_id or char_mapped_voice or default_voice
         speed = speed_override or default_speed
         seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
 
@@ -128,6 +131,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             force=force_resynth,
         )
 
+        seg.voice_id = voice
         seg.audio_path = str(seg_audio_file.relative_to(chap_dir))
         seg.duration = dur
         seg.checksum = checksum
@@ -160,5 +164,6 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
         "segments_cached": cached_count,
         "total_duration_seconds": round(total_duration, 3),
         "default_voice": default_voice,
+        "artifacts": artifacts,
         "engine_mode": engine.mode,
     }

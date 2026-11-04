@@ -237,6 +237,10 @@ class TestVideoEngineChapterRender:
         assert clip_p.exists()
         assert meta_p.exists()
 
+        meta_data = json.loads(meta_p.read_text(encoding="utf-8"))
+        assert "audio_hash" in meta_data and len(meta_data["audio_hash"]) == 64
+        assert "script_hash" in meta_data and len(meta_data["script_hash"]) == 64
+
         mtime_initial = clip_p.stat().st_mtime_ns
 
         # Second render with force=False -> Cache Hit (mtime unchanged)

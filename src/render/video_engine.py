@@ -6,6 +6,7 @@ lossless concatenation, dynamic BGM ducking, and ffprobe stream validation.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -858,6 +859,14 @@ class VideoEngine:
                 # Compute clip render fingerprint based on quality, resolution, motion, text, audio, and subtitle settings
                 audio_stat = wav_p.stat() if wav_p.exists() else None
                 panel_stat = panel_p.stat() if panel_p.exists() else None
+                audio_hash = ""
+                if wav_p.exists():
+                    try:
+                        audio_hash = hashlib.sha256(wav_p.read_bytes()).hexdigest()
+                    except Exception:
+                        pass
+                script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
+
                 current_fingerprint = {
                     "quality": quality_clean,
                     "target_width": self.width,
@@ -865,6 +874,8 @@ class VideoEngine:
                     "fps": self.fps,
                     "duration_ms": duration_ms,
                     "narrator_text": seg.narrator_text.strip(),
+                    "script_hash": script_hash,
+                    "audio_hash": audio_hash,
                     "camera_motion": seg.camera_motion.value if hasattr(seg.camera_motion, "value") else str(seg.camera_motion),
                     "burn_subtitles": burn_subtitles,
                     "allow_animation": allow_animation,

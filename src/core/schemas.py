@@ -279,7 +279,7 @@ class ScriptSegment(BaseModel):
     character: Optional[str] = Field(default=None, description="Character speaker name or None for narrator")
     emotion: Optional[str] = Field(default="neutral", description="Emotion intent: neutral, dramatic, sad, excited, etc.")
     emotion_cue: Optional[str] = Field(default=None, description="Audible cue: [cười], [thở dài], [hắng giọng], or None")
-    voice_id: str = Field(default="Trúc Ly", description="VieNeu preset voice ID")
+    voice_id: Optional[str] = Field(default=None, description="VieNeu preset voice ID")
     camera_motion: CameraMotionType = Field(default=CameraMotionType.STATIC)
     focus_box: Optional[FocusBox] = None
     duration: Optional[float] = Field(default=None, ge=0.0, description="Measured waveform duration in seconds")
