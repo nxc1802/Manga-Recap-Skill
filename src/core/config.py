@@ -34,6 +34,8 @@ class AppConfig(BaseModel):
     # Local Storage Root
     storage_dir: Path = Field(default=Path("data/projects"))
     data_dir: Path = Field(default=Path("data"))
+    output_dir: Path = Field(default=Path("output"))
+    workspace_dir: Path = Field(default=Path("workspace"))
     
     # From config.yaml
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
@@ -42,6 +44,13 @@ class AppConfig(BaseModel):
     crawler: CrawlerConfig = Field(default_factory=CrawlerConfig)
     general_story_context: str = ""
     initial_scripts: dict[str, dict[int, str]] = Field(default_factory=dict)
+
+def get_output_dir(project_slug: str) -> Path:
+    """Returns standardized export path resolution helper: output/<project_slug>."""
+    env_output = os.getenv("MANGA_RECAP_OUTPUT_DIR")
+    if env_output:
+        return Path(env_output) / project_slug
+    return Path("output") / project_slug
 
 def load_config(config_path: str = "config.yaml") -> AppConfig:
     path = Path(config_path)

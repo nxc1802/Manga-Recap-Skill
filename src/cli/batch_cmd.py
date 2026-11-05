@@ -23,10 +23,14 @@ from src.core.schemas import (
 )
 from src.core.storage import (
     StorageFileNotFoundError,
+    format_chapter_filename,
     get_chapter_dir,
+    get_output_dir,
     get_project_dir,
     load_chapter_metadata,
     read_json,
+    safe_cleanup_chapter_intermediates,
+    stage_chapter_export,
     update_checkpoint,
 )
 from src.core.utils import get_project_data_dir
@@ -158,7 +162,8 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
     force = getattr(args, "force", False)
     skip_preview = getattr(args, "skip_preview", True)
     allow_placeholders = getattr(args, "allow_placeholders", False)
-    output_dir = Path("output") / project_slug
+    cleanup = getattr(args, "cleanup", False)
+    output_dir = get_output_dir(project_slug)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     from src.cli.render_cmd import handle_render
@@ -189,11 +194,21 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                         vid_path = chap_dir / "video" / f"chapter_{chap_num}_final.mp4"
                         if not vid_path.exists():
                             vid_path = chap_dir / "video" / "final.mp4"
+                        srt_path = chap_dir / "subtitles" / f"chapter_{chap_num}.srt"
+                        if not srt_path.exists():
+                            srt_path = chap_dir / "subtitles" / "final.srt"
+
+                        # Ensure staged export exists in output/<project_slug>/
                         staged_vid = output_dir / f"chapter_{chap_num}.mp4"
+                        staged_padded = output_dir / format_chapter_filename(chap_num, ext="mp4", padded=True)
+                        if vid_path.exists() and (not staged_vid.exists() or not staged_padded.exists()):
+                            stage_chapter_export(project_slug, chap_num, video_path=vid_path, subtitle_path=srt_path)
+
+                        target_vid = staged_padded if staged_padded.exists() else (staged_vid if staged_vid.exists() else vid_path)
                         chapter_results.append({
                             "chapter": str(chap_num),
                             "status": "cached",
-                            "video_path": str(staged_vid if staged_vid.exists() else vid_path),
+                            "video_path": str(target_vid),
                             "duration_seconds": round(time.monotonic() - t0, 3),
                         })
                         continue
@@ -257,19 +272,24 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 approved=True,
                 allow_placeholders=allow_placeholders,
                 keep_temp=getattr(args, "keep_temp", False),
+                cleanup=cleanup,
             )
             render_res = handle_render(render_args)
 
             # Operational Stage 5: Export (Stage MP4 and SRT to output/)
             src_video = Path(render_res["video_path"]) if render_res.get("video_path") else (chap_dir / "video" / f"chapter_{chap_num}_final.mp4")
-            dest_video = output_dir / f"chapter_{chap_num}.mp4"
-            if src_video.exists():
-                shutil.copy2(src_video, dest_video)
-
             src_srt = Path(render_res["subtitle_path"]) if render_res.get("subtitle_path") else (chap_dir / "subtitles" / f"chapter_{chap_num}.srt")
-            dest_srt = output_dir / f"chapter_{chap_num}.srt"
-            if src_srt and Path(src_srt).exists():
-                shutil.copy2(src_srt, dest_srt)
+
+            staged = stage_chapter_export(
+                project_slug=project_slug,
+                chapter_num=chap_num,
+                video_path=src_video,
+                subtitle_path=src_srt,
+            )
+            dest_video = staged.get("video_padded") or staged.get("video") or (output_dir / f"chapter_{chap_num}.mp4")
+
+            if cleanup and src_video.exists():
+                safe_cleanup_chapter_intermediates(chap_dir, output_video_path=src_video)
 
             c_meta = load_chapter_metadata(chap_dir)
             exp_cp = c_meta.stages.get(StageType.EXPORT)
@@ -278,7 +298,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     chap_dir,
                     StageType.EXPORT,
                     CheckpointStatus.COMPLETED,
-                    artifacts=[f"output/{project_slug}/chapter_{chap_num}.mp4"]
+                    artifacts=[f"output/{project_slug}/{dest_video.name}"]
                 )
 
             completed_chaps.append(str(chap_num))

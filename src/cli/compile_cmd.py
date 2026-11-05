@@ -6,6 +6,7 @@ Subcommand handler: manga-recap compile
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -15,7 +16,12 @@ from typing import Any, Dict, List
 
 from src.cli.exit_codes import CliValidationError
 from src.core.schemas import CheckpointStatus, PreviewApproval, VoiceSelectionApproval
-from src.core.storage import StorageFileNotFoundError, get_project_dir, read_json
+from src.core.storage import (
+    StorageFileNotFoundError,
+    get_output_dir,
+    get_project_dir,
+    read_json,
+)
 from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
 
 
@@ -212,6 +218,9 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
     compile_list = [chapter_videos[c] for c in sorted_chaps]
 
     # Determine destination
+    out_dir = get_output_dir(project_slug)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     if output_arg:
         output_path = Path(output_arg).resolve()
     else:
@@ -241,8 +250,18 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         if concat_list_path.exists():
             concat_list_path.unlink(missing_ok=True)
 
+    # Automatically stage compiled video into output/<project_slug>/ if written elsewhere
+    default_staged_path = out_dir / f"{project_slug}_full_recap.mp4"
+    if output_path.resolve() != default_staged_path.resolve():
+        try:
+            shutil.copy2(output_path, default_staged_path)
+        except Exception as e:
+            from src.core.logger import logger
+            logger.warning(f"Could not stage compiled video to {default_staged_path}: {e}")
+
     # Extract master WAV audio if requested
     final_audio_path = None
+    default_staged_audio = None
     if extract_audio:
         final_audio_path = project_dir / "audio" / "final.wav"
         final_audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,9 +275,16 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         if not final_audio_path.exists() or final_audio_path.stat().st_size == 0:
             raise RuntimeError(f"Compiled audio is missing or empty: {final_audio_path}")
 
+        default_staged_audio = out_dir / f"{project_slug}_full_recap.wav"
+        if final_audio_path.resolve() != default_staged_audio.resolve():
+            with contextlib.suppress(Exception):
+                shutil.copy2(final_audio_path, default_staged_audio)
+
     return {
         "project_slug": project_slug,
         "compiled_video": str(output_path),
         "compiled_audio": str(final_audio_path) if final_audio_path else None,
+        "export_video_path": str(default_staged_path if default_staged_path.exists() else output_path),
+        "export_audio_path": str(default_staged_audio if (default_staged_audio and default_staged_audio.exists()) else final_audio_path),
         "chapters_compiled": [str(c) for c in sorted_chaps],
     }

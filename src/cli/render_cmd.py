@@ -19,9 +19,12 @@ from src.core.storage import (
     atomic_write_json,
     cleanup_intermediate_files,
     get_chapter_dir,
+    get_output_dir,
     get_project_dir,
     load_chapter_metadata,
     read_json,
+    safe_cleanup_chapter_intermediates,
+    stage_chapter_export,
     update_checkpoint,
 )
 from src.core.utils import (
@@ -45,6 +48,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     quality = getattr(args, "quality", "final")
     suffix = getattr(args, "suffix", "final")
     keep_temp = getattr(args, "keep_temp", False)
+    cleanup = getattr(args, "cleanup", False)
     bgm_path = getattr(args, "bgm", None)
     burn_subs = getattr(args, "burn_subtitles", True)
     allow_animation = getattr(args, "animation", True)
@@ -209,7 +213,8 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         allow_placeholders=allow_placeholders,
     )
 
-    # Completing RENDER completes chapter checkpoint
+    # Completing RENDER completes chapter checkpoint & stages export
+    staged_export: Dict[str, Optional[Path]] = {}
     if quality == "final":
         with contextlib.suppress(Exception):
             with acquire_lock(chap_dir / "chapter.json"):
@@ -218,14 +223,42 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                 chap_meta.updated_at = utc_iso_now()
                 atomic_write_json(chap_dir / "chapter.json", chap_meta)
 
-    # Clean intermediate files if keep_temp is False
+        # Stage final verified MP4 and SRT into standardized output/<project_slug>/
+        staged_export = stage_chapter_export(
+            project_slug=project_slug,
+            chapter_num=chapter_num,
+            video_path=render_result.get("video_path"),
+            subtitle_path=render_result.get("subtitle_path"),
+        )
+        with contextlib.suppress(Exception):
+            export_art = str(staged_export.get("video_padded") or staged_export.get("video") or "")
+            if export_art:
+                update_checkpoint(
+                    chap_dir,
+                    StageType.EXPORT,
+                    CheckpointStatus.COMPLETED,
+                    artifacts=[export_art],
+                )
+
+    safe_cleaned_files = []
+    if cleanup:
+        if render_result.get("video_path") and Path(render_result["video_path"]).exists():
+            safe_cleaned_files = safe_cleanup_chapter_intermediates(
+                chapter_dir=chap_dir,
+                output_video_path=Path(render_result["video_path"]),
+            )
     cleaned_files = cleanup_intermediate_files(chap_dir, keep_temp=keep_temp)
+
+    export_vid = staged_export.get("video_padded") or staged_export.get("video") if staged_export else None
+    export_srt = staged_export.get("subtitle_padded") or staged_export.get("subtitle") if staged_export else None
 
     return {
         "project_slug": project_slug,
         "chapter_number": str(chapter_num),
         "video_path": render_result["video_path"],
         "subtitle_path": render_result.get("subtitle_path"),
+        "export_video_path": str(export_vid) if export_vid else None,
+        "export_subtitle_path": str(export_srt) if export_srt else None,
         "quality": quality,
         "suffix": suffix,
         "resolution": render_result.get("resolution", "1280x720"),
@@ -234,5 +267,5 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         "audio_duration_seconds": render_result.get("audio_duration_seconds", 0.0),
         "duration_diff_seconds": render_result.get("duration_diff_seconds", 0.0),
         "validation": render_result.get("validation", {}),
-        "cleaned_files_count": len(cleaned_files) + render_result.get("cleaned_files_count", 0),
+        "cleaned_files_count": len(cleaned_files) + len(safe_cleaned_files) + render_result.get("cleaned_files_count", 0),
     }

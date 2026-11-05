@@ -18,6 +18,7 @@ from enum import Enum
 import hashlib
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -101,6 +102,123 @@ def get_project_dir(project_slug: str) -> Path:
 def get_chapter_dir(project_slug: str, chapter_num: Union[str, int]) -> Path:
     """Returns data/projects/<project_slug>/chapters/<chapter_num>."""
     return get_project_dir(project_slug) / "chapters" / str(chapter_num)
+
+
+def get_output_dir(project_slug: str) -> Path:
+    """Returns standardized export directory: output/<project_slug>."""
+    env_output = os.getenv("MANGA_RECAP_OUTPUT_DIR")
+    if env_output:
+        return Path(env_output) / project_slug
+    return Path("output") / project_slug
+
+
+def get_workspace_dir(project_slug: str, chapter_num: Optional[Union[str, int]] = None) -> Path:
+    """
+    Returns standardized workspace directory:
+    workspace/<project_slug> or workspace/<project_slug>/chapter_{chapter_num:03d}.
+    """
+    base = Path("workspace") / project_slug
+    if chapter_num is not None:
+        try:
+            c_int = int(str(chapter_num).strip())
+            return base / f"chapter_{c_int:03d}"
+        except (ValueError, TypeError):
+            return base / f"chapter_{chapter_num}"
+    return base
+
+
+def format_chapter_filename(
+    chapter_num: Union[int, str],
+    ext: str = "mp4",
+    padded: bool = True
+) -> str:
+    """
+    Standardizes chapter export file naming:
+    chapter_{chapter_num:03d}.mp4 (or .srt) when padded is True (default),
+    or chapter_{chapter_num}.mp4 when padded is False.
+    Falls back gracefully if chapter_num cannot be cast to int.
+    """
+    clean_ext = ext.lstrip(".")
+    try:
+        c_int = int(str(chapter_num).strip())
+        return f"chapter_{c_int:03d}.{clean_ext}" if padded else f"chapter_{c_int}.{clean_ext}"
+    except (ValueError, TypeError):
+        return f"chapter_{chapter_num}.{clean_ext}"
+
+
+def get_chapter_export_path(
+    project_slug: str,
+    chapter_num: Union[int, str],
+    ext: str = "mp4",
+    padded: bool = True,
+) -> Path:
+    """
+    Returns standardized export path:
+    output/<project_slug>/chapter_{chapter_num:03d}.<ext> (padded=True)
+    or output/<project_slug>/chapter_{chapter_num}.<ext> (padded=False).
+    """
+    return get_output_dir(project_slug) / format_chapter_filename(chapter_num, ext=ext, padded=padded)
+
+
+def stage_chapter_export(
+    project_slug: str,
+    chapter_num: Union[int, str],
+    video_path: Optional[Union[str, Path]] = None,
+    subtitle_path: Optional[Union[str, Path]] = None,
+) -> Dict[str, Optional[Path]]:
+    """
+    Stages/copies verified final MP4 and SRT into standardized output/<project_slug>/ directory.
+    Guarantees that both chapter_{chapter_num:03d}.mp4 and chapter_{chapter_num}.mp4 are available.
+    """
+    out_dir = get_output_dir(project_slug)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    result: Dict[str, Optional[Path]] = {
+        "video_padded": None,
+        "video": None,
+        "subtitle_padded": None,
+        "subtitle": None,
+    }
+
+    if video_path:
+        v_src = Path(video_path).resolve()
+        if v_src.exists() and v_src.is_file():
+            # 1. Padded format (chapter_001.mp4)
+            padded_name = format_chapter_filename(chapter_num, ext="mp4", padded=True)
+            dest_padded = out_dir / padded_name
+            if v_src != dest_padded.resolve():
+                shutil.copy2(v_src, dest_padded)
+            result["video_padded"] = dest_padded
+            result["video"] = dest_padded
+
+            # 2. Unpadded format (chapter_1.mp4) for dual-support
+            unpadded_name = format_chapter_filename(chapter_num, ext="mp4", padded=False)
+            dest_unpadded = out_dir / unpadded_name
+            if dest_unpadded.name != dest_padded.name:
+                if v_src != dest_unpadded.resolve():
+                    shutil.copy2(v_src, dest_unpadded)
+            result["video_unpadded"] = dest_unpadded
+
+    if subtitle_path:
+        s_src = Path(subtitle_path).resolve()
+        if s_src.exists() and s_src.is_file():
+            # 1. Padded format (chapter_001.srt)
+            padded_name = format_chapter_filename(chapter_num, ext="srt", padded=True)
+            dest_padded = out_dir / padded_name
+            if s_src != dest_padded.resolve():
+                shutil.copy2(s_src, dest_padded)
+            result["subtitle_padded"] = dest_padded
+            result["subtitle"] = dest_padded
+
+            # 2. Unpadded format (chapter_1.srt) for dual-support
+            unpadded_name = format_chapter_filename(chapter_num, ext="srt", padded=False)
+            dest_unpadded = out_dir / unpadded_name
+            if dest_unpadded.name != dest_padded.name:
+                if s_src != dest_unpadded.resolve():
+                    shutil.copy2(s_src, dest_unpadded)
+            result["subtitle_unpadded"] = dest_unpadded
+
+    return result
 
 
 def init_project_layout(project_slug: str, title: str) -> Path:
@@ -581,6 +699,118 @@ def cleanup_intermediate_files(chapter_dir: Path, keep_temp: bool = False) -> Li
     return cleaned
 
 
+def safe_cleanup_chapter_intermediates(
+    chapter_dir: Path,
+    output_video_path: Path,
+    min_size_bytes: int = 100000,
+) -> List[str]:
+    """
+    Safely cleans intermediate temporary files (split clips, temp concat files, temp cached frames)
+    ONLY after verifying that output_video_path exists, is a valid file, and has size >= min_size_bytes.
+
+    Safety Guarantees:
+    - If output_video_path is missing, empty, or smaller than min_size_bytes, ABORTS and raises
+      StorageError without deleting any files!
+    - NEVER deletes raw images (in raw/), manifest.json, script.json, or chapter.json.
+    - Preserves metadata, final audio, and final subtitles.
+    - Cleans temporary split clips (*_raw_temp*.mp4, temp_clip_*.mp4, segment_*.mp4 in temp directories),
+      concat files (*concat_list*.txt, .tmp_concat*), and temporary frames.
+
+    Returns the list of unlinked filenames.
+    """
+    chapter_dir = Path(chapter_dir).resolve()
+    if output_video_path is None:
+        raise StorageError("Safe cleanup aborted: output_video_path is None.")
+
+    out_vid = Path(output_video_path).resolve()
+
+    # 1. Output verification check
+    if not out_vid.exists() or not out_vid.is_file():
+        raise StorageError(
+            f"Safe cleanup aborted: output video does not exist or is not a file: {out_vid}"
+        )
+
+    file_size = out_vid.stat().st_size
+    if file_size < min_size_bytes:
+        raise StorageError(
+            f"Safe cleanup aborted: output video {out_vid} size ({file_size} bytes) is below minimum threshold ({min_size_bytes} bytes)."
+        )
+
+    if not chapter_dir.exists():
+        return []
+
+    # 2. Protected filenames and directories
+    PROTECTED_FILENAMES = {
+        "manifest.json",
+        "script.json",
+        "chapter.json",
+        "project.json",
+        "story_summary.md",
+        "characters.json",
+        "voice_selection.json",
+        "preview_approval.json",
+    }
+
+    TEMP_PATTERNS = [
+        "*_raw_temp*.mp4",
+        "*_subs_temp*.srt",
+        "*concat_list*.txt",
+        ".tmp_concat*",
+        "*.tmp",
+    ]
+
+    cleaned: List[str] = []
+    seen = set()
+
+    raw_dir = (chapter_dir / "raw").resolve()
+
+    # First clean files matching known temp patterns across the chapter
+    for pattern in TEMP_PATTERNS:
+        for p in chapter_dir.rglob(pattern):
+            if p in seen or not p.is_file():
+                continue
+            if p.name in PROTECTED_FILENAMES:
+                continue
+            # NEVER delete anything inside raw/
+            try:
+                if p.resolve().is_relative_to(raw_dir):
+                    continue
+            except (ValueError, AttributeError):
+                if "raw" in p.parts:
+                    continue
+            seen.add(p)
+            try:
+                p.unlink(missing_ok=True)
+                cleaned.append(str(p.name))
+            except Exception as e:
+                with contextlib.suppress(Exception):
+                    from src.core.logger import logger
+                    logger.warning(f"Failed to remove temp file {p}: {e}")
+
+    # Also clean temporary split clips and cached frames in video/temp_clips, video/temp, video/frames
+    for temp_sub in ("temp_clips", "temp", "temp_frames", "frames"):
+        temp_dir = chapter_dir / "video" / temp_sub
+        if temp_dir.exists() and temp_dir.is_dir():
+            for p in list(temp_dir.iterdir()):
+                if p in seen or not p.is_file():
+                    continue
+                if p.name in PROTECTED_FILENAMES:
+                    continue
+                seen.add(p)
+                try:
+                    p.unlink(missing_ok=True)
+                    cleaned.append(str(p.name))
+                except Exception as e:
+                    with contextlib.suppress(Exception):
+                        from src.core.logger import logger
+                        logger.warning(f"Failed to remove temp clip {p}: {e}")
+            with contextlib.suppress(Exception):
+                if not any(temp_dir.iterdir()):
+                    temp_dir.rmdir()
+
+    return cleaned
+
+
 def load_chapter_metadata(chapter_dir: Path) -> ChapterMetadata:
     """Loads and validates chapter.json for the given chapter directory or file path."""
     chap_file = chapter_dir if chapter_dir.suffix == ".json" else chapter_dir / "chapter.json"
@@ -637,6 +867,10 @@ class StorageManager:
         return cleanup_intermediate_files(chapter_dir, keep_temp=keep_temp)
 
     @staticmethod
+    def safe_cleanup_chapter_intermediates(chapter_dir: Path, output_video_path: Path, min_size_bytes: int = 100000) -> List[str]:
+        return safe_cleanup_chapter_intermediates(chapter_dir, output_video_path=output_video_path, min_size_bytes=min_size_bytes)
+
+    @staticmethod
     def get_projects_root() -> Path:
         return get_projects_root()
 
@@ -647,6 +881,31 @@ class StorageManager:
     @staticmethod
     def get_chapter_dir(project_slug: str, chapter_num: Union[str, int]) -> Path:
         return get_chapter_dir(project_slug, chapter_num)
+
+    @staticmethod
+    def get_output_dir(project_slug: str) -> Path:
+        return get_output_dir(project_slug)
+
+    @staticmethod
+    def get_workspace_dir(project_slug: str, chapter_num: Optional[Union[str, int]] = None) -> Path:
+        return get_workspace_dir(project_slug, chapter_num)
+
+    @staticmethod
+    def format_chapter_filename(chapter_num: Union[int, str], ext: str = "mp4", padded: bool = True) -> str:
+        return format_chapter_filename(chapter_num, ext=ext, padded=padded)
+
+    @staticmethod
+    def get_chapter_export_path(project_slug: str, chapter_num: Union[int, str], ext: str = "mp4", padded: bool = True) -> Path:
+        return get_chapter_export_path(project_slug, chapter_num, ext=ext, padded=padded)
+
+    @staticmethod
+    def stage_chapter_export(
+        project_slug: str,
+        chapter_num: Union[int, str],
+        video_path: Optional[Union[str, Path]] = None,
+        subtitle_path: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Optional[Path]]:
+        return stage_chapter_export(project_slug, chapter_num, video_path=video_path, subtitle_path=subtitle_path)
 
     @staticmethod
     def init_project_layout(project_slug: str, title: str) -> Path:
@@ -678,4 +937,5 @@ class StorageManager:
     @staticmethod
     def save_manifest(chapter_dir: Path, manifest: Union[PanelManifest, Dict[str, Any]]) -> Path:
         return save_manifest(chapter_dir, manifest)
+
 

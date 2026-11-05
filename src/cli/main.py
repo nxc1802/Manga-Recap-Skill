@@ -139,6 +139,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--skip-preview", action="store_true", help="Skip Review Gate 2 preview requirement and render final 1080p directly")
     p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
+    p_ren.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
 
     # 8. compile
     p_com = subparsers.add_parser("compile", help="Concatenate chapter videos into final recap", parents=[common_parent])
@@ -165,6 +166,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
     p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
     p_bat.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
+    p_bat.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
 
     return parser
 
