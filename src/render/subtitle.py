@@ -175,15 +175,65 @@ class SubtitleGenerator:
 
         return blocks
 
+    def split_text_into_cues(
+        self,
+        text: str,
+        duration_sec: float,
+        start_offset: float = 0.0,
+        start_index: int = 1,
+    ) -> List[SubtitleCue]:
+        """
+        Splits text into readable subtitle cues and apportions speech duration across cues
+        timed to words/syllables and characters.
+        Enforces maximum max_chars_per_line (default 38) characters per line
+        and maximum max_lines_per_block (default 2) lines per cue block.
+        """
+        clean_text = self.sanitize(text)
+        if not clean_text:
+            return []
+
+        chunks = self.chunk_vietnamese_text(clean_text)
+        if not chunks:
+            chunks = [clean_text]
+
+        dur = max(0.01, float(duration_sec or 0.0))
+        # Word counts (syllables in Vietnamese)
+        word_counts = [max(1, len(c.replace("\n", " ").split())) for c in chunks]
+        total_words = sum(word_counts)
+
+        cues: List[SubtitleCue] = []
+        chunk_start_t = start_offset
+        for i, chunk in enumerate(chunks):
+            if total_words > 0 and len(chunks) > 1:
+                chunk_dur = dur * (word_counts[i] / float(total_words))
+                if i == len(chunks) - 1:
+                    chunk_end_t = start_offset + dur  # Clamp precisely to exact end
+                else:
+                    chunk_end_t = min(start_offset + dur, chunk_start_t + chunk_dur)
+            else:
+                chunk_end_t = start_offset + dur
+
+            cues.append(
+                SubtitleCue(
+                    index=start_index + i,
+                    start_seconds=round(chunk_start_t, 3),
+                    end_seconds=round(chunk_end_t, 3),
+                    text=chunk,
+                )
+            )
+            chunk_start_t = chunk_end_t
+
+        return cues
+
     def build_cues_from_segments(
         self,
         segments: List[ScriptSegment],
         inter_segment_pause: float = 0.0,
     ) -> List[SubtitleCue]:
         """
-        Constructs SubtitleCue objects aligned to actual audio durations.
+        Constructs a unified, continuous timeline of SubtitleCue objects aligned to actual audio durations.
         If an utterance splits into multiple blocks, duration is apportioned proportionally
-        to character counts, with the final block clamped to exact utterance end time.
+        to word/syllable counts, with the final block clamped to exact utterance end time.
         """
         cues: List[SubtitleCue] = []
         current_time = 0.0
@@ -201,38 +251,15 @@ class SubtitleGenerator:
                 # Fallback to character-count estimated duration to avoid dropping subtitle cues
                 dur = max(0.5, len(clean_text) * 0.08)
 
-            chunks = self.chunk_vietnamese_text(clean_text)
-            if not chunks:
-                chunks = [clean_text]
-
-            total_chars = sum(len(c.replace("\n", "")) for c in chunks)
-            seg_start_t = current_time
-            seg_end_t = current_time + dur
-
-            chunk_start_t = seg_start_t
-            for i, chunk in enumerate(chunks):
-                if total_chars > 0 and len(chunks) > 1:
-                    chunk_len = len(chunk.replace("\n", ""))
-                    chunk_dur = dur * (chunk_len / float(total_chars))
-                    if i == len(chunks) - 1:
-                        chunk_end_t = seg_end_t  # Clamp precisely to utterance end
-                    else:
-                        chunk_end_t = min(seg_end_t, chunk_start_t + chunk_dur)
-                else:
-                    chunk_end_t = seg_end_t
-
-                cues.append(
-                    SubtitleCue(
-                        index=cue_index,
-                        start_seconds=round(chunk_start_t, 3),
-                        end_seconds=round(chunk_end_t, 3),
-                        text=chunk,
-                    )
-                )
-                cue_index += 1
-                chunk_start_t = chunk_end_t
-
-            current_time = seg_end_t + inter_segment_pause
+            seg_cues = self.split_text_into_cues(
+                text=clean_text,
+                duration_sec=dur,
+                start_offset=current_time,
+                start_index=cue_index,
+            )
+            cues.extend(seg_cues)
+            cue_index += len(seg_cues)
+            current_time += dur + inter_segment_pause
 
         return cues
 

@@ -127,7 +127,8 @@ class TestCameraMotionGenerator:
         )
         assert is_zoompan
         assert "crop=" in filter_str
-        assert "zoompan=z='1.25-(1.25-1.0)*(on/60)" in filter_str or "1.25" in filter_str
+        assert "zoompan=z='1.15-(1.15-1.0)*(on/60)" in filter_str or "1.15" in filter_str
+        assert "1.25" not in filter_str
         assert "d=60" in filter_str
 
     def test_focus_crop_filter(self):

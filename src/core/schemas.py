@@ -60,6 +60,14 @@ class CameraMotionType(str, Enum):
     VERTICAL_SCROLL = "vertical_scroll"
 
 
+class VideoMode(str, Enum):
+    """Video layout modes for Video Engine V2."""
+    AUTO = "auto"
+    PORTRAIT_PADDED = "portrait_padded"
+    LANDSCAPE_FIT = "landscape_fit"
+    PORTRAIT_VERTICAL = "portrait_vertical"
+
+
 class PanelStatus(str, Enum):
     """Classification of segmented panels in manifest."""
     ACTIVE = "active"                   # Standard panel rendered into video

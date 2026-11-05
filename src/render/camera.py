@@ -10,7 +10,7 @@ import math
 from typing import Any, Dict, Optional, Tuple, Union
 
 from src.core.logger import logger
-from src.core.schemas import CameraMotionType, FocusBox
+from src.core.schemas import CameraMotionType, FocusBox, VideoMode
 
 
 class CameraMotionGenerator:
@@ -19,11 +19,12 @@ class CameraMotionGenerator:
     strictly synchronized to measured audio durations with aspect ratio preservation.
     """
 
-    def __init__(self, target_width: int = 1280, target_height: int = 720, fps: int = 30, max_zoom: float = 1.25):
+    def __init__(self, target_width: int = 1280, target_height: int = 720, fps: int = 30, max_zoom: float = 1.15):
         self.target_width = self._ensure_even(target_width)
         self.target_height = self._ensure_even(target_height)
         self.fps = fps
-        self.max_zoom = max_zoom
+        self.max_zoom = min(1.15, float(max_zoom))
+        self.min_crop_scale = 0.45
         self.target_ar = self.target_width / self.target_height
 
     @staticmethod
@@ -154,6 +155,7 @@ class CameraMotionGenerator:
         img_h: int,
         duration_sec: float,
         motion_type: Union[CameraMotionType, str, None] = CameraMotionType.STATIC,
+        video_mode: Optional[Union[VideoMode, str]] = None,
         focus_box: Optional[FocusBox] = None,
         focus_x: Optional[float] = None,
         focus_y: Optional[float] = None,
@@ -171,17 +173,59 @@ class CameraMotionGenerator:
         motion = self.normalize_motion_type(motion_type)
         if not allow_animation:
             motion = CameraMotionType.STATIC
+
+        # Guard against excessive crop on tall continuous webtoon panels (H > 2W)
+        if img_h > 2 * img_w and motion in (
+            CameraMotionType.ZOOM_IN,
+            CameraMotionType.ZOOM_OUT,
+            CameraMotionType.PAN_LEFT,
+            CameraMotionType.PAN_RIGHT,
+        ):
+            logger.info(
+                f"Panel is tall webtoon ({img_w}x{img_h}, H > 2W); diverting {motion.value} to STATIC to prevent content crop."
+            )
+            motion = CameraMotionType.STATIC
+
         fx, fy, scale_ratio = self.calculate_focus_center(focus_box, focus_x, focus_y, crop_scale)
-        ar_in = img_w / img_h
+        ar_in = img_w / float(img_h) if img_h > 0 else 1.0
+
+        # Resolve VideoMode
+        resolved_vmode = video_mode
+        if isinstance(resolved_vmode, str):
+            try:
+                resolved_vmode = VideoMode(resolved_vmode.lower())
+            except ValueError:
+                resolved_vmode = VideoMode.AUTO
+
+        if resolved_vmode is None or resolved_vmode == VideoMode.AUTO:
+            if ar_in >= 1.3:
+                resolved_vmode = VideoMode.LANDSCAPE_FIT
+            else:
+                resolved_vmode = VideoMode.PORTRAIT_PADDED
 
         # ----------------------------------------------------------------------
         # 1. STATIC
         # ----------------------------------------------------------------------
         if motion == CameraMotionType.STATIC:
-            if abs(ar_in - self.target_ar) < 0.05:
-                # Panel is already practically 16:9
+            if abs(ar_in - self.target_ar) < 0.05 and (video_mode is None or video_mode == VideoMode.AUTO or video_mode == "auto"):
+                # Panel is already practically 16:9 and in auto mode
                 return f"scale={self.target_width}:{self.target_height},fps={self.fps}", False
 
+            if resolved_vmode == VideoMode.LANDSCAPE_FIT:
+                filter_str = (
+                    f"scale=w={self.target_width}:h={self.target_height}:force_original_aspect_ratio=decrease,"
+                    f"pad={self.target_width}:{self.target_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}"
+                )
+                return filter_str, False
+
+            if resolved_vmode == VideoMode.PORTRAIT_VERTICAL:
+                filter_str = (
+                    f"scale=-2:{self.target_height},"
+                    f"pad={self.target_width}:{self.target_height}:(ow-iw)/2:(oh-ih)/2:black,fps={self.fps}"
+                )
+                return filter_str, False
+
+            # VideoMode.PORTRAIT_PADDED (default for portrait/square):
             # Dual-layer composite: blurred background + centered aspect-preserved foreground
             filter_str = (
                 f"split=2[bg_in][fg_in];"
@@ -248,7 +292,7 @@ class CameraMotionGenerator:
             pre_crop = f"crop={base_w}:{base_h}:{crop_x}:{crop_y},"
 
             z_min = 1.0
-            z_max = 1.25
+            z_max = round(self.max_zoom, 2)
             if motion == CameraMotionType.ZOOM_IN:
                 z_expr = f"'{z_min}+({z_max}-{z_min})*(on/{N})'"
             else:
@@ -269,8 +313,8 @@ class CameraMotionGenerator:
         # ----------------------------------------------------------------------
         if motion == CameraMotionType.FOCUS_CROP:
             # Scale around focus center preserving 16:9 aspect ratio
-            # Enforce minimum safe scale (0.40) to prevent micro-crops on chat boxes
-            clamped_scale = max(0.40, min(1.0, scale_ratio))
+            # Enforce minimum safe scale (0.45) to prevent micro-crops on chat boxes
+            clamped_scale = max(self.min_crop_scale, min(1.0, scale_ratio))
             if ar_in > self.target_ar:
                 crop_h = self._ensure_even(round(img_h * clamped_scale))
                 crop_w = self._ensure_even(round(crop_h * self.target_ar))

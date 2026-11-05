@@ -31,6 +31,7 @@ from src.core.schemas import (
     RecapScript,
     ScriptSegment,
     StageType,
+    VideoMode,
 )
 from src.core.storage import (
     StorageFileNotFoundError,
@@ -53,7 +54,7 @@ from src.core.utils import (
 )
 from src.render.audio_mixer import AudioMixer
 from src.render.camera import CameraMotionGenerator
-from src.render.subtitle import SubtitleGenerator, sanitize_subtitle_text
+from src.render.subtitle import SubtitleCue, SubtitleGenerator, sanitize_subtitle_text
 from src.render.validator import StreamValidator, VideoValidationError
 from src.tts.engine import get_wav_duration_seconds
 
@@ -68,12 +69,6 @@ def compute_file_sha256(file_path: Union[str, Path], chunk_size: int = 65536) ->
         while chunk := f.read(chunk_size):
             hasher.update(chunk)
     return hasher.hexdigest()
-
-
-class VideoMode(Enum):
-    PORTRAIT_PADDED = "portrait_padded"
-    LANDSCAPE_FIT = "landscape_fit"
-    PORTRAIT_VERTICAL = "portrait_vertical"
 
 
 class VideoEngine:
@@ -115,7 +110,7 @@ class VideoEngine:
 
     def detect_video_mode(self, img_w: int, img_h: int, forced_mode: Optional[str] = None) -> VideoMode:
         """Backward-compatible video mode detection based on image aspect ratio."""
-        if forced_mode and forced_mode in [m.value for m in VideoMode]:
+        if forced_mode and forced_mode != "auto" and forced_mode in [m.value for m in VideoMode]:
             return VideoMode(forced_mode)
 
         aspect = img_w / float(img_h) if img_h > 0 else 1.0
@@ -173,30 +168,48 @@ class VideoEngine:
 
         draw = ImageDraw.Draw(overlay)
         font = self._get_font(scaled_font_size)
-        wrap_width = int(round(48 * (self.width / 1280.0)))
-        lines = textwrap.wrap(clean_text, width=wrap_width)
+        wrap_width = max(20, int(round(38 * (self.width / 1280.0))))
+        raw_lines = clean_text.split("\n")
+        lines = []
+        for rl in raw_lines:
+            sublines = textwrap.wrap(rl, width=wrap_width)
+            lines.extend(sublines if sublines else [rl])
+        if len(lines) > 2:
+            lines = lines[:2]
         if not lines:
             overlay.save(out_p, "PNG")
             return str(out_p)
 
         line_height = scaled_font_size + 10
-        rect_height = len(lines) * line_height + 24
-        rect_top = self.height - rect_height - 35
-
-        draw.rounded_rectangle(
-            [40, rect_top, self.width - 40, self.height - 30],
-            radius=12,
-            fill=(0, 0, 0, 185),
-        )
-
-        y = rect_top + 12
+        line_widths = []
         for line in lines:
             try:
                 left, top_b, right, bottom = font.getbbox(line)
-                text_width = right - left
+                line_widths.append(right - left)
             except Exception:
-                text_width = len(line) * (font_size // 2)
+                line_widths.append(len(line) * (scaled_font_size // 2))
 
+        max_text_w = max(line_widths) if line_widths else 0
+        pad_x = 24
+        pad_y = 12
+        box_w = min(self.width - 40, max_text_w + pad_x * 2)
+        total_text_h = len(lines) * line_height
+        box_h = total_text_h + pad_y * 2
+
+        box_x0 = (self.width - box_w) // 2
+        box_y0 = self.height - box_h - 35
+        box_x1 = box_x0 + box_w
+        box_y1 = box_y0 + box_h
+
+        draw.rounded_rectangle(
+            [box_x0, box_y0, box_x1, box_y1],
+            radius=10,
+            fill=(0, 0, 0, 185),
+        )
+
+        y = box_y0 + pad_y
+        for i, line in enumerate(lines):
+            text_width = line_widths[i]
             x = (self.width - text_width) // 2
             # Text shadow
             draw.text((x + 1, y + 1), line, font=font, fill=(0, 0, 0, 240))
@@ -357,9 +370,11 @@ class VideoEngine:
         crf: str = "20",
         allow_animation: bool = True,
         audio_offset_sec: float = 0.0,
+        subtitle_cues: Optional[List[SubtitleCue]] = None,
     ) -> bool:
         """
-        Renders an individual panel video clip with camera motion and audio synchronization.
+        Renders an individual panel video clip with camera motion, audio synchronization,
+        and timed subtitle cue transitions.
         """
         out_p = Path(output_path).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
@@ -408,156 +423,79 @@ class VideoEngine:
             img_h=img_h,
             duration_sec=duration_sec,
             motion_type=motion_mode,
+            video_mode=video_mode,
             focus_box=focus_box,
             allow_animation=allow_animation,
         )
 
-        temp_overlay_png = None
-        try:
-            if burn_subtitles and panel_text and sanitize_subtitle_text(panel_text):
-                temp_overlay_png = out_p.parent / f"{out_p.stem}_sub.png"
-                self.create_subtitle_overlay_png(panel_text, temp_overlay_png)
+        active_cues: List[Tuple[SubtitleCue, float, float]] = []
+        if burn_subtitles:
+            cues_to_evaluate = subtitle_cues
+            if not cues_to_evaluate and panel_text and sanitize_subtitle_text(panel_text):
+                cues_to_evaluate = self.subtitle_generator.split_text_into_cues(
+                    panel_text, duration_sec=duration_sec, start_offset=0.0
+                )
 
-                if is_zoompan:
-                    filter_complex = (
-                        f"[0:v]{cam_filter}[cam];"
-                        f"[1:v]scale={self.width}:{self.height}[sub];"
-                        f"[cam][sub]overlay=0:0[outv]"
+            if cues_to_evaluate:
+                for cue in cues_to_evaluate:
+                    t_start = max(0.0, cue.start_seconds - audio_offset_sec)
+                    t_end = min(duration_sec, cue.end_seconds - audio_offset_sec)
+                    if t_start < t_end - 0.05:  # At least 50ms active window
+                        active_cues.append((cue, t_start, t_end))
+
+        temp_overlay_files: List[Path] = []
+        try:
+            subtitle_input_args: List[str] = []
+            if burn_subtitles and active_cues:
+                for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
+                    temp_overlay_png = out_p.parent / f"{out_p.stem}_sub_{idx_c}.png"
+                    self.create_subtitle_overlay_png(cue.text, temp_overlay_png)
+                    temp_overlay_files.append(temp_overlay_png)
+                    subtitle_input_args.extend(["-loop", "1", "-i", str(temp_overlay_png)])
+
+            img_input_args = ["-i", str(img_p)] if is_zoompan else ["-loop", "1", "-i", str(img_p)]
+
+            if active_cues:
+                filter_parts = [f"[0:v]{cam_filter}[v_0]"]
+                for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
+                    in_label = f"v_{idx_c}"
+                    out_label = f"v_{idx_c+1}" if idx_c < len(active_cues) - 1 else "outv"
+                    sub_idx = 2 + idx_c
+                    filter_parts.append(
+                        f"[{in_label}][{sub_idx}:v]overlay=0:0:enable='between(t,{t_s:.3f},{t_e:.3f})'[{out_label}]"
                     )
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        str(img_p),
-                        "-loop",
-                        "1",
-                        "-i",
-                        str(temp_overlay_png),
-                        *audio_input_args,
-                        "-filter_complex",
-                        filter_complex,
-                        "-map",
-                        "[outv]",
-                        "-map",
-                        "2:a",
-                        "-t",
-                        f"{duration_sec:.4f}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        preset,
-                        "-crf",
-                        crf,
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-c:a",
-                        "aac",
-                        "-r",
-                        str(self.fps),
-                        str(out_p),
-                    ]
-                else:
-                    filter_complex = (
-                        f"[0:v]{cam_filter}[cam];"
-                        f"[2:v]scale={self.width}:{self.height}[sub];"
-                        f"[cam][sub]overlay=0:0[outv]"
-                    )
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-loop",
-                        "1",
-                        "-i",
-                        str(img_p),
-                        *audio_input_args,
-                        "-loop",
-                        "1",
-                        "-i",
-                        str(temp_overlay_png),
-                        "-filter_complex",
-                        filter_complex,
-                        "-map",
-                        "[outv]",
-                        "-map",
-                        "1:a",
-                        "-t",
-                        f"{duration_sec:.4f}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        preset,
-                        "-crf",
-                        crf,
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-c:a",
-                        "aac",
-                        "-r",
-                        str(self.fps),
-                        str(out_p),
-                    ]
+                filter_complex = ";".join(filter_parts)
             else:
-                # No burned subtitles
-                if is_zoompan:
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-i",
-                        str(img_p),
-                        *audio_input_args,
-                        "-filter_complex",
-                        f"[0:v]{cam_filter}[outv]",
-                        "-map",
-                        "[outv]",
-                        "-map",
-                        "1:a",
-                        "-t",
-                        f"{duration_sec:.4f}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        preset,
-                        "-crf",
-                        crf,
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-c:a",
-                        "aac",
-                        "-r",
-                        str(self.fps),
-                        str(out_p),
-                    ]
-                else:
-                    cmd = [
-                        "ffmpeg",
-                        "-y",
-                        "-loop",
-                        "1",
-                        "-i",
-                        str(img_p),
-                        *audio_input_args,
-                        "-filter_complex",
-                        f"[0:v]{cam_filter}[outv]",
-                        "-map",
-                        "[outv]",
-                        "-map",
-                        "1:a",
-                        "-t",
-                        f"{duration_sec:.4f}",
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        preset,
-                        "-crf",
-                        crf,
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-c:a",
-                        "aac",
-                        "-r",
-                        str(self.fps),
-                        str(out_p),
-                    ]
+                filter_complex = f"[0:v]{cam_filter}[outv]"
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                *img_input_args,
+                *audio_input_args,
+                *subtitle_input_args,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[outv]",
+                "-map",
+                "1:a",
+                "-t",
+                f"{duration_sec:.4f}",
+                "-c:v",
+                "libx264",
+                "-preset",
+                preset,
+                "-crf",
+                crf,
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-r",
+                str(self.fps),
+                str(out_p),
+            ]
 
             run_ffmpeg(cmd, description=f"Render panel clip {seq}")
             return out_p.exists() and out_p.stat().st_size > 0
@@ -565,11 +503,12 @@ class VideoEngine:
             logger.error(f"Error rendering clip {output_path}: {e}")
             return False
         finally:
-            if temp_overlay_png and temp_overlay_png.exists():
-                try:
-                    temp_overlay_png.unlink()
-                except Exception:
-                    pass
+            for tmp_f in temp_overlay_files:
+                if tmp_f.exists():
+                    try:
+                        tmp_f.unlink()
+                    except Exception:
+                        pass
 
     def concatenate_clips(self, clip_paths: List[str], output_path: str) -> bool:
         """Losslessly concatenates video clips using the FFmpeg concat demuxer."""
@@ -986,6 +925,11 @@ class VideoEngine:
                 r_frames = f_total % n_panels
 
                 audio_offset = 0.0
+                seg_cues = self.subtitle_generator.split_text_into_cues(
+                    text=seg.narrator_text,
+                    duration_sec=seg_dur,
+                    start_offset=0.0,
+                )
 
                 for k, panel_p in enumerate(panel_paths):
                     f_k = f_base + (1 if k < r_frames else 0)
@@ -1055,7 +999,7 @@ class VideoEngine:
 
                         if isinstance(video_mode, str) and video_mode != "auto":
                             resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
-                        elif isinstance(video_mode, VideoMode):
+                        elif isinstance(video_mode, VideoMode) and video_mode != VideoMode.AUTO:
                             resolved_mode = video_mode
                         else:
                             try:
@@ -1080,6 +1024,7 @@ class VideoEngine:
                             crf=crf,
                             allow_animation=allow_animation,
                             audio_offset_sec=audio_offset,
+                            subtitle_cues=seg_cues,
                         )
 
                         if not render_ok:
