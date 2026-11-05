@@ -10,7 +10,7 @@ load_dotenv()
 
 class OrchestratorConfig(BaseModel):
     video_mode: str = "auto"
-    render_pan_mode: str = "dynamic"
+    render_pan_mode: str = "static"
     ffmpeg_max_concurrent: int = 4
     max_panels: Optional[int] = None
     language: str = "vi"
@@ -28,7 +28,7 @@ class CrawlerConfig(BaseModel):
 
 class TTSConfig(BaseModel):
     speed: float = 1.0
-    voice: str = "Trúc Ly"
+    voice: str = "Ngọc Huyền"
 
 class AppConfig(BaseModel):
     # Local Storage Root

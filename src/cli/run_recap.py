@@ -33,7 +33,7 @@ async def main():
         config.orchestrator.language = args.lang
 
     # Fallback configs
-    voice = args.voice or (config.tts.voice if config else "Trúc Ly")
+    voice = args.voice or (config.tts.voice if config else "Ngọc Huyền")
     speed = args.speed or (config.tts.speed if config else 1.0)
     burn_subtitles = not args.no_subs
 

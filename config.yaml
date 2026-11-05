@@ -3,16 +3,17 @@
 # Cấu hình xử lý & Dựng video
 orchestrator:
   video_mode: "auto"          # Chế độ khung hình: auto, portrait_padded, landscape_fit, portrait_vertical
-  render_pan_mode: "dynamic"  # Chế độ panning cho video: dynamic (xoay vòng linh hoạt), horizontal (ngang), vertical (dọc), zoom (phóng to), static (tĩnh)
+  render_pan_mode: "static"   # Chế độ camera mặc định: static (tĩnh nghệ thuật, không rung giật), dynamic, zoom, vertical, horizontal
   ffmpeg_max_concurrent: 4    # Số luồng render video clip song song
   # max_panels: 40           # Giới hạn số lượng panel tải và xử lý (dành cho test)
 
-# Giới hạn độ dài kịch bản cho mỗi khung hình (tính theo số ký tự tham khảo cho Agent)
+# Cấu hình độ dài kịch bản khuyến nghị cho Agent trong Prompt (50-250 ký tự/câu thoại)
+# Lưu ý: 50-250 là khoảng khuyến nghị tối ưu nhịp thở cho TTS (4-12 giây), KHÔNG phải là giới hạn bắt buộc cứng
 script_limits:
-  min_length: 50              # Độ dài văn bản tối thiểu mỗi khung hình
-  max_length: 250             # Độ dài văn bản tối đa mỗi khung hình
+  min_length: 50              # Độ dài văn bản khuyến nghị tối thiểu mỗi câu/panel
+  max_length: 250             # Độ dài văn bản khuyến nghị tối đa mỗi câu/panel
 
 # Cấu hình giọng đọc thuyết minh VieNeu-TTS v3 Turbo
 tts:
-  speed: 1.0                  # Tốc độ đọc (1.0 là mặc định, > 1.0 đọc nhanh hơn, < 1.0 đọc chậm hơn)
-  voice: "Trúc Ly"            # Giọng đọc VieNeu preset: Trúc Ly (Nữ Bắc mặc định), Hải Đăng (Nam), Thiền Tâm Đức, v.v.
+  speed: 1.0                  # Tốc độ đọc: 1.0 (chuẩn)
+  voice: "Ngọc Huyền"         # Giọng đọc mặc định: "Ngọc Huyền" (Nữ Bắc thanh lịch, tự nhiên, biểu cảm cao)

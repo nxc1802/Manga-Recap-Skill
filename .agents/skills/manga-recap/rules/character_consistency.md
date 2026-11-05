@@ -20,13 +20,16 @@ In `characters.json`, record stable visual traits under `core_features`:
 - **Costume / Armor**: Current attire and distinctive accessories (e.g., "Hắc y trường bào viền vàng, bội kiếm Thanh Vân").
 - When a new panel appears, cross-reference visual features against `characters.json` to confirm identity before attributing dialogue or actions.
 
-## 3. Voice Profile Mapping
+## 3. Voice Profile Mapping & Single Narrator Lồng Thoại
 
-Assign appropriate VieNeu preset voices to each character based on gender, age, and personality:
+Theo kiến trúc chuẩn hóa **`single_narrator`**, một giọng đọc duy nhất (Mặc định: **`Ngọc Huyền`**, hoặc tùy chọn `Trúc Ly`) đảm nhận toàn bộ việc dẫn chuyện kiêm lồng thoại cho tất cả các nhân vật qua ngữ điệu và đại từ xưng hô. Việc theo dõi hồ sơ nhân vật trong `characters.json` đóng vai trò cốt lõi để:
+- Duy trì chuẩn xác tôn ti trật tự xưng hô tiếng Việt (Sư phụ / Đồ nhi, Huynh / Đệ, Lão gia chủ / Vãn bối).
+- Bảo đảm tính nhất quán ngoại hình, vũ khí và thần thái qua từng khung tranh.
 
 | Character Archetype | Gender | Suggested VieNeu Preset | Characteristics |
 |---------------------|--------|-------------------------|-----------------|
-| Primary Narrator | Female | `Trúc Ly` (Default) | Warm, expressive, versatile pacing |
+| Primary Narrator | Female | `Ngọc Huyền` (Mặc định) | Thanh lịch, tự nhiên, biểu cảm cao, ngữ điệu dẫn truyện cuốn hút |
+| Alternative Narrator | Female | `Trúc Ly` | Warm, expressive, versatile pacing |
 | Protagonist (Young Male) | Male | `Hải Đăng` | Energetic, resolute, youthful heroic tone |
 | Veteran / Elder / Master | Male | `Thiền Tâm Đức` | Grave, authoritative, archaic dignity |
 | Mentor / Strategist | Male | `Thiện Minh` | Deep, calm, measured |

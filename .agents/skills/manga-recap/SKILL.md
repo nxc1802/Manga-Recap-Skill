@@ -58,20 +58,20 @@ The pipeline operates across 5 streamlined operational stages:
 ### Stage 0: Series Configuration Gate (Configured ONCE per Series)
 Before launching any pipeline execution, the Agent **MUST** ask the user or explicitly confirm all video configurations:
 1. **Chapter & Source URL**: Chapter number and source URL (webtoon/manga reader link).
-2. **Giọng đọc (Voice ID)**: Selected from 25 VieNeu-TTS local presets:
-   - `Trúc Ly` (Nữ miền Bắc, truyền cảm, tự nhiên — Mặc định)
+2. **Giọng đọc (Voice ID)**: Selected from VieNeu-TTS local presets:
+   - `Ngọc Huyền` (Nữ miền Bắc, thanh lịch, tự nhiên, biểu cảm cao — Mặc định)
+   - `Trúc Ly` (Nữ miền Bắc, truyền cảm, ấm áp)
    - `Hải Đăng` (Nam miền Nam, dõng dạc, hành động)
    - `Thiền Tâm Đức` (Nam miền Bắc, trầm ấm, cổ phong kiếm hiệp)
    - `Thiện Minh` (Nam miền Bắc, hào sảng, kịch tính)
    - `Mai Anh` (Nữ miền Bắc, trẻ trung, tươi sáng)
-   - `Thùy Dung` (Nữ miền Bắc, dịu dàng, nhẹ nhàng)
    - `Quang Sơn` (Nam miền Trung, sắc bén, phản diện)
-3. **Tốc độ đọc (Speed)**: `0.9x`, `1.0x` (chuẩn), `1.1x` (nhanh vừa), `1.2x`.
+3. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
 4. **Gắn phụ đề (Burn Subtitles)**: `Có` (`--burn-subtitles`, mặc định) hoặc `Không` (`--no-burn-subtitles`).
 5. **Hiệu ứng Animation (Camera Motion)**:
-   - `Có` (`--animation`, mặc định): Chuyển động zoom/pan nhẹ bám theo hành động nhân vật.
-   - `Không` (`--no-animation`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật, tránh hoàn toàn rung lắc và phóng to.
-6. **Chất lượng Video**: `preview` (720p) hoặc `final` (1080p).
+   - `Không` (`--no-animation`, mặc định: `render_pan_mode: static`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật 16:9, tránh hoàn toàn rung lắc và phóng to méo hình.
+   - `Có` (`--animation`): Chuyển động zoom/pan nhẹ bám theo hành động nhân vật.
+6. **Chất lượng Video**: `final` (1080p, mặc định) hoặc `preview` (720p).
 7. **Nhạc nền BGM**: File nhạc nền nếu có, âm lượng BGM (`bgm_volume: 0.15`), voice volume (`1.0`).
 
 All approved settings are saved into `data/projects/<slug>/project.json`.
@@ -100,19 +100,17 @@ Before scripting any dialogue or narration:
 2. Read `data/projects/<project_slug>/story_summary.md`. Review world-building rules and prior chapter events.
 3. If new characters appear in the panels, register them in `characters.json` following `.agents/skills/manga-recap/rules/character_consistency.md`.
 
-### Stage 4: 5-Panel Sliding Window Vision & Recap Scripting
-Process the chapter panels in batches of **5 panels with a 2-panel lookahead overlap** (stride 3) to guarantee narrative flow and action continuity:
-1. Load contact sheet grid or individual panel images for window panels `[N, N+1, N+2, N+3, N+4]`.
-2. Perform visual OCR on speech bubbles and observe panel actions.
-3. Script Vietnamese narration for commit panels `[N, N+1, N+2]`, keeping panels `[N+3, N+4]` as lookahead context.
-4. Advance the sliding window by 3 panels (stride 3): the next batch begins at index `N+3`, spanning `[N+3, N+4, N+5, N+6, N+7]`.
-5. Mathematical Sliding Window Partitioning (for any $P \in [1, 20]$ panels):
-   - For batch $k = 0, 1, \dots, \lceil P / 3 \rceil - 1$:
-     - Commit range: $[3k, \min(3k+3, P))$
-     - Lookahead context: $[3k, \min(3k+5, P))$
-     - Every panel $p \in [0, P)$ is committed to narration exactly once (100% panel coverage with zero duplicate panels and zero omissions).
-6. Checkpoint results incrementally into `script.json` after every batch of recap scripting.
-7. Strictly apply rules from:
+### Stage 4: 1-Panel Storytelling & Direct Dialogue Scripting
+Chuyển đổi hoàn toàn từ "Tóm tắt (Summarize)" sang **"Kể chuyện & Lồng thoại (Storytelling & Direct Dialogue)"**:
+1. **Nguyên tắc 1 Panel $\leftrightarrow$ 1 Segment**: Mặc định mỗi panel tranh hoặc mỗi lượt thoại là 1 `ScriptSegment` độc lập. Điều này đảm bảo mỗi panel lưu lại trên màn hình từ **4 đến 8 giây** tự nhiên, giúp người xem kịp nhìn tranh và đọc phụ đề (chống tua nhanh).
+2. **Cấu trúc 4 thành phần khuyến nghị cho 1 Panel đầy đủ**:
+   - `[Bối cảnh / Trạng ngữ]`: Thời gian, không gian, địa điểm hoặc biến chuyển ngoại cảnh.
+   - `[Chủ thể & Thần sắc]`: Miêu tả nhân vật, trang phục, ánh mắt, khí chất.
+   - `[Hành động & Đòn thế]`: Động tác thể chất, biến chuyển khí tức, cảm xúc nội tâm.
+   - `[Lời thoại trực tiếp]`: Đọc nguyên văn lời nói trong bóng thoại (dịch chuẩn tiếng Việt, xưng hô tôn ti trật tự).
+3. **Độ dài khuyến nghị (Script Length Guidance)**: Khoảng **50–250 ký tự** cho mỗi segment (khoảng 3–12 giây phát âm). Đây là gợi ý trong Prompt để cân đối nhịp thở cho TTS, không phải là điều kiện validate lỗi cứng.
+4. Checkpoint results incrementally into `script.json` after scripting.
+5. Strictly apply rules from:
    - `.agents/skills/manga-recap/rules/narrative_recap.md`
    - `.agents/skills/manga-recap/rules/vision_ocr.md`
    - `.agents/skills/manga-recap/rules/character_consistency.md`
@@ -122,7 +120,7 @@ Validate `script.json` against enterprise Pydantic schemas before running audio 
 ```bash
 manga-recap validate --project <project_slug> --chapter <chapter_num> --json
 ```
-- Confirms: all sequence IDs are unique, referenced panel IDs exist, narrator texts meet length constraints (50–250 chars), camera motions are valid enum values, and focus boxes lie within normalized `[0.0, 1.0]` coordinates.
+- Confirms: all sequence IDs are unique, referenced panel IDs exist in manifest, and focus boxes lie within normalized `[0.0, 1.0]` coordinates.
 
 ### Stage 6: Local VieNeu-TTS Audio Generation
 Synthesize 48 kHz uncompressed WAV utterances using the local VieNeu-TTS v3 Turbo engine:
@@ -132,14 +130,10 @@ manga-recap tts --project <project_slug> --chapter <chapter_num> [--force] --jso
 - Generated utterances are written directly to `audio/clips/audio_<chapter>_<seq_id>.wav` via crash-safe atomic replacement, with exact measured waveform durations and actual SHA-256 file checksums recorded into `script.json`.
 - Resumability: By default, re-running TTS resumes without re-synthesizing segments that already possess valid, verified audio matching the current voice. Pass `--force` to re-synthesize all chapter segments.
 
-### Stage 7: Human Review Gate 1 (Voice & Emotion Strategy)
-Prior to full video rendering, present synthesized voice samples to the human user at Review Gate 1:
-1. Direct the user to the local listening interface or review `data/benchmarks/vieneu_v3_turbo/review/index.html`.
-2. Confirm the narration strategy:
-   - **Strategy A (Single Narrator)**: One voice throughout (e.g. `Trúc Ly`).
-   - **Strategy B (Narrator + Characters)**: Main narrator + specific voice profiles for key characters.
-   - **Strategy C (Emotion-Aware Narrator)**: Single narrator with punctuation tuning and audible cues (`[cười]`, `[thở dài]`, `[hắng giọng]`).
-3. Record human approval into `data/projects/<project_slug>/voice_selection.json` before proceeding.
+### Stage 7: Human Review Gate 1 (Voice Strategy)
+Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (Một giọng đọc thống nhất — Mặc định: `Ngọc Huyền`), tùy chọn hỗ trợ thẻ cảm xúc `emotion_aware` (`[cười]`, `[thở dài]`, `[hắng giọng]`):
+1. Direct the user to listen to voice samples or review `data/benchmarks/vieneu_v3_turbo/review/index.html`.
+2. Record human approval into `data/projects/<project_slug>/voice_selection.json` once per series.
 
 ### Stage 8: Cinematic Video Render
 Render preview or final video clips with dynamic FFmpeg filterchains:

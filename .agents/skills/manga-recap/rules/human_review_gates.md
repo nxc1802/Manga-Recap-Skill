@@ -5,13 +5,13 @@ Diễn ra **ngay khi khởi tạo project/series** trước khi thực thi bất
 ### Mục tiêu:
 Cấu hình một lần duy nhất cho toàn bộ Series vào `data/projects/<project_slug>/project.json`:
 1. **Chapter & URL**: Số chapter khởi điểm và link bộ truyện.
-2. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Trúc Ly` - Nữ miền Bắc truyền cảm, `Hải Đăng` - Nam miền Nam, `Thiền Tâm Đức` - Nam miền Bắc trầm cổ phong, `Thiện Minh` - Nam miền Bắc hào sảng, `Mai Anh` - Nữ miền Bắc tươi trẻ, v.v.).
-3. **Tốc độ đọc (Speed)**: `0.9x`, `1.0x` (chuẩn), `1.1x`, `1.2x`.
-4. **Phụ đề (Burn Subtitles)**: `Có` (`true`) hoặc `Không` (`false`).
+2. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Ngọc Huyền` - Nữ miền Bắc thanh lịch, tự nhiên, biểu cảm cao; hoặc `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, v.v.).
+3. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
+4. **Phụ đề (Burn Subtitles)**: `Có` (`true`, mặc định) hoặc `Không` (`false`).
 5. **Hiệu ứng Animation (Camera Motion)**:
-   - `Có` (`true`): Hiệu ứng zoom/pan nhẹ bám theo nhân vật.
-   - `Không` (`false`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật, tránh rung lắc và phóng to quá mức.
-6. **Chất lượng Video**: `preview` (720p) hoặc `final` (1080p).
+   - `Không` (`false`, mặc định: `render_pan_mode: static`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật 16:9, tránh rung lắc, vỡ hình và phóng to quá mức.
+   - `Có` (`true`, `render_pan_mode: dynamic`): Hiệu ứng zoom/pan nhẹ bám theo nhân vật.
+6. **Chất lượng Video**: `preview` (720p) hoặc `final` (1080p, mặc định).
 7. **BGM (Nhạc nền)**: File nhạc nền và âm lượng nếu có.
 
 **Quy tắc kế thừa (Inheritance Rule)**: Mọi chapter tiếp theo trong cùng series sẽ **tự động kế thừa** các thông số trên từ `project.json`. Agent và CLI **tuyệt đối không hỏi lại** người dùng cho các chapter sau.
@@ -24,19 +24,16 @@ Diễn ra **sau** khi thử giọng / audition và **trước** khi render video
 
 ### Objectives
 1. Verify synthesized audio quality, pronunciation of character names, and cadence.
-2. Obtain explicit human approval for the Narration Strategy:
-   - **Strategy A (Single Narrator)**: Unified narration across all segments.
-   - **Strategy B (Narrator + Characters)**: Main narrator + character-specific voices.
-   - **Strategy C (Emotion-Aware Narrator)**: Narrator with fine-tuned punctuation and cue tags.
+2. Xác nhận Narration Strategy: Duy nhất **`single_narrator`** (Một giọng đọc thống nhất kể chuyện kiêm lồng thoại cho tất cả nhân vật), hỗ trợ tùy chọn `emotion_aware` (chèn thẻ cảm xúc `[cười]`, `[thở dài]`).
 3. User approval is recorded in `data/projects/<project_slug>/voice_selection.json` at the **project root level**:
    ```json
    {
      "approved_strategy": "single_narrator",
-     "primary_voice": "Trúc Ly",
+     "primary_voice": "Ngọc Huyền",
      "speed": 1.0,
      "reviewer": "user",
-     "approved_at": "2026-11-03T14:30:00Z",
-     "notes": "Voice approved for entire series."
+     "approved_at": "2026-11-06T04:00:00Z",
+     "notes": "Voice Ngọc Huyền approved as single narrator for entire series."
    }
    ```
 4. **Series Inheritance**: All chapters in the project automatically inherit this single approval.

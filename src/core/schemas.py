@@ -118,9 +118,9 @@ class CharacterGender(str, Enum):
 
 class VoiceStrategy(str, Enum):
     """Narration and voice assignment strategy."""
-    SINGLE_NARRATOR = "single_narrator"               # Strategy A: One voice throughout
-    NARRATOR_AND_CHARACTERS = "narrator_and_characters"# Strategy B: Narrator + Character voices
-    EMOTION_AWARE = "emotion_aware"                   # Strategy C: Emotion-tuned narrator cues
+    SINGLE_NARRATOR = "single_narrator"               # Strategy: Unified single narrator (standard)
+    EMOTION_AWARE = "emotion_aware"                   # Strategy (Optional): Single narrator with emotion cues ([cười], [thở dài])
+    NARRATOR_AND_CHARACTERS = "narrator_and_characters"# Backward-compatible alias (maps to single_narrator)
 
 
 # ==============================================================================
@@ -215,13 +215,14 @@ class RenderSettings(BaseModel):
     preset: str = "medium"
     burn_subtitles: bool = True
     video_mode: str = "auto"
+    render_pan_mode: str = "static"
 
 
 class AudioSettings(BaseModel):
     """Project-level audio synthesis defaults."""
     model_config = ConfigDict(extra="ignore")
 
-    default_voice: str = "Trúc Ly"
+    default_voice: str = "Ngọc Huyền"
     default_speed: float = Field(default=1.0, gt=0.2, le=3.0)
     sample_rate: int = Field(default=48000, description="Master uncompressed audio sample rate (Hz)")
     bgm_path: Optional[str] = None
@@ -361,7 +362,7 @@ class RecapScript(BaseModel):
     chapter_number: str
     title: str
     voice_strategy: VoiceStrategy = VoiceStrategy.SINGLE_NARRATOR
-    default_voice: str = "Trúc Ly"
+    default_voice: str = "Ngọc Huyền"
     segments: List[ScriptSegment] = Field(default_factory=list)
     total_duration_seconds: float = Field(default=0.0, ge=0.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)

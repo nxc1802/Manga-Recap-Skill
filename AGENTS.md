@@ -126,12 +126,12 @@ manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 ## 5. Coding Agent Behavioral Rules
 
 1. **Series-Level User Configuration Gate (Stage 0)**: Configure video settings (Resolution, Video Mode, Burn Subtitles, Frame Animation, BGM) once per series in `project.json`. Chapters automatically inherit these settings without repetitive re-prompting.
-2. **Subject-Centric Framing & Chat Box Avoidance**: Never set the frame focal center on speech bubbles / chat boxes. Always focus on character eyes, facial expressions, or physical action. Enforce safe crop scale ($\ge 0.45$) and clamp Ken Burns zoom factor ($\le 1.15\times$) to prevent over-zooming. For tall continuous panels ($H > 2W$), prefer `static` dual-layer mode with blurred wings or `vertical_scroll`. If the user disables animation (`--no-animation`), render all frames in `static` mode.
+2. **Subject-Centric Framing, Static Default & Chat Box Avoidance**: Never set the frame focal center on speech bubbles / chat boxes. Always focus on character eyes, facial expressions, or physical action. Enforce safe crop scale ($\ge 0.45$) and clamp Ken Burns zoom factor ($\le 1.15\times$). Default camera mode is `static` with cinematic blurred background wings.
 3. **Look Before Scripting**: Never write narration from filenames (`panel_001.jpg`) or guesswork. Inspect contact sheets (`contact_sheets/sheet_*.jpg`) directly.
-4. **5-Panel Sliding Window**: Script in batches of 5 panels with 2 panels of overlap to guarantee narrative coherence.
+4. **Storytelling & Direct Dialogue (1 Panel $\leftrightarrow$ 1 Segment)**: Transition from third-person summaries to immersive storytelling with direct character dialogue. Default to 1 panel per segment (holding 4–8s) applying the recommended 4-part structure: [Bối cảnh] + [Chủ thể/Thần sắc] + [Hành động/Đòn thế] + [Lời thoại trực tiếp]. 50–250 chars is a recommended prompt guideline for natural pacing, not a strict validator.
 5. **No Hallucination**: If text in a speech bubble is unreadable, watermarked, or cut off, or if an action is ambiguous, mark `status: "needs_review"` and flag with `[CAN_XAC_MINH: <lý_do>]`. Never fabricate lore.
 6. **Consolidated Review Gates**:
-   - Approve Gate 1 (voice strategy) once per series in `voice_selection.json`; chapters inherit approval automatically.
+   - Approve Gate 1 (voice strategy: `single_narrator`, default voice: `Ngọc Huyền`) once per series in `voice_selection.json`; chapters inherit approval automatically.
    - Gate 2 (preview verification) is optional for manual inspection and automatically bypassed in batch runs via `--skip-preview`.
 7. **Atomic Checkpointing**: Update `script.json` after every scripting batch so progress is never lost.
 

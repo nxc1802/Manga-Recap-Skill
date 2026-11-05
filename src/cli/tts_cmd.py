@@ -59,7 +59,7 @@ def resolve_segment_voice(
     if seg.voice_id and seg.voice_source != "tts":
         return seg.voice_id, "manual"
 
-    return default_voice or "Trúc Ly", "default"
+    return default_voice or "Ngọc Huyền", "default"
 
 
 def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
@@ -132,7 +132,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             except Exception:
                 pass
 
-        default_voice = voice_override or approved_voice or script_obj.default_voice or "Trúc Ly"
+        default_voice = voice_override or approved_voice or script_obj.default_voice or "Ngọc Huyền"
         default_speed = speed_override or approved_speed or 1.0
         
         # Resolve requested engine mode
