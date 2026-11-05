@@ -670,8 +670,8 @@ class TestSubcommandImplementations:
         captured = capsys.readouterr()
         assert "Human Review Gate 1" in captured.out
 
-    def test_render_final_passes_with_skip_review(self, tmp_path, capsys, monkeypatch):
-        """Verifies that final render can bypass human review gate when --skip-review is passed."""
+    def test_render_final_passes_with_approved_flag(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render succeeds when --approved is passed."""
         monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         init_project_layout("skip_proj", "Skip Proj")
         init_chapter_layout("skip_proj", "1")
@@ -698,11 +698,37 @@ class TestSubcommandImplementations:
                 "video_path": str(chap_dir / "video" / "test.mp4"),
                 "subtitle_path": str(chap_dir / "subtitles" / "test.srt"),
             }
-            code = main(["render", "-p", "skip_proj", "-c", "1", "--quality", "final", "--skip-review", "--json"])
+            code = main(["render", "-p", "skip_proj", "-c", "1", "--quality", "final", "--approved", "--json"])
             assert code == ExitCode.SUCCESS
 
+    def test_render_final_rejects_skip_review_bypass(self, tmp_path, capsys, monkeypatch):
+        """Verifies that final render fails when only --skip-review is passed without approval."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        init_project_layout("skip_reject_proj", "Skip Reject Proj")
+        init_chapter_layout("skip_reject_proj", "1")
+
+        chap_dir = tmp_path / "data" / "projects" / "skip_reject_proj" / "chapters" / "1"
+        script_data = {
+            "project_slug": "skip_reject_proj",
+            "chapter_number": "1",
+            "segments": [
+                {
+                    "seq_id": "01",
+                    "panel_ids": ["panel_01.jpg"],
+                    "narrator_text": "Sample text",
+                    "duration": 2.0,
+                }
+            ],
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        code = main(["render", "-p", "skip_reject_proj", "-c", "1", "--quality", "final", "--skip-review", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        captured = capsys.readouterr()
+        assert "Human Review Gate" in captured.out
+
     def test_render_final_succeeds_with_valid_voice_selection_approval(self, tmp_path, capsys, monkeypatch):
-        """Verifies that final render succeeds when approved voice_selection.json is provided."""
+        """Verifies that final render succeeds when approved voice_selection.json and preview are provided."""
         monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         init_project_layout("approved_proj", "Approved Proj")
         init_chapter_layout("approved_proj", "1")
@@ -733,6 +759,17 @@ class TestSubcommandImplementations:
             "status": "approved",
         }
         (proj_dir / "voice_selection.json").write_text(json.dumps(approval_data), encoding="utf-8")
+
+        # Provide Gate 2 Preview Video and Preview Approval
+        (chap_dir / "video").mkdir(parents=True, exist_ok=True)
+        (chap_dir / "video" / "preview.mp4").write_bytes(b"dummy preview mp4")
+        preview_approval_data = {
+            "project_slug": "approved_proj",
+            "chapter_number": "1",
+            "reviewer": "Senior Editor",
+            "status": "approved",
+        }
+        (proj_dir / "preview_approval.json").write_text(json.dumps(preview_approval_data), encoding="utf-8")
 
         with patch("src.cli.render_cmd.VideoEngine") as mock_engine:
             mock_inst = mock_engine.return_value

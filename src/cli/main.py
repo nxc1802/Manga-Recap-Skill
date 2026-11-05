@@ -129,13 +129,14 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_ren.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality")
     p_ren.add_argument("--bgm", default=None, help="BGM audio file path")
-    p_ren.add_argument("--video-mode", default="auto", help="Video mode")
+    p_ren.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
     p_ren.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
     p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
     p_ren.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
-    p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (for testing/CI)")
+    p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (deprecated for final render)")
+    p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
 
     # 8. compile
@@ -143,6 +144,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_com.add_argument("-p", "--project", required=True, help="Project slug")
     p_com.add_argument("--chapters", default=None, help="Comma-separated chapter numbers")
     p_com.add_argument("-o", "--output", default=None, help="Output final video path")
+    p_com.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_com.add_argument("--extract-audio", action=argparse.BooleanOptionalAction, default=True, help="Extract master WAV")
 
     return parser

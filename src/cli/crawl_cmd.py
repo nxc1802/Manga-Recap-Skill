@@ -9,7 +9,7 @@ import argparse
 import os
 import shutil
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from src.cli.exit_codes import CliValidationError
 from src.core.schemas import CheckpointStatus, StageType
@@ -49,7 +49,9 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
     if import_dir:
         import_path = Path(import_dir).resolve()
         if not import_path.exists():
-            raise CliValidationError(f"Import directory does not exist: {import_path}")
+            err_msg = f"Import directory does not exist: {import_path}"
+            update_checkpoint(chap_dir, StageType.CRAWL, CheckpointStatus.FAILED, error=err_msg)
+            raise CliValidationError(err_msg)
 
         valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
         files = sorted([f for f in import_path.iterdir() if f.suffix.lower() in valid_exts])
@@ -71,11 +73,27 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
                 crawler_service.crawl_raw_pages(url, raw_dir, max_panels=max_panels)
             )
             imported_files.extend(downloaded)
-        except Exception:
-            # For robust fallback if network is offline during tests, check if raw_dir already populated
-            pass
+        except Exception as e:
+            err_msg = str(e)
+            update_checkpoint(
+                chap_dir,
+                StageType.CRAWL,
+                CheckpointStatus.FAILED,
+                error=err_msg,
+            )
+            raise CliValidationError(f"Crawl failed: {err_msg}") from e
 
     raw_count = len([f for f in raw_dir.glob("*") if f.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}])
+
+    if raw_count == 0:
+        err_msg = "No raw images found"
+        update_checkpoint(
+            chap_dir,
+            StageType.CRAWL,
+            CheckpointStatus.FAILED,
+            error=err_msg,
+        )
+        raise CliValidationError(f"Crawl failed: {err_msg}")
 
     update_checkpoint(
         chap_dir,

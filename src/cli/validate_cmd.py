@@ -16,19 +16,25 @@ from src.cli.exit_codes import CliValidationError
 from src.core.schemas import (
     CharacterDictionary,
     ChapterMetadata,
+    CheckpointStatus,
     PanelManifest,
+    PanelStatus,
     ProjectConfig,
     RecapScript,
+    StageType,
 )
 from src.core.storage import (
     StorageCorruptError,
     StorageFileNotFoundError,
+    calculate_sha256,
     get_chapter_dir,
     get_project_dir,
     read_json,
+    update_checkpoint,
     verify_checksum,
 )
 from src.core.utils import get_project_data_dir
+from src.tts.engine import get_wav_duration_seconds
 
 
 def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
@@ -136,6 +142,8 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
         # manifest.json & physical panels
         manifest_path = chap_dir / "manifest.json"
         manifest_panel_ids: set[str] = set()
+        canonical_manifest_pids: set[str] = set()
+        panel_lookup: Dict[str, str] = {}
         if manifest_path.exists():
             try:
                 m_data = read_json(manifest_path)
@@ -145,13 +153,24 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                 # Verify physical presence of panel images
                 panels_dir = chap_dir / "panels"
                 for panel in manifest_obj.panels:
+                    p_status = getattr(panel, "status", None)
+                    is_active = p_status not in {"skip", PanelStatus.SKIP} if p_status else True
+                    if is_active:
+                        canonical_manifest_pids.add(panel.panel_id)
+
+                    panel_lookup[panel.panel_id] = panel.panel_id
                     manifest_panel_ids.add(panel.panel_id)
                     if getattr(panel, "filename", None):
                         manifest_panel_ids.add(panel.filename)
+                        panel_lookup[panel.filename] = panel.panel_id
+                        panel_lookup[Path(panel.filename).name] = panel.panel_id
                     if getattr(panel, "relative_path", None):
                         manifest_panel_ids.add(panel.relative_path)
                         manifest_panel_ids.add(Path(panel.relative_path).name)
                         manifest_panel_ids.add(Path(panel.relative_path).stem)
+                        panel_lookup[panel.relative_path] = panel.panel_id
+                        panel_lookup[Path(panel.relative_path).name] = panel.panel_id
+                        panel_lookup[Path(panel.relative_path).stem] = panel.panel_id
                     # Check relative path or direct panel_id filename
                     candidate1 = chap_dir / panel.relative_path
                     candidate2 = panels_dir / panel.panel_id
@@ -168,37 +187,99 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
 
         # script.json & audio files
         script_path = chap_dir / "script.json"
+        script_errors_before = len(errors)
         if script_path.exists():
             try:
                 s_data = read_json(script_path)
                 script_obj = RecapScript.model_validate(s_data)
                 check(True, f"chapter_{chap_num}/script.json", "Valid RecapScript schema")
 
-                # Check panel references and synthesized audio
+                # Check panel references, 100% coverage, no duplicates, and synthesized audio
+                covered_panel_ids: set[str] = set()
+                duplicate_panel_ids: set[str] = set()
+
                 for seg in script_obj.segments:
                     if manifest_panel_ids:
                         for pid in seg.panel_ids:
-                            is_known = (
-                                pid in manifest_panel_ids
-                                or Path(pid).name in manifest_panel_ids
-                                or Path(pid).stem in manifest_panel_ids
+                            canon_pid = (
+                                panel_lookup.get(pid)
+                                or panel_lookup.get(Path(pid).name)
+                                or panel_lookup.get(Path(pid).stem)
                             )
-                            check(
-                                is_known,
-                                f"segment:{seg.seq_id}:panel:{pid}",
-                                f"Segment references panel '{pid}' not in manifest.json",
-                                is_warning=True,
-                            )
+                            if not canon_pid:
+                                check(
+                                    False,
+                                    f"segment:{seg.seq_id}:panel:{pid}",
+                                    f"Segment references panel '{pid}' not in manifest.json",
+                                )
+                            else:
+                                if canon_pid in covered_panel_ids:
+                                    duplicate_panel_ids.add(canon_pid)
+                                    check(
+                                        False,
+                                        f"segment:{seg.seq_id}:duplicate_panel:{canon_pid}",
+                                        f"Panel '{canon_pid}' is referenced multiple times across script segments",
+                                    )
+                                else:
+                                    covered_panel_ids.add(canon_pid)
 
                     if seg.status == "synthesized" and seg.audio_path:
                         audio_file = Path(seg.audio_path)
                         if not audio_file.is_absolute():
                             audio_file = chap_dir / audio_file
+                        exists_and_nonempty = audio_file.exists() and audio_file.stat().st_size > 0
                         check(
-                            audio_file.exists() and audio_file.stat().st_size > 0,
+                            exists_and_nonempty,
                             f"segment:{seg.seq_id}:audio",
                             f"Synthesized audio file missing or empty: {audio_file}",
                         )
+                        if exists_and_nonempty:
+                            if seg.checksum:
+                                actual_hash = calculate_sha256(audio_file)
+                                check(
+                                    actual_hash.lower() == seg.checksum.strip().lower(),
+                                    f"segment:{seg.seq_id}:audio_checksum",
+                                    f"Synthesized audio checksum mismatch for {audio_file}: expected {seg.checksum}, got {actual_hash}",
+                                )
+                            if seg.duration is not None:
+                                try:
+                                    actual_dur = get_wav_duration_seconds(audio_file)
+                                    check(
+                                        abs(actual_dur - float(seg.duration)) <= 0.05,
+                                        f"segment:{seg.seq_id}:audio_duration",
+                                        f"Synthesized audio duration mismatch for {audio_file}: expected {seg.duration}s, got {actual_dur:.3f}s",
+                                    )
+                                except Exception as err:
+                                    check(
+                                        False,
+                                        f"segment:{seg.seq_id}:audio_duration",
+                                        f"Failed to inspect duration for {audio_file}: {err}",
+                                    )
+
+                if canonical_manifest_pids:
+                    missing_pids = canonical_manifest_pids - covered_panel_ids
+                    if missing_pids:
+                        check(
+                            False,
+                            f"chapter_{chap_num}:panel_coverage",
+                            f"Script segments do not cover all active manifest panels. Missing panels: {sorted(list(missing_pids))}",
+                        )
+
+                # When script validation passes without new errors, complete StageType.SCRIPT checkpoint
+                if len(errors) == script_errors_before and chap_meta:
+                    current_script_status = None
+                    if hasattr(chap_meta, "stages"):
+                        s_cp = chap_meta.stages.get(StageType.SCRIPT) or chap_meta.stages.get("script")
+                        if s_cp:
+                            current_script_status = getattr(s_cp, "status", None)
+                            if hasattr(current_script_status, "value"):
+                                current_script_status = current_script_status.value
+                    if current_script_status == CheckpointStatus.FAILED.value:
+                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.RUNNING)
+                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
+                    elif current_script_status != CheckpointStatus.COMPLETED.value:
+                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
+
             except (ValidationError, StorageCorruptError) as e:
                 check(False, f"chapter_{chap_num}/script.json", f"Invalid script.json schema: {e}")
 

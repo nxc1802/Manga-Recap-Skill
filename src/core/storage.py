@@ -183,6 +183,23 @@ def verify_checksum(file_path: Path, expected_hash: str) -> bool:
     return actual_hash == expected_hash.strip().lower()
 
 
+def calculate_utterance_fingerprint(
+    text: str,
+    voice: str,
+    speed: float,
+    emotion: Optional[str] = None,
+    emotion_cue: Optional[str] = None,
+    engine_mode: str = "neural",
+) -> str:
+    """
+    Calculates canonical SHA-256 fingerprint of (text + voice + speed + emotion + cue + engine).
+    Guarantees TTS re-synthesis when any input parameter changes.
+    """
+    raw = f"{text}|{voice}|{speed:.2f}|{emotion or ''}|{emotion_cue or ''}|{engine_mode}"
+    return calculate_sha256(raw)
+
+
+
 # ==============================================================================
 # 4. Atomic Write Engine
 # ==============================================================================
@@ -441,6 +458,43 @@ def update_checkpoint(
         # Commit update
         atomic_write_json(chap_file, meta)
         return meta
+
+
+def reset_stage_checkpoint(
+    chapter_path: Path,
+    stage: Union[str, StageType]
+) -> ChapterMetadata:
+    """
+    Resets a stage checkpoint back to PENDING and clears its artifacts and checksums,
+    used during downstream artifact invalidation.
+    """
+    chapter_path = Path(chapter_path)
+    chap_file = chapter_path if chapter_path.suffix == ".json" else chapter_path / "chapter.json"
+    target_stage = StageType(stage) if isinstance(stage, str) else stage
+
+    with acquire_lock(chap_file):
+        raw_data = read_json(chap_file)
+        meta = ChapterMetadata.model_validate(raw_data)
+
+        stage_cp = meta.stages.get(target_stage)
+        if not stage_cp:
+            stage_cp = StageCheckpoint(stage=target_stage, status=CheckpointStatus.PENDING)
+            meta.stages[target_stage] = stage_cp
+        else:
+            stage_cp.status = CheckpointStatus.PENDING
+            stage_cp.started_at = None
+            stage_cp.completed_at = None
+            stage_cp.error_message = None
+            stage_cp.artifacts = []
+            stage_cp.checksums = {}
+
+        if meta.overall_status == CheckpointStatus.COMPLETED:
+            meta.overall_status = CheckpointStatus.PENDING
+        meta.updated_at = utc_iso_now()
+
+        atomic_write_json(chap_file, meta)
+        return meta
+
 
 
 def get_resumable_stage(chapter_path: Path) -> Optional[StageType]:

@@ -34,14 +34,6 @@ class AppConfig(BaseModel):
     # Local Storage Root
     storage_dir: Path = Field(default=Path("data/projects"))
     data_dir: Path = Field(default=Path("data"))
-
-    # Deprecated Cloud API keys (optional, not required)
-    openrouter_api_key: str = Field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY", ""))
-    supabase_url: str = Field(default_factory=lambda: os.getenv("SUPABASE_URL", ""))
-    supabase_anon_key: str = Field(default_factory=lambda: os.getenv("SUPABASE_ANON_KEY", ""))
-    supabase_service_role_key: str = Field(default_factory=lambda: os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
-    google_api_key: str = Field(default_factory=lambda: os.getenv("GOOGLE_API_KEY", ""))
-    openai_api_key: str = Field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     
     # From config.yaml
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)

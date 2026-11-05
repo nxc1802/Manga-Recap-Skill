@@ -402,4 +402,31 @@ def sync_agent_script_to_storage(project_title: str, chapter_number: str, script
 sync_agent_script_to_db = sync_agent_script_to_storage
 
 
+def compute_sliding_windows(
+    panel_count: int,
+    window_size: int = 5,
+    stride: int = 3,
+) -> list[dict]:
+    """
+    Computes mathematical sliding window partitions for panels [0, P).
+    Batch k commits panels [3k, min(3k + 3, P)) and lookahead to [3k, min(3k + 5, P)).
+    Guarantees each panel p in [0, P) is committed to narration exactly once with zero duplicates.
+    """
+    if panel_count <= 0:
+        return []
+    windows = []
+    num_batches = (panel_count + stride - 1) // stride
+    for k in range(num_batches):
+        start_idx = k * stride
+        commit_end = min(start_idx + stride, panel_count)
+        lookahead_end = min(start_idx + window_size, panel_count)
+        windows.append({
+            "batch_index": k,
+            "commit_indices": list(range(start_idx, commit_end)),
+            "window_indices": list(range(start_idx, lookahead_end)),
+        })
+    return windows
+
+
+
 

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "manga-recap"
+version = "3.0.0"
+description = "Manga Recap Pipeline Orchestrator with VieNeu-TTS and Video Engine V2"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx",
+    "pydantic",
+    "pillow",
+    "pyyaml",
+    "python-dotenv",
+    "numpy",
+    "beautifulsoup4",
+    "vieneu>=3.8.3",
+    "google-api-python-client",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+    "pytest",
+]
+
+[project.scripts]
+manga-recap = "src.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

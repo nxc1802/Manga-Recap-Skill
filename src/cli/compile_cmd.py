@@ -6,6 +6,7 @@ Subcommand handler: manga-recap compile
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.cli.exit_codes import CliValidationError
+from src.core.schemas import CheckpointStatus, PreviewApproval, VoiceSelectionApproval
 from src.core.storage import StorageFileNotFoundError, get_project_dir
 from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
 
@@ -39,6 +41,7 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
     chapters_arg = getattr(args, "chapters", None)
     output_arg = getattr(args, "output", None)
     extract_audio = getattr(args, "extract_audio", True)
+    approved = getattr(args, "approved", False)
 
     requested_chaps: List[str] = []
     if chapters_arg:
@@ -58,9 +61,15 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
                 continue
             c_video_dir = chapters_dir / c_entry / "video"
             if c_video_dir.exists():
-                mp4s = sorted(c_video_dir.glob("*.mp4"))
-                if mp4s:
-                    chapter_videos[c_num] = mp4s[-1]
+                candidate_mp4s = [f for f in c_video_dir.glob("*.mp4") if not f.name.startswith(".")]
+                finals = sorted([f for f in candidate_mp4s if "final" in f.name.lower()])
+                non_previews = sorted([f for f in candidate_mp4s if "preview" not in f.name.lower()])
+                if finals:
+                    chapter_videos[c_num] = finals[-1]
+                elif non_previews:
+                    chapter_videos[c_num] = non_previews[-1]
+                elif candidate_mp4s:
+                    chapter_videos[c_num] = candidate_mp4s[0]
 
     # Also check legacy/flat paths: project_dir / video / chapters /
     legacy_video_dir = project_dir / "video" / "chapters"
@@ -80,6 +89,52 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         raise StorageFileNotFoundError(
             f"No rendered chapter videos found to compile in {project_dir}"
         )
+
+    # Verify Review Gates unless --approved is explicitly provided
+    if not approved:
+        for c_num, vid_path in chapter_videos.items():
+            c_dir = chapters_dir / str(c_num)
+            chap_json = c_dir / "chapter.json"
+            if chap_json.exists():
+                try:
+                    c_meta = read_json(chap_json)
+                    if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
+                        raise CliValidationError(
+                            f"Chapter {c_num} requires human review before compilation. Supply --approved to bypass."
+                        )
+                except Exception as e:
+                    if isinstance(e, CliValidationError):
+                        raise
+
+            # Check Gate 1: Voice selection (if voice_selection.json exists on disk, it must be approved)
+            v_sel = project_dir / "voice_selection.json"
+            if not v_sel.exists():
+                v_sel = c_dir / "voice_selection.json"
+            if v_sel.exists():
+                try:
+                    v_data = json.loads(v_sel.read_text(encoding="utf-8"))
+                    v_approval = VoiceSelectionApproval.model_validate(v_data)
+                    if not v_approval.is_approved():
+                        raise ValueError("Voice selection is not marked as approved")
+                except Exception as e:
+                    raise CliValidationError(
+                        f"Chapter {c_num} Review Gate 1 verification failed: {e}. Supply --approved to bypass."
+                    ) from e
+
+            # Check Gate 2: Preview Approval (if preview_approval.json exists on disk, it must be approved)
+            p_sel = project_dir / "preview_approval.json"
+            if not p_sel.exists():
+                p_sel = c_dir / "preview_approval.json"
+            if p_sel.exists():
+                try:
+                    p_data = json.loads(p_sel.read_text(encoding="utf-8"))
+                    p_approval = PreviewApproval.model_validate(p_data)
+                    if not p_approval.is_approved():
+                        raise ValueError("Preview is not marked as approved")
+                except Exception as e:
+                    raise CliValidationError(
+                        f"Chapter {c_num} Review Gate 2 verification failed: {e}. Supply --approved to bypass."
+                    ) from e
 
     sorted_chaps = sorted(chapter_videos.keys())
     compile_list = [chapter_videos[c] for c in sorted_chaps]
@@ -122,7 +177,7 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         cmd_audio = [
             "ffmpeg", "-y",
             "-i", str(output_path),
-            "-vn", "-acodec", "pcm_s16le", "-ar", "44100", "-ac", "2",
+            "-vn", "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2",
             str(final_audio_path),
         ]
         run_ffmpeg(cmd_audio, description="Extract master audio from compiled video")

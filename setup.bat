@@ -37,6 +37,7 @@ python -m pip install --upgrade pip
 if exist requirements.txt (
     echo Đang cài đặt thư viện cần thiết từ requirements.txt...
     pip install -r requirements.txt
+    pip install -e .
     echo Cài đặt thư viện thành công!
 ) else (
     echo [Lỗi] Không tìm thấy tệp requirements.txt.
@@ -48,10 +49,10 @@ if not exist .env (
     if exist .env.example (
         echo Đang tạo tệp cấu hình .env từ .env.example...
         copy .env.example .env
-        echo Vui lòng mở tệp .env và cấu hình các khóa API nếu cần!
+        echo Vui lòng mở tệp .env và cấu hình các biến môi trường nếu cần!
     ) else (
         echo Không tìm thấy .env.example. Đang tạo tệp .env trống...
-        echo OPENROUTER_API_KEY=> .env
+        type nul > .env
     )
 ) else (
     echo Tệp cấu hình .env đã tồn tại.

@@ -53,6 +53,7 @@ pip install --upgrade pip
 if [ -f "requirements.txt" ]; then
     echo -e "Đang cài đặt thư viện cần thiết từ ${GREEN}requirements.txt${NC}..."
     pip install -r requirements.txt
+    pip install -e .
     echo -e "${GREEN}Cài đặt thư viện thành công!${NC}"
 else
     echo -e "${RED}Lỗi: Không tìm thấy tệp requirements.txt.${NC}"
@@ -64,10 +65,10 @@ if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         echo -e "Đang tạo tệp cấu hình ${GREEN}.env${NC} từ ${GREEN}.env.example${NC}..."
         cp .env.example .env
-        echo -e "${YELLOW}Vui lòng mở tệp .env và cấu hình các khóa API nếu cần!${NC}"
+        echo -e "${YELLOW}Vui lòng mở tệp .env và cấu hình các biến môi trường nếu cần!${NC}"
     else
         echo -e "Không tìm thấy .env.example. Đang tạo tệp .env trống..."
-        echo -e "OPENROUTER_API_KEY=" > .env
+        touch .env
     fi
 else
     echo -e "Tệp cấu hình ${GREEN}.env${NC} đã tồn tại."

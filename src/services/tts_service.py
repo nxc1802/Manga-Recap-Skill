@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from src.core.config import config
 from src.core.logger import logger
+from src.core.storage import calculate_sha256, calculate_utterance_fingerprint
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
@@ -269,10 +270,32 @@ class TTSService:
                     if not text:
                         return None
                     out_path = audio_dir / f"audio_{chapter_num}_{seq_id}.wav"
-                    if out_path.exists():
+                    engine_mode = getattr(self.engine, "mode", "neural") if hasattr(self, "engine") else "neural"
+                    calculated_fp = calculate_utterance_fingerprint(
+                        text=text,
+                        voice=resolved_voice,
+                        speed=speed,
+                        emotion=item.get("emotion"),
+                        emotion_cue=item.get("emotion_cue"),
+                        engine_mode=engine_mode,
+                    )
+                    can_reuse = False
+                    if out_path.exists() and out_path.stat().st_size > 44:
+                        if (
+                            item.get("fingerprint") == calculated_fp
+                            and item.get("checksum") is not None
+                            and item.get("checksum") == calculate_sha256(out_path)
+                        ):
+                            can_reuse = True
+
+                    if can_reuse:
                         dur = self.get_audio_duration_ms(str(out_path))
                         return str(out_path), dur
+
                     dur = await self.generate_panel_audio(text, out_path, speed, resolved_voice)
+                    if out_path.exists():
+                        item["checksum"] = calculate_sha256(out_path)
+                        item["fingerprint"] = calculated_fp
                     if progress_callback:
                         await progress_callback("tts_panel", f"Generated audio for {seq_id}", {"duration_ms": dur})
                     return str(out_path), dur

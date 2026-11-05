@@ -360,7 +360,7 @@ class VideoEngine:
         out_p = Path(output_path).resolve()
         out_p.parent.mkdir(parents=True, exist_ok=True)
 
-        duration_sec = max(0.5, float(duration_ms) / 1000.0)
+        duration_sec = max(1.0 / self.fps, float(duration_ms) / 1000.0)
 
         # Inspect image dimensions
         try:
@@ -659,6 +659,7 @@ class VideoEngine:
         force: bool = False,
         suffix: str = "final",
         output_path: Optional[Union[str, Path]] = None,
+        video_mode: str = "auto",
         allow_animation: bool = True,
         allow_placeholders: bool = False,
     ) -> Dict[str, Any]:
@@ -730,6 +731,7 @@ class VideoEngine:
             resolved_segments: List[Tuple[ScriptSegment, Path, Path]] = []
             segment_audio_paths: List[Path] = []
             timeline_durations: List[float] = []
+            script_dirty = False
 
             for seg in script.segments:
                 # Find panel image
@@ -824,10 +826,18 @@ class VideoEngine:
 
                 # Read exact duration from binary WAV
                 exact_dur = get_wav_duration_seconds(wav_p)
-                seg.duration = exact_dur
+                if abs(float(seg.duration or 0.0) - exact_dur) > 0.001:
+                    seg.duration = exact_dur
+                    script_dirty = True
+                else:
+                    seg.duration = exact_dur
                 resolved_segments.append((seg, panel_p, wav_p))
                 segment_audio_paths.append(wav_p)
                 timeline_durations.append(exact_dur)
+
+            # Persist exact durations back to script.json if any differed
+            if script_dirty:
+                atomic_write_json(script_path, script)
 
             # 2. Synchronized SRT Subtitle Generation
             srt_path = subtitles_dir / f"chapter_{chapter_num}.srt"
@@ -890,6 +900,7 @@ class VideoEngine:
                     "focus_box": focus_box_spec,
                     "burn_subtitles": burn_subtitles,
                     "allow_animation": allow_animation,
+                    "video_mode": str(video_mode),
                     "audio_size": audio_stat.st_size if audio_stat else 0,
                     "panel_size": panel_stat.st_size if panel_stat else 0,
                 }
@@ -907,11 +918,24 @@ class VideoEngine:
                 if is_cached:
                     continue
 
+                if isinstance(video_mode, str) and video_mode != "auto":
+                    resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
+                elif isinstance(video_mode, VideoMode):
+                    resolved_mode = video_mode
+                else:
+                    try:
+                        with Image.open(panel_p) as tmp_im:
+                            pw, ph = tmp_im.size
+                        resolved_mode = self.detect_video_mode(pw, ph)
+                    except Exception:
+                        resolved_mode = VideoMode.PORTRAIT_PADDED
+
                 self.generate_panel_clip(
                     img_path=str(panel_p),
                     audio_path=str(wav_p),
                     duration_ms=duration_ms,
                     output_path=str(clip_p),
+                    video_mode=resolved_mode,
                     seq=idx + 1,
                     panel_text=seg.narrator_text,
                     burn_subtitles=burn_subtitles,
@@ -1046,6 +1070,21 @@ class VideoEngine:
                 artifacts=artifacts,
             )
 
+            # Auto-mark StageType.FINALIZE upon final render completion
+            if quality_clean == "final":
+                try:
+                    chap_meta = load_chapter_metadata(chap_dir)
+                    fin_cp = chap_meta.stages.get(StageType.FINALIZE)
+                    if not fin_cp or fin_cp.status != CheckpointStatus.COMPLETED:
+                        update_checkpoint(
+                            chap_dir,
+                            StageType.FINALIZE,
+                            CheckpointStatus.COMPLETED,
+                            artifacts=artifacts,
+                        )
+                except Exception as ex:
+                    logger.warning(f"Failed to auto-mark FINALIZE checkpoint: {ex}")
+
             return {
                 "project_slug": p_dir.name,
                 "chapter_number": str(chapter_num),
@@ -1063,7 +1102,7 @@ class VideoEngine:
 
         except Exception as e:
             logger.error(f"Render failed for chapter {chapter_num}: {e}")
-            update_checkpoint(chap_dir, StageType.RENDER, CheckpointStatus.FAILED)
+            update_checkpoint(chap_dir, StageType.RENDER, CheckpointStatus.FAILED, error=str(e))
             raise
 
 

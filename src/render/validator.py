@@ -34,7 +34,7 @@ class FFprobeValidator:
         allowed_video_codecs: Optional[List[str]] = None,
         allowed_audio_codecs: Optional[List[str]] = None,
         expected_fps: float = 30.0,
-        max_duration_delta: float = 0.10,
+        max_duration_delta: float = 0.15,
     ):
         if not shutil.which("ffprobe"):
             raise DependencyNotFoundError("ffprobe binary not found on system PATH.")

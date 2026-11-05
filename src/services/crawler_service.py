@@ -85,18 +85,31 @@ class CrawlerService:
             if resp.status_code != 200:
                 raise ValueError(f"Failed to fetch chapter page: HTTP {resp.status_code}")
             soup = BeautifulSoup(resp.text, "html.parser")
-            img_tags = soup.find_all("img")
             manga_imgs = []
-            for img in img_tags:
-                src = img.get("data-url") or img.get("src")
-                if src and any(d in src.lower() for d in ["webtoons.com", "pstatic.net", "comic", "manga", "chapter"]):
-                    if not any(x in src.lower() for x in ["banner", "logo", "icon", "thumb", "bg_"]):
-                        manga_imgs.append(src)
+
+            # Check for Webtoons script-embedded image list (mobile & desktop)
+            import re
+            for s in soup.find_all("script"):
+                txt = s.string or s.text or ""
+                if "var imageList =" in txt or "imageList" in txt:
+                    urls = re.findall(r'url:\s*\"([^\"]+)\"', txt)
+                    if urls:
+                        manga_imgs.extend(urls)
+                        break
+
             if not manga_imgs:
+                img_tags = soup.find_all("img")
                 for img in img_tags:
-                    src = img.get("data-url") or img.get("src")
-                    if src and any(ext in src.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
-                        manga_imgs.append(src)
+                    src = img.get("data-url") or img.get("data-src") or img.get("src")
+                    if src and any(d in src.lower() for d in ["webtoons.com", "pstatic.net", "comic", "manga", "chapter"]):
+                        if not any(x in src.lower() for x in ["banner", "logo", "icon", "thumb", "bg_", "transparency"]):
+                            manga_imgs.append(src)
+                if not manga_imgs:
+                    for img in img_tags:
+                        src = img.get("data-url") or img.get("data-src") or img.get("src")
+                        if src and any(ext in src.lower() for ext in [".jpg", ".jpeg", ".png", ".webp"]):
+                            if not any(x in src.lower() for x in ["banner", "logo", "icon", "thumb", "bg_", "transparency"]):
+                                manga_imgs.append(src)
             if max_panels and max_panels > 0:
                 manga_imgs = manga_imgs[:max_panels]
 
@@ -204,17 +217,31 @@ class CrawlerService:
             # Check if this is a Webtoons.com URL
             if "webtoons.com" in url.lower():
                 logger.info("Webtoons.com URL detected. Applying Webtoons parsing logic...")
-                img_list_div = soup.find("div", id="_imageList")
-                if img_list_div:
-                    img_tags = img_list_div.find_all("img")
-                    manga_imgs = []
-                    for img in img_tags:
-                        src = img.get("data-url") or img.get("src")
-                        if src:
-                            manga_imgs.append(src)
-                else:
-                    img_tags = soup.find_all("img", class_="_images")
-                    manga_imgs = [img.get("data-url") or img.get("src") for img in img_tags if img.get("data-url") or img.get("src")]
+                import re
+                manga_imgs = []
+                for s in soup.find_all("script"):
+                    txt = s.string or s.text or ""
+                    if "var imageList =" in txt or "imageList" in txt:
+                        urls = re.findall(r'url:\s*\"([^\"]+)\"', txt)
+                        if urls:
+                            manga_imgs.extend(urls)
+                            break
+                if not manga_imgs:
+                    img_list_div = soup.find("div", id="_imageList")
+                    if img_list_div:
+                        img_tags = img_list_div.find_all("img")
+                        for img in img_tags:
+                            src = img.get("data-url") or img.get("data-src") or img.get("src")
+                            if src and not any(x in src.lower() for x in ["banner", "logo", "icon", "thumb", "bg_", "transparency"]):
+                                manga_imgs.append(src)
+                    else:
+                        img_tags = soup.find_all("img", class_="_images")
+                        manga_imgs = [
+                            img.get("data-url") or img.get("data-src") or img.get("src")
+                            for img in img_tags
+                            if (img.get("data-url") or img.get("data-src") or img.get("src"))
+                            and not any(x in (img.get("data-url") or img.get("data-src") or img.get("src")).lower() for x in ["banner", "logo", "icon", "thumb", "bg_", "transparency"])
+                        ]
             else:
                 # Find all image tags in div.page-chapter
                 page_divs = soup.find_all("div", class_="page-chapter")

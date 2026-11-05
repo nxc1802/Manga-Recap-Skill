@@ -17,6 +17,7 @@ from src.core.storage import (
     cleanup_intermediate_files,
     get_chapter_dir,
     get_project_dir,
+    load_chapter_metadata,
     update_checkpoint,
 )
 from src.core.utils import (
@@ -45,6 +46,8 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     allow_animation = getattr(args, "animation", True)
     force = getattr(args, "force", False)
     skip_review = getattr(args, "skip_review", False)
+    approved = getattr(args, "approved", False)
+    video_mode = getattr(args, "video_mode", "auto")
     allow_placeholders = getattr(args, "allow_placeholders", False)
 
     if not project_slug:
@@ -78,48 +81,95 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
             f"script.json not found in chapter directory: {chap_dir}"
         )
 
-    # Human Review Gate 1 verification: before final 1080p render, ensure voice_selection.json exists and is approved
-    if quality == "final" and not skip_review:
-        voice_sel_path = project_dir / "voice_selection.json"
-        if not voice_sel_path.exists():
-            chap_voice_sel = chap_dir / "voice_selection.json"
-            if chap_voice_sel.exists():
-                voice_sel_path = chap_voice_sel
+    # Enforce Human Review Gates: before final 1080p render, ensure Gate 1 (Voice) and Gate 2 (Preview) are satisfied
+    if quality == "final":
+        if not approved:
+            # Gate 1: Voice Selection Approval
+            voice_sel_path = project_dir / "voice_selection.json"
+            if not voice_sel_path.exists():
+                chap_voice_sel = chap_dir / "voice_selection.json"
+                if chap_voice_sel.exists():
+                    voice_sel_path = chap_voice_sel
 
-        if not voice_sel_path.exists():
-            raise CliValidationError(
-                "Human Review Gate 1 not satisfied: 'voice_selection.json' not found. "
-                "Voice strategy must be approved before final render, or specify --skip-review."
+            if not voice_sel_path.exists():
+                raise CliValidationError(
+                    "Human Review Gate 1 not satisfied: 'voice_selection.json' not found. "
+                    "Voice strategy must be approved before final render (or pass --approved)."
+                )
+
+            import json
+            from src.core.schemas import PreviewApproval, VoiceSelectionApproval
+            from src.tts.catalog import is_valid_voice_id
+
+            try:
+                raw_sel = json.loads(voice_sel_path.read_text(encoding="utf-8"))
+                approval = VoiceSelectionApproval.model_validate(raw_sel)
+            except Exception as err:
+                raise CliValidationError(
+                    f"Human Review Gate 1 schema validation failed for '{voice_sel_path}': {err}."
+                ) from err
+
+            if not approval.is_approved():
+                raise CliValidationError(
+                    f"Human Review Gate 1 rejected: '{voice_sel_path}' is not approved. "
+                    "A valid reviewer identifier ('reviewer' or 'approved_by') and primary voice are required."
+                )
+
+            if approval.project_slug and approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
+                raise CliValidationError(
+                    f"Human Review Gate 1 project mismatch: 'voice_selection.json' is for project '{approval.project_slug}', "
+                    f"but current render target is '{project_slug}'."
+                )
+
+            if not is_valid_voice_id(approval.primary_voice):
+                raise CliValidationError(
+                    f"Human Review Gate 1 invalid: approved voice '{approval.primary_voice}' is not recognized in official catalog."
+                )
+
+            # Gate 2: Preview Video & Approval
+            video_dir = chap_dir / "video"
+            has_preview_video = (
+                (video_dir / "preview.mp4").exists()
+                or (video_dir / f"chapter_{chapter_num}_preview.mp4").exists()
+                or (any(video_dir.glob("*preview*.mp4")) if video_dir.exists() else False)
             )
+            if not has_preview_video:
+                raise CliValidationError(
+                    "Human Review Gate 2 not satisfied: preview video ('preview.mp4') not found. "
+                    "A preview render must be generated before final render (or pass --approved)."
+                )
 
-        import json
-        from src.core.schemas import VoiceSelectionApproval
-        from src.tts.catalog import CATALOG_VOICES, is_valid_voice_id, resolve_voice_id
+            prev_sel_path = project_dir / "preview_approval.json"
+            if not prev_sel_path.exists():
+                chap_prev_sel = chap_dir / "preview_approval.json"
+                if chap_prev_sel.exists():
+                    prev_sel_path = chap_prev_sel
 
-        try:
-            raw_sel = json.loads(voice_sel_path.read_text(encoding="utf-8"))
-            approval = VoiceSelectionApproval.model_validate(raw_sel)
-        except Exception as err:
-            raise CliValidationError(
-                f"Human Review Gate 1 schema validation failed for '{voice_sel_path}': {err}."
-            ) from err
+            if not prev_sel_path.exists():
+                raise CliValidationError(
+                    "Human Review Gate 2 not satisfied: 'preview_approval.json' not found. "
+                    "Preview video must be approved before final render (or pass --approved)."
+                )
 
-        if not approval.is_approved():
-            raise CliValidationError(
-                f"Human Review Gate 1 rejected: '{voice_sel_path}' is not approved. "
-                "A valid reviewer identifier ('reviewer' or 'approved_by') and primary voice are required."
-            )
+            try:
+                raw_prev = json.loads(prev_sel_path.read_text(encoding="utf-8"))
+                prev_approval = PreviewApproval.model_validate(raw_prev)
+            except Exception as err:
+                raise CliValidationError(
+                    f"Human Review Gate 2 schema validation failed for '{prev_sel_path}': {err}."
+                ) from err
 
-        if approval.project_slug and approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
-            raise CliValidationError(
-                f"Human Review Gate 1 project mismatch: 'voice_selection.json' is for project '{approval.project_slug}', "
-                f"but current render target is '{project_slug}'."
-            )
+            if not prev_approval.is_approved():
+                raise CliValidationError(
+                    f"Human Review Gate 2 rejected: '{prev_sel_path}' is not approved. "
+                    "A valid reviewer identifier is required."
+                )
 
-        if not is_valid_voice_id(approval.primary_voice):
-            raise CliValidationError(
-                f"Human Review Gate 1 invalid: approved voice '{approval.primary_voice}' is not recognized in official catalog."
-            )
+            if prev_approval.project_slug and prev_approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
+                raise CliValidationError(
+                    f"Human Review Gate 2 project mismatch: 'preview_approval.json' is for project '{prev_approval.project_slug}', "
+                    f"but current render target is '{project_slug}'."
+                )
 
     # Execute full Video Engine V2 render pipeline
     engine = VideoEngine()
@@ -132,9 +182,25 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         keep_temp=keep_temp,
         force=force,
         suffix=suffix,
+        video_mode=video_mode,
         allow_animation=allow_animation,
         allow_placeholders=allow_placeholders,
     )
+
+    # Auto-mark StageType.FINALIZE upon final render completion if not already marked
+    if quality == "final":
+        try:
+            chap_meta = load_chapter_metadata(chap_dir)
+            fin_cp = chap_meta.stages.get(StageType.FINALIZE)
+            if not fin_cp or fin_cp.status != CheckpointStatus.COMPLETED:
+                update_checkpoint(
+                    chap_dir,
+                    StageType.FINALIZE,
+                    CheckpointStatus.COMPLETED,
+                    artifacts=[str(render_result["video_path"])] if isinstance(render_result.get("video_path"), (str, Path)) else [],
+                )
+        except Exception:
+            pass
 
     # Clean intermediate files if keep_temp is False
     cleaned_files = cleanup_intermediate_files(chap_dir, keep_temp=keep_temp)

@@ -193,14 +193,17 @@ class SubtitleGenerator:
             dur = float(seg.duration or 0.0)
             clean_text = self.sanitize(seg.narrator_text)
 
-            if not clean_text or dur <= 0.0:
-                current_time += dur + inter_segment_pause
+            if not clean_text:
+                current_time += max(0.0, dur) + inter_segment_pause
                 continue
+
+            if dur <= 0.0:
+                # Fallback to character-count estimated duration to avoid dropping subtitle cues
+                dur = max(0.5, len(clean_text) * 0.08)
 
             chunks = self.chunk_vietnamese_text(clean_text)
             if not chunks:
-                current_time += dur + inter_segment_pause
-                continue
+                chunks = [clean_text]
 
             total_chars = sum(len(c.replace("\n", "")) for c in chunks)
             seg_start_t = current_time
@@ -307,7 +310,7 @@ class SubtitleGenerator:
         self,
         srt_path: Union[str, Path],
         expected_total_duration: float,
-        tolerance_seconds: float = 0.20,
+        tolerance_seconds: float = 0.15,
     ) -> bool:
         """Validates timing monotonicity, sequential indices, and total duration alignment."""
         cues = self.parse_srt(srt_path)

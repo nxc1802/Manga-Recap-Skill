@@ -99,13 +99,18 @@ Before scripting any dialogue or narration:
 3. If new characters appear in the panels, register them in `characters.json` following `.agents/skills/manga-recap/rules/character_consistency.md`.
 
 ### Stage 4: 5-Panel Sliding Window Vision & Recap Scripting
-Process the chapter panels in batches of **5 panels with a 2-panel overlap** to guarantee narrative flow and action continuity:
-1. Load contact sheet grid or individual panel images for panels `[N, N+1, N+2, N+3, N+4]`.
+Process the chapter panels in batches of **5 panels with a 2-panel lookahead overlap** (stride 3) to guarantee narrative flow and action continuity:
+1. Load contact sheet grid or individual panel images for window panels `[N, N+1, N+2, N+3, N+4]`.
 2. Perform visual OCR on speech bubbles and observe panel actions.
-3. Script Vietnamese narration for panels `[N, N+1, N+2]`, keeping panels `[N+3, N+4]` as lookahead context.
-4. Advance the sliding window by 3 panels: the next batch begins at `[N+2, N+3, N+4, N+5, N+6]`.
-5. Checkpoint results incrementally into `script.json` after every batch of recap scripting.
-6. Strictly apply rules from:
+3. Script Vietnamese narration for commit panels `[N, N+1, N+2]`, keeping panels `[N+3, N+4]` as lookahead context.
+4. Advance the sliding window by 3 panels (stride 3): the next batch begins at index `N+3`, spanning `[N+3, N+4, N+5, N+6, N+7]`.
+5. Mathematical Sliding Window Partitioning (for any $P \in [1, 20]$ panels):
+   - For batch $k = 0, 1, \dots, \lceil P / 3 \rceil - 1$:
+     - Commit range: $[3k, \min(3k+3, P))$
+     - Lookahead context: $[3k, \min(3k+5, P))$
+     - Every panel $p \in [0, P)$ is committed to narration exactly once (100% panel coverage with zero duplicate panels and zero omissions).
+6. Checkpoint results incrementally into `script.json` after every batch of recap scripting.
+7. Strictly apply rules from:
    - `.agents/skills/manga-recap/rules/narrative_recap.md`
    - `.agents/skills/manga-recap/rules/vision_ocr.md`
    - `.agents/skills/manga-recap/rules/character_consistency.md`

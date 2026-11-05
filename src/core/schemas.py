@@ -113,6 +113,10 @@ class FocusBox(BaseModel):
             raise ValueError(f"x_min ({self.x_min}) must be <= x_max ({self.x_max})")
         if self.y_min > self.y_max:
             raise ValueError(f"y_min ({self.y_min}) must be <= y_max ({self.y_max})")
+        if (self.x_max - self.x_min) < 0.05:
+            raise ValueError(f"Box width (x_max - x_min = {self.x_max - self.x_min:.4f}) must be >= 0.05")
+        if (self.y_max - self.y_min) < 0.05:
+            raise ValueError(f"Box height (y_max - y_min = {self.y_max - self.y_min:.4f}) must be >= 0.05")
         return self
 
     @property
@@ -145,10 +149,23 @@ class FocusBox(BaseModel):
         half_w = scale_ratio / 2.0
         half_h = scale_ratio / 2.0
 
-        x_min = max(0.0, cx - half_w)
-        x_max = min(1.0, cx + half_w)
-        y_min = max(0.0, cy - half_h)
-        y_max = min(1.0, cy + half_h)
+        x_min = cx - half_w
+        x_max = cx + half_w
+        if x_min < 0.0:
+            x_max = min(1.0, x_max - x_min)
+            x_min = 0.0
+        elif x_max > 1.0:
+            x_min = max(0.0, x_min - (x_max - 1.0))
+            x_max = 1.0
+
+        y_min = cy - half_h
+        y_max = cy + half_h
+        if y_min < 0.0:
+            y_max = min(1.0, y_max - y_min)
+            y_min = 0.0
+        elif y_max > 1.0:
+            y_min = max(0.0, y_min - (y_max - 1.0))
+            y_max = 1.0
 
         return cls(x_min=round(x_min, 4), y_min=round(y_min, 4), x_max=round(x_max, 4), y_max=round(y_max, 4))
 
@@ -287,6 +304,7 @@ class ScriptSegment(BaseModel):
     duration: Optional[float] = Field(default=None, ge=0.0, description="Measured waveform duration in seconds")
     audio_path: Optional[str] = Field(default=None, description="Relative path to synthesized utterance WAV")
     checksum: Optional[str] = Field(default=None, description="SHA-256 fingerprint of utterance audio/text")
+    fingerprint: Optional[str] = Field(default=None, description="SHA-256 fingerprint of (text + voice + speed + emotion + cue + engine)")
     status: str = Field(default="pending", description="Segment status: pending, synthesized, verified, needs_review")
 
     def is_manual_voice(self) -> bool:
@@ -316,6 +334,18 @@ class RecapScript(BaseModel):
     total_duration_seconds: float = Field(default=0.0, ge=0.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     schema_version: str = "3.0.0"
+
+    @model_validator(mode="after")
+    def validate_unique_seq_ids(self) -> RecapScript:
+        seen = set()
+        duplicates = []
+        for seg in self.segments:
+            if seg.seq_id in seen:
+                duplicates.append(seg.seq_id)
+            seen.add(seg.seq_id)
+        if duplicates:
+            raise ValueError(f"Duplicate seq_id values found across segments: {sorted(list(set(duplicates)))}")
+        return self
 
     @classmethod
     def from_legacy_dict(cls, project_slug: str, chapter_number: str, title: str, legacy_data: Dict[str, Any]) -> RecapScript:
@@ -517,3 +547,39 @@ class VoiceSelectionApproval(BaseModel):
 
     def is_approved(self) -> bool:
         return bool(self.status.lower().strip() == "approved" and self.get_reviewer() and self.primary_voice.strip())
+
+
+# ==============================================================================
+# 10. Human Review Gate 2: preview_approval.json
+# ==============================================================================
+
+class PreviewApproval(BaseModel):
+    """
+    Schema for Review Gate 2 preview video approval.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: str = "3.0.0"
+    project_slug: Optional[str] = None
+    chapter_number: Optional[str] = None
+    preview_video_path: Optional[str] = None
+    reviewer: str = Field(..., min_length=1, description="Explicit human reviewer or approver identifier")
+    approved_at: str = Field(default_factory=utc_iso_now, description="ISO timestamp of approval")
+    status: str = Field(default="approved", description="Approval status (must be 'approved')")
+    notes: Optional[str] = Field(default=None, description="Review notes")
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if "approved_by" in d and "reviewer" not in d:
+            d["reviewer"] = d["approved_by"]
+        if "reviewed_at" in d and "approved_at" not in d:
+            d["approved_at"] = d["reviewed_at"]
+        return d
+
+    def is_approved(self) -> bool:
+        return bool(self.status.lower().strip() == "approved" and self.reviewer.strip())
+
