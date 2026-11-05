@@ -47,8 +47,9 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     chapter_num = getattr(args, "chapter", None)
     quality = getattr(args, "quality", "final")
     suffix = getattr(args, "suffix", "final")
-    keep_temp = getattr(args, "keep_temp", False)
     cleanup = getattr(args, "cleanup", False)
+    keep_temp_arg = getattr(args, "keep_temp", None)
+    keep_temp = (not cleanup) if keep_temp_arg is None else bool(keep_temp_arg)
     bgm_path = getattr(args, "bgm", None)
     burn_subs = getattr(args, "burn_subtitles", True)
     allow_animation = getattr(args, "animation", True)
@@ -267,5 +268,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         "audio_duration_seconds": render_result.get("audio_duration_seconds", 0.0),
         "duration_diff_seconds": render_result.get("duration_diff_seconds", 0.0),
         "validation": render_result.get("validation", {}),
+        "cached_clips_count": render_result.get("cached_clips_count", 0),
+        "rendered_clips_count": render_result.get("rendered_clips_count", 0),
         "cleaned_files_count": len(cleaned_files) + len(safe_cleaned_files) + render_result.get("cleaned_files_count", 0),
     }

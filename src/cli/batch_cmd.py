@@ -271,7 +271,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 skip_preview=skip_preview,
                 approved=True,
                 allow_placeholders=allow_placeholders,
-                keep_temp=getattr(args, "keep_temp", False),
+                keep_temp=getattr(args, "keep_temp", None),
                 cleanup=cleanup,
             )
             render_res = handle_render(render_args)

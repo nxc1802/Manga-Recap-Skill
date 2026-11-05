@@ -134,7 +134,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
-    p_ren.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
+    p_ren.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
     p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (deprecated for final render)")
     p_ren.add_argument("--skip-preview", action="store_true", help="Skip Review Gate 2 preview requirement and render final 1080p directly")
     p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
@@ -165,7 +165,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
     p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
     p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
-    p_bat.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
+    p_bat.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
     p_bat.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
 
     return parser

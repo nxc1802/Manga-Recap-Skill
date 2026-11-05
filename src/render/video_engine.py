@@ -911,6 +911,8 @@ class VideoEngine:
             # 4. Cumulative Frame-Anchoring Timeline Allocation
             # F_start, i = round(T_start, i * fps), F_end, i = round(T_end, i * fps)
             clip_paths: List[Path] = []
+            cached_clips_count = 0
+            rendered_clips_count = 0
             cumulative_time = 0.0
 
             for idx, (seg, panel_paths, wav_p) in enumerate(resolved_segments):
@@ -988,7 +990,10 @@ class VideoEngine:
                         except Exception:
                             is_cached = False
 
-                    if not is_cached:
+                    if is_cached:
+                        cached_clips_count += 1
+                    else:
+                        rendered_clips_count += 1
                         if clip_p.exists():
                             try:
                                 clip_p.unlink()
@@ -1197,6 +1202,8 @@ class VideoEngine:
                 "audio_duration_seconds": total_speech_dur,
                 "duration_diff_seconds": validation_res.get("duration_diff_seconds", 0.0),
                 "validation": validation_res,
+                "cached_clips_count": cached_clips_count,
+                "rendered_clips_count": rendered_clips_count,
                 "cleaned_files_count": cleaned_count,
             }
 
