@@ -15,7 +15,7 @@ from typing import Any, Dict, List
 
 from src.cli.exit_codes import CliValidationError
 from src.core.schemas import CheckpointStatus, PreviewApproval, VoiceSelectionApproval
-from src.core.storage import StorageFileNotFoundError, get_project_dir
+from src.core.storage import StorageFileNotFoundError, get_project_dir, read_json
 from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
 
 
@@ -69,7 +69,10 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
                 elif non_previews:
                     chapter_videos[c_num] = non_previews[-1]
                 elif candidate_mp4s:
-                    chapter_videos[c_num] = candidate_mp4s[0]
+                    raise StorageFileNotFoundError(
+                        f"Chapter {c_num} only has preview video ({candidate_mp4s[0].name}). "
+                        "Final rendered video is required for compilation; preview video cannot be used for final export."
+                    )
 
     # Also check legacy/flat paths: project_dir / video / chapters /
     legacy_video_dir = project_dir / "video" / "chapters"
@@ -82,6 +85,8 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
                 c_num = int(m.group(1))
                 if requested_chaps and str(c_num) not in requested_chaps:
                     continue
+                if "preview" in f.lower() and "final" not in f.lower():
+                    continue
                 if c_num not in chapter_videos:
                     chapter_videos[c_num] = legacy_video_dir / f
 
@@ -90,51 +95,88 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
             f"No rendered chapter videos found to compile in {project_dir}"
         )
 
+    if requested_chaps:
+        missing_chaps = [c for c in requested_chaps if int(c) not in chapter_videos]
+        if missing_chaps:
+            raise StorageFileNotFoundError(
+                f"Missing final rendered video for requested chapter(s): {', '.join(missing_chaps)} in {project_dir}"
+            )
+
+    for c_num, vid_path in chapter_videos.items():
+        if "preview" in vid_path.name.lower() and "final" not in vid_path.name.lower():
+            raise StorageFileNotFoundError(
+                f"Chapter {c_num} video '{vid_path.name}' is a preview video. "
+                "Final rendered video is required for compilation; preview video cannot be used for final export."
+            )
+
     # Verify Review Gates unless --approved is explicitly provided
     if not approved:
-        for c_num, vid_path in chapter_videos.items():
+        for c_num in sorted(chapter_videos.keys()):
             c_dir = chapters_dir / str(c_num)
             chap_json = c_dir / "chapter.json"
             if chap_json.exists():
                 try:
                     c_meta = read_json(chap_json)
-                    if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
-                        raise CliValidationError(
-                            f"Chapter {c_num} requires human review before compilation. Supply --approved to bypass."
-                        )
                 except Exception as e:
-                    if isinstance(e, CliValidationError):
-                        raise
+                    raise CliValidationError(
+                        f"Failed to read metadata for Chapter {c_num} from '{chap_json}': {e}"
+                    ) from e
 
-            # Check Gate 1: Voice selection (if voice_selection.json exists on disk, it must be approved)
+                if not isinstance(c_meta, dict):
+                    raise CliValidationError(
+                        f"Invalid metadata format in '{chap_json}': expected JSON object."
+                    )
+
+                if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
+                    raise CliValidationError(
+                        f"Chapter {c_num} requires human review before compilation. Supply --approved to bypass."
+                    )
+
+            # Check Gate 1: Voice selection (must exist and be approved)
             v_sel = project_dir / "voice_selection.json"
             if not v_sel.exists():
                 v_sel = c_dir / "voice_selection.json"
-            if v_sel.exists():
-                try:
-                    v_data = json.loads(v_sel.read_text(encoding="utf-8"))
-                    v_approval = VoiceSelectionApproval.model_validate(v_data)
-                    if not v_approval.is_approved():
-                        raise ValueError("Voice selection is not marked as approved")
-                except Exception as e:
-                    raise CliValidationError(
-                        f"Chapter {c_num} Review Gate 1 verification failed: {e}. Supply --approved to bypass."
-                    ) from e
+            if not v_sel.exists():
+                raise CliValidationError(
+                    f"Human Review Gate 1 not satisfied: 'voice_selection.json' not found for Chapter {c_num}. "
+                    "Voice strategy must be approved before compilation (or pass --approved)."
+                )
 
-            # Check Gate 2: Preview Approval (if preview_approval.json exists on disk, it must be approved)
+            try:
+                v_data = read_json(v_sel)
+                v_approval = VoiceSelectionApproval.model_validate(v_data)
+            except Exception as e:
+                raise CliValidationError(
+                    f"Chapter {c_num} Review Gate 1 schema validation failed for '{v_sel}': {e}. Supply --approved to bypass."
+                ) from e
+
+            if not v_approval.is_approved():
+                raise CliValidationError(
+                    f"Chapter {c_num} Review Gate 1 rejected: '{v_sel}' is not approved. Supply --approved to bypass."
+                )
+
+            # Check Gate 2: Preview Approval (must exist and be approved)
             p_sel = project_dir / "preview_approval.json"
             if not p_sel.exists():
                 p_sel = c_dir / "preview_approval.json"
-            if p_sel.exists():
-                try:
-                    p_data = json.loads(p_sel.read_text(encoding="utf-8"))
-                    p_approval = PreviewApproval.model_validate(p_data)
-                    if not p_approval.is_approved():
-                        raise ValueError("Preview is not marked as approved")
-                except Exception as e:
-                    raise CliValidationError(
-                        f"Chapter {c_num} Review Gate 2 verification failed: {e}. Supply --approved to bypass."
-                    ) from e
+            if not p_sel.exists():
+                raise CliValidationError(
+                    f"Human Review Gate 2 not satisfied: 'preview_approval.json' not found for Chapter {c_num}. "
+                    "Preview video must be approved before compilation (or pass --approved)."
+                )
+
+            try:
+                p_data = read_json(p_sel)
+                p_approval = PreviewApproval.model_validate(p_data)
+            except Exception as e:
+                raise CliValidationError(
+                    f"Chapter {c_num} Review Gate 2 schema validation failed for '{p_sel}': {e}. Supply --approved to bypass."
+                ) from e
+
+            if not p_approval.is_approved():
+                raise CliValidationError(
+                    f"Chapter {c_num} Review Gate 2 rejected: '{p_sel}' is not approved. Supply --approved to bypass."
+                )
 
     sorted_chaps = sorted(chapter_videos.keys())
     compile_list = [chapter_videos[c] for c in sorted_chaps]

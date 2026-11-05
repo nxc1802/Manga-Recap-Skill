@@ -95,7 +95,7 @@ class TestCliExitCodesAndPurity:
         # Corrupted input file
         (chap_dir / "video" / "chapter_1_final_v1.mp4").write_bytes(b"INVALID_VIDEO_HEADER_DATA")
 
-        proc = run_cli(["compile", "-p", "bad_video_proj", "--json"], env_overrides=env)
+        proc = run_cli(["compile", "-p", "bad_video_proj", "--approved", "--json"], env_overrides=env)
         assert proc.returncode == ExitCode.GENERAL_ERROR
         
         envelope = json.loads(proc.stdout)

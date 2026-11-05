@@ -238,7 +238,7 @@ class TestDefect2FFmpegEnforcementAdversarial:
         init_chapter_layout("adv_p2", "1")
         chap_dir = tmp_path / "projects" / "adv_p2" / "chapters" / "1"
         (chap_dir / "video").mkdir(parents=True, exist_ok=True)
-        (chap_dir / "video" / "chapter_1_preview_v1.mp4").write_text("dummy")
+        (chap_dir / "video" / "chapter_1_final_v1.mp4").write_text("dummy")
 
         mock_result = MagicMock()
         mock_result.returncode = 1
@@ -247,7 +247,7 @@ class TestDefect2FFmpegEnforcementAdversarial:
 
         with patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
             with patch("subprocess.run", return_value=mock_result):
-                with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p2", "--chapters", "1", "--json"]):
+                with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p2", "--chapters", "1", "--approved", "--json"]):
                     out_buf = io.StringIO()
                     with patch("sys.stdout", out_buf):
                         code = main()

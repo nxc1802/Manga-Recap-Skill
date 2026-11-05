@@ -755,6 +755,122 @@ class TestRegressionArea5ReviewGatesEnforcement:
             code = main(["compile", "--project", slug, "--chapters", "1", "--approved"])
             assert code == ExitCode.SUCCESS
 
+    def test_compile_handles_metadata_errors_clearly(self, tmp_path, monkeypatch):
+        """Verifies that compile handles metadata errors clearly with read_json rather than swallowing."""
+        slug = "p_compile_corrupt_meta"
+        proj_dir, chap_dir = setup_test_project_and_chapter(tmp_path, monkeypatch, slug, "1")
+
+        vid_dir = chap_dir / "video"
+        vid_dir.mkdir(parents=True, exist_ok=True)
+        (vid_dir / "chapter_final.mp4").write_bytes(b"dummy_mp4")
+
+        # Provide approvals so review gate passes
+        atomic_write_json(proj_dir / "voice_selection.json", {
+            "project_slug": slug, "primary_voice": "Trúc Ly", "reviewer": "qa", "approved": True
+        })
+        atomic_write_json(chap_dir / "preview_approval.json", {
+            "project_slug": slug, "chapter_number": 1, "reviewer": "qa", "approved": True
+        })
+
+        # Write invalid/corrupt JSON into chapter.json
+        (chap_dir / "chapter.json").write_text("{ corrupt json: [not valid", encoding="utf-8")
+
+        out_buf = io.StringIO()
+        with patch("sys.stdout", out_buf):
+            code = main(["compile", "--project", slug, "--chapters", "1", "--json"])
+
+        assert code == ExitCode.VALIDATION_ERROR
+        payload = json.loads(out_buf.getvalue())
+        assert payload["status"] == "error"
+        assert payload["exit_code"] == ExitCode.VALIDATION_ERROR
+        assert "Failed to read metadata for Chapter 1" in payload["error"]["message"]
+
+    def test_compile_enforces_valid_review_gate_approvals_when_not_approved(self, tmp_path, monkeypatch):
+        """Verifies that compile strictly requires valid approvals when --approved is not used."""
+        slug = "p_compile_gate_req"
+        proj_dir, chap_dir = setup_test_project_and_chapter(tmp_path, monkeypatch, slug, "1")
+
+        vid_dir = chap_dir / "video"
+        vid_dir.mkdir(parents=True, exist_ok=True)
+        (vid_dir / "chapter_final.mp4").write_bytes(b"dummy_mp4")
+
+        # 1. Neither approval exists: Gate 1 fails
+        out_buf = io.StringIO()
+        with patch("sys.stdout", out_buf):
+            code = main(["compile", "--project", slug, "--chapters", "1", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        payload = json.loads(out_buf.getvalue())
+        assert "Human Review Gate 1 not satisfied" in payload["error"]["message"]
+
+        # 2. Add Gate 1, but Gate 2 missing: Gate 2 fails
+        atomic_write_json(proj_dir / "voice_selection.json", {
+            "project_slug": slug, "primary_voice": "Trúc Ly", "reviewer": "qa", "approved": True
+        })
+        out_buf = io.StringIO()
+        with patch("sys.stdout", out_buf):
+            code = main(["compile", "--project", slug, "--chapters", "1", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        payload = json.loads(out_buf.getvalue())
+        assert "Human Review Gate 2 not satisfied" in payload["error"]["message"]
+
+        # 3. Gate 2 exists but unapproved: Gate 2 rejected
+        atomic_write_json(chap_dir / "preview_approval.json", {
+            "project_slug": slug, "chapter_number": "1", "reviewer": "qa", "approved": False, "status": "rejected"
+        })
+        out_buf = io.StringIO()
+        with patch("sys.stdout", out_buf):
+            code = main(["compile", "--project", slug, "--chapters", "1", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
+        payload = json.loads(out_buf.getvalue())
+        assert "Review Gate 2 rejected" in payload["error"]["message"]
+
+        # 4. Both Gate 1 and Gate 2 validly approved: Compile succeeds without --approved
+        atomic_write_json(chap_dir / "preview_approval.json", {
+            "project_slug": slug, "chapter_number": "1", "reviewer": "qa", "approved": True
+        })
+
+        def fake_ffmpeg(*args, **kwargs):
+            out_mp4 = proj_dir / "video" / "final.mp4"
+            out_mp4.parent.mkdir(parents=True, exist_ok=True)
+            out_mp4.write_bytes(b"compiled")
+            out_wav = proj_dir / "audio" / "final.wav"
+            out_wav.parent.mkdir(parents=True, exist_ok=True)
+            out_wav.write_bytes(b"compiled_wav")
+            return MagicMock(returncode=0)
+
+        with patch("subprocess.run", side_effect=fake_ffmpeg):
+            code = main(["compile", "--project", slug, "--chapters", "1"])
+            assert code == ExitCode.SUCCESS
+
+    def test_compile_does_not_silently_use_preview_instead_of_final(self, tmp_path, monkeypatch):
+        """Verifies that compile does not silently use preview video when final render is missing."""
+        slug = "p_compile_no_preview"
+        proj_dir, chap_dir = setup_test_project_and_chapter(tmp_path, monkeypatch, slug, "1")
+
+        vid_dir = chap_dir / "video"
+        vid_dir.mkdir(parents=True, exist_ok=True)
+        # Create ONLY a preview video file
+        (vid_dir / "chapter_1_preview.mp4").write_bytes(b"preview_only_content")
+
+        # Provide approvals so review gates pass
+        atomic_write_json(proj_dir / "voice_selection.json", {
+            "project_slug": slug, "primary_voice": "Trúc Ly", "reviewer": "qa", "approved": True
+        })
+        atomic_write_json(chap_dir / "preview_approval.json", {
+            "project_slug": slug, "chapter_number": 1, "reviewer": "qa", "approved": True
+        })
+
+        out_buf = io.StringIO()
+        with patch("sys.stdout", out_buf):
+            code = main(["compile", "--project", slug, "--chapters", "1", "--json"])
+
+        assert code == ExitCode.IO_ERROR
+        payload = json.loads(out_buf.getvalue())
+        assert payload["status"] == "error"
+        assert payload["exit_code"] == ExitCode.IO_ERROR
+        assert "only has preview video" in payload["error"]["message"]
+        assert "preview video cannot be used for final export" in payload["error"]["message"]
+
 
 # ==============================================================================
 # Area 6: Artifact invalidation upon edits
