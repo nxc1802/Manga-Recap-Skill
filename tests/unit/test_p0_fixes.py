@@ -11,14 +11,22 @@ Comprehensive unit and regression tests verifying P0 fixes FIX-01 through FIX-05
 import argparse
 import asyncio
 import json
+import math
+import struct
+import wave
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from PIL import Image
 import pytest
 
 from src.cli.exit_codes import ExitCode, CliValidationError
 from src.cli.main import build_parser, main
 from src.core.schemas import (
+    CameraMotionType,
     CheckpointStatus,
+    FocusBox,
+    Manifest,
     PanelItem,
     PanelManifest,
     PanelStatus,
@@ -28,15 +36,20 @@ from src.core.schemas import (
     StageType,
 )
 from src.core.storage import (
+    StorageFileNotFoundError,
+    StorageManager,
     atomic_write_json,
     calculate_sha256,
     calculate_utterance_fingerprint,
     init_chapter_layout,
     init_project_layout,
     load_chapter_metadata,
+    load_manifest,
+    save_manifest,
     update_checkpoint,
 )
 from src.core.utils import compute_sliding_windows
+from src.render.video_engine import VideoEngine, VideoMode
 
 
 # ============================================================================
@@ -607,3 +620,495 @@ class TestFix05CliArgumentsAndSync:
             assert "-ar" in cmd
             ar_idx = cmd.index("-ar")
             assert cmd[ar_idx + 1] == "48000"
+
+
+# ============================================================================
+# FIX-06: P0 Core Correctness Regression Tests
+# ============================================================================
+
+def make_test_wav(path: Path, duration_sec: float = 1.5, sample_rate: int = 48000) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    num_samples = int(duration_sec * sample_rate)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        raw = bytearray()
+        for i in range(num_samples):
+            v = int(8000 * math.sin(2 * math.pi * 440 * i / sample_rate))
+            raw.extend(struct.pack("<h", v))
+        wf.writeframes(raw)
+    return path
+
+
+def make_test_image(path: Path, width: int = 800, height: int = 1200, color=(100, 150, 200)) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (width, height), color=color)
+    img.save(path, "JPEG")
+    return path
+
+
+class TestFix06P0CoreCorrectness:
+    """Regression test suite for P0 multi-panel rendering, failure handling, cache integrity, and drift."""
+
+    def test_manifest_storage_helpers(self, tmp_path):
+        """Verifies load_manifest and save_manifest on storage and StorageManager."""
+        assert load_manifest(tmp_path / "non_existent") is None
+
+        m = PanelManifest(
+            project_slug="demo_p",
+            chapter_number="1",
+            panels=[
+                PanelItem(
+                    panel_id="p001",
+                    sequence_number=1,
+                    filename="p001.jpg",
+                    relative_path="panels/p001.jpg",
+                    source_image="raw_01.jpg",
+                    crop_box=(0, 0, 100, 100),
+                    width=100,
+                    height=100,
+                    aspect_ratio=1.0,
+                    sha256="abc123",
+                )
+            ],
+        )
+        saved_file = save_manifest(tmp_path, m)
+        assert saved_file.exists()
+        assert saved_file.name == "manifest.json"
+
+        loaded = load_manifest(tmp_path)
+        assert loaded is not None
+        assert loaded.project_slug == "demo_p"
+        assert len(loaded.panels) == 1
+        assert loaded.panels[0].panel_id == "p001"
+
+        # Facade StorageManager
+        assert StorageManager.load_manifest(tmp_path).project_slug == "demo_p"
+        m.project_slug = "demo_facade"
+        StorageManager.save_manifest(tmp_path, m)
+        assert load_manifest(tmp_path).project_slug == "demo_facade"
+
+    def test_manifest_relative_path_resolution(self, tmp_path, monkeypatch):
+        """Verifies that panels are resolved via manifest.json relative_path without guessing filenames."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        # Create panel with custom filename and path
+        custom_art = chap_dir / "panels" / "custom_hero_art.png"
+        make_test_image(custom_art, width=640, height=480, color=(200, 40, 40))
+
+        # Register in manifest.json with panel_id="panel_hero"
+        manifest = PanelManifest(
+            project_slug="p1",
+            chapter_number="1",
+            panels=[
+                PanelItem(
+                    panel_id="panel_hero",
+                    sequence_number=1,
+                    filename="custom_hero_art.png",
+                    relative_path="panels/custom_hero_art.png",
+                    source_image="raw.jpg",
+                    crop_box=(0, 0, 640, 480),
+                    width=640,
+                    height=480,
+                    aspect_ratio=640 / 480,
+                    sha256=calculate_sha256(custom_art),
+                )
+            ],
+        )
+        save_manifest(chap_dir, manifest)
+
+        # Audio and script referencing "panel_hero"
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.2)
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["panel_hero"],
+                    narrator_text="Anh hùng thức tỉnh.",
+                    duration=1.2,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine()
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True)
+
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        assert clip_p.exists()
+        assert meta_p.exists()
+
+        meta_data = json.loads(meta_p.read_text(encoding="utf-8"))
+        assert meta_data["panel_hash"] == calculate_sha256(custom_art)
+
+    def test_multi_panel_segment_frame_distribution(self, tmp_path, monkeypatch):
+        """Verifies integer frame distribution across 3 panels in a single segment with 0 frame drift."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        p1 = make_test_image(chap_dir / "panels" / "p1.jpg", 640, 480, color=(10, 20, 30))
+        p2 = make_test_image(chap_dir / "panels" / "p2.jpg", 640, 480, color=(40, 50, 60))
+        p3 = make_test_image(chap_dir / "panels" / "p3.jpg", 640, 480, color=(70, 80, 90))
+
+        # Audio is 3.0s -> 90 frames at 30 fps
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=3.0)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["p1.jpg", "p2.jpg", "p3.jpg"],
+                    narrator_text="Chuỗi hành động liên hoàn qua ba khung tranh.",
+                    duration=3.0,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine(fps=30)
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True)
+
+        # 3 clips must exist for segment 001
+        c0 = chap_dir / "video" / "clips" / "clip_preview_001_0.mp4"
+        c1 = chap_dir / "video" / "clips" / "clip_preview_001_1.mp4"
+        c2 = chap_dir / "video" / "clips" / "clip_preview_001_2.mp4"
+        assert c0.exists()
+        assert c1.exists()
+        assert c2.exists()
+
+        m0 = json.loads(c0.with_suffix(".meta.json").read_text(encoding="utf-8"))
+        m1 = json.loads(c1.with_suffix(".meta.json").read_text(encoding="utf-8"))
+        m2 = json.loads(c2.with_suffix(".meta.json").read_text(encoding="utf-8"))
+
+        assert m0["duration_ms"] == 1000  # 30 frames
+        assert m1["duration_ms"] == 1000  # 30 frames
+        assert m2["duration_ms"] == 1000  # 30 frames
+        assert m0["duration_ms"] + m1["duration_ms"] + m2["duration_ms"] == 3000
+
+        # Prime frame math verification: 91 frames across 3 panels -> 31, 30, 30 (sum = 91)
+        f_total = 91
+        n = 3
+        f_base = f_total // n
+        rem = f_total % n
+        allocated = [f_base + (1 if k < rem else 0) for k in range(n)]
+        assert allocated == [31, 30, 30]
+        assert sum(allocated) == 91
+
+    def test_multi_panel_audio_offset_no_repetition(self, tmp_path, monkeypatch):
+        """Verifies that sliced audio offsets prevent speech from repeating on panel transitions."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        for name in ["p1.jpg", "p2.jpg", "p3.jpg"]:
+            make_test_image(chap_dir / "panels" / name, 640, 480)
+
+        # 6.0s audio for segment
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=6.0)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["p1.jpg", "p2.jpg", "p3.jpg"],
+                    narrator_text="Đoạn thoại dài trải qua ba khung hình liên tiếp.",
+                    duration=6.0,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine(fps=30)
+        captured_calls = []
+        original_gen = engine.generate_panel_clip
+
+        def spy_generate(*args, **kwargs):
+            captured_calls.append(kwargs)
+            return original_gen(*args, **kwargs)
+
+        with patch.object(engine, "generate_panel_clip", side_effect=spy_generate):
+            engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True)
+
+        assert len(captured_calls) == 3
+        # Clip 0 starts at offset 0.0s, Clip 1 at 2.0s, Clip 2 at 4.0s
+        assert captured_calls[0]["audio_offset_sec"] == pytest.approx(0.0, abs=0.01)
+        assert captured_calls[1]["audio_offset_sec"] == pytest.approx(2.0, abs=0.01)
+        assert captured_calls[2]["audio_offset_sec"] == pytest.approx(4.0, abs=0.01)
+
+    def test_panel_sequence_order_no_omissions_no_duplicates(self, tmp_path, monkeypatch):
+        """Verifies all referenced panels across 1, 2, and 3-panel segments are rendered in exact sequence."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        for i in range(1, 7):
+            make_test_image(chap_dir / "panels" / f"panel_{i:03d}.jpg", 640, 480)
+
+        make_test_wav(chap_dir / "audio" / "clips" / "a1.wav", duration_sec=1.0)
+        make_test_wav(chap_dir / "audio" / "clips" / "a2.wav", duration_sec=2.0)
+        make_test_wav(chap_dir / "audio" / "clips" / "a3.wav", duration_sec=3.0)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(seq_id="001", panel_ids=["panel_001.jpg"], narrator_text="Khung 1", duration=1.0, audio_path="audio/clips/a1.wav"),
+                ScriptSegment(seq_id="002", panel_ids=["panel_002.jpg", "panel_003.jpg"], narrator_text="Khung 2 và 3", duration=2.0, audio_path="audio/clips/a2.wav"),
+                ScriptSegment(seq_id="003", panel_ids=["panel_004.jpg", "panel_005.jpg", "panel_006.jpg"], narrator_text="Khung 4 5 6", duration=3.0, audio_path="audio/clips/a3.wav"),
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine(fps=30)
+        captured_concat_list = []
+        orig_concat = engine.concatenate_clips
+
+        def spy_concat(clip_paths, out_path):
+            captured_concat_list.extend(clip_paths)
+            return orig_concat(clip_paths, out_path)
+
+        with patch.object(engine, "concatenate_clips", side_effect=spy_concat):
+            engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True)
+
+        assert len(captured_concat_list) == 6
+        expected_names = [
+            "clip_preview_001.mp4",
+            "clip_preview_002_0.mp4",
+            "clip_preview_002_1.mp4",
+            "clip_preview_003_0.mp4",
+            "clip_preview_003_1.mp4",
+            "clip_preview_003_2.mp4",
+        ]
+        actual_names = [Path(p).name for p in captured_concat_list]
+        assert actual_names == expected_names
+
+    def test_render_failure_does_not_reuse_stale_clip_or_commit_meta(self, tmp_path, monkeypatch):
+        """Verifies that render errors unlink stale clips, never write false metadata, and mark FAILED."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        make_test_image(chap_dir / "panels" / "panel_001.jpg", 640, 480)
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.5)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["panel_001.jpg"],
+                    narrator_text="Đoạn văn kiểm thử lỗi.",
+                    duration=1.5,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        # Put a stale clip and meta on disk
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        clip_p.parent.mkdir(parents=True, exist_ok=True)
+        clip_p.write_bytes(b"STALE_CLIP_BYTES_" * 1000)
+        meta_p.write_text(json.dumps({"dummy": "old_cache"}), encoding="utf-8")
+
+        engine = VideoEngine()
+
+        # Mock generate_panel_clip to fail (return False)
+        with patch.object(engine, "generate_panel_clip", return_value=False):
+            with pytest.raises(RuntimeError) as exc_info:
+                engine.render_chapter(proj_dir, "1", quality="preview", force=True)
+            assert "Failed to generate clip" in str(exc_info.value)
+
+        # Assert stale clip and meta are deleted
+        assert not clip_p.exists()
+        assert not meta_p.exists()
+
+        # Assert RENDER stage is marked FAILED in chapter metadata
+        chap_meta = load_chapter_metadata(chap_dir)
+        render_cp = chap_meta.stages.get(StageType.RENDER)
+        assert render_cp is not None
+        assert render_cp.status == CheckpointStatus.FAILED
+        assert "Failed to generate clip" in str(render_cp.error_message)
+
+    def test_image_modification_invalidates_cache(self, tmp_path, monkeypatch):
+        """Verifies that changing a panel image invalidates cache and triggers re-rendering."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        p_file = make_test_image(chap_dir / "panels" / "panel_001.jpg", 640, 480, color=(100, 100, 100))
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.5)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["panel_001.jpg"],
+                    narrator_text="Kiểm tra bộ nhớ đệm hình ảnh.",
+                    duration=1.5,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine()
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+
+        clip_p = chap_dir / "video" / "clips" / "clip_preview_001.mp4"
+        meta_p = chap_dir / "video" / "clips" / "clip_preview_001.meta.json"
+        mtime_before = clip_p.stat().st_mtime_ns
+        hash_before = json.loads(meta_p.read_text(encoding="utf-8"))["panel_hash"]
+
+        # Modify panel image
+        make_test_image(p_file, 640, 480, color=(255, 0, 0))
+        assert calculate_sha256(p_file) != hash_before
+
+        # Re-render without force: should detect panel_hash difference and re-render
+        engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=True, force=False)
+
+        mtime_after = clip_p.stat().st_mtime_ns
+        hash_after = json.loads(meta_p.read_text(encoding="utf-8"))["panel_hash"]
+
+        assert hash_after != hash_before
+        assert mtime_after != mtime_before
+
+    def test_disallow_placeholders_in_final_render(self, tmp_path, monkeypatch):
+        """Verifies that final production renders strictly reject placeholder fallback."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        # Missing panel image
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.5)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["missing_panel.jpg"],
+                    narrator_text="Thiếu ảnh trong render final.",
+                    duration=1.5,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine()
+        with pytest.raises(RuntimeError) as exc_info:
+            engine.render_chapter(proj_dir, "1", quality="final", allow_placeholders=True)
+        assert "disallowed in final production renders" in str(exc_info.value).lower()
+
+    def test_unreadable_or_corrupt_panel_raises_error(self, tmp_path, monkeypatch):
+        """Verifies that a 0-byte or corrupt panel image raises ValueError immediately."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        # Create 0-byte corrupted image
+        bad_img = chap_dir / "panels" / "corrupt_panel.jpg"
+        bad_img.parent.mkdir(parents=True, exist_ok=True)
+        bad_img.write_bytes(b"")
+
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.5)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["corrupt_panel.jpg"],
+                    narrator_text="Hình ảnh lỗi 0 byte.",
+                    duration=1.5,
+                    audio_path="audio/clips/audio_1_001.wav",
+                )
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine()
+        with pytest.raises(ValueError) as exc_info:
+            engine.render_chapter(proj_dir, "1", quality="preview")
+        assert "empty (0 bytes)" in str(exc_info.value) or "corrupt" in str(exc_info.value).lower()
+
+    def test_av_duration_drift_under_150ms(self, tmp_path, monkeypatch):
+        """Verifies that rendered multi-panel video maintains audio/video timeline sync <= 150 ms."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+
+        proj_dir = init_project_layout("p1", "Test Project")
+        chap_dir = init_chapter_layout("p1", "1")
+
+        make_test_image(chap_dir / "panels" / "p1.jpg", 640, 480)
+        make_test_image(chap_dir / "panels" / "p2.jpg", 640, 480)
+        make_test_image(chap_dir / "panels" / "p3.jpg", 640, 480)
+
+        # 2 segments with total speech duration = 1.35 + 2.15 = 3.50s
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_001.wav", duration_sec=1.35)
+        make_test_wav(chap_dir / "audio" / "clips" / "audio_1_002.wav", duration_sec=2.15)
+
+        script = RecapScript(
+            project_slug="p1",
+            chapter_number="1",
+            title="Chapter 1",
+            segments=[
+                ScriptSegment(
+                    seq_id="001",
+                    panel_ids=["p1.jpg"],
+                    narrator_text="Đoạn thoại một với một khung ảnh.",
+                    duration=1.35,
+                    audio_path="audio/clips/audio_1_001.wav",
+                ),
+                ScriptSegment(
+                    seq_id="002",
+                    panel_ids=["p2.jpg", "p3.jpg"],
+                    narrator_text="Đoạn thoại hai với hai khung ảnh.",
+                    duration=2.15,
+                    audio_path="audio/clips/audio_1_002.wav",
+                ),
+            ],
+        )
+        atomic_write_json(chap_dir / "script.json", script.model_dump())
+
+        engine = VideoEngine(fps=30)
+        res = engine.render_chapter(proj_dir, "1", quality="preview", keep_temp=False)
+
+        assert Path(res["video_path"]).exists()
+        assert abs(res["duration_diff_seconds"]) <= 0.150

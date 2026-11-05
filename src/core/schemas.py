@@ -486,6 +486,10 @@ class PanelManifest(BaseModel):
     schema_version: str = "3.0.0"
 
 
+# Alias for convenience and backward compatibility
+Manifest = PanelManifest
+
+
 # ==============================================================================
 # 9. Human Review Gate: voice_selection.json
 # ==============================================================================

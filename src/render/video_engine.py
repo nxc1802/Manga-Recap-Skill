@@ -6,6 +6,7 @@ lossless concatenation, dynamic BGM ducking, and ffprobe stream validation.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
@@ -38,7 +39,9 @@ from src.core.storage import (
     get_chapter_dir,
     get_project_dir,
     load_chapter_metadata,
+    load_manifest,
     load_recap_script,
+    save_manifest,
     update_checkpoint,
 )
 from src.core.utils import (
@@ -353,6 +356,7 @@ class VideoEngine:
         preset: str = "medium",
         crf: str = "20",
         allow_animation: bool = True,
+        audio_offset_sec: float = 0.0,
     ) -> bool:
         """
         Renders an individual panel video clip with camera motion and audio synchronization.
@@ -362,13 +366,26 @@ class VideoEngine:
 
         duration_sec = max(1.0 / self.fps, float(duration_ms) / 1000.0)
 
-        # Inspect image dimensions
+        img_p = Path(img_path).resolve()
+        if not img_p.exists():
+            raise StorageFileNotFoundError(f"Panel image not found: {img_path}")
+        if img_p.stat().st_size == 0:
+            raise ValueError(f"Panel image is empty (0 bytes): {img_path}")
+
+        # Inspect image dimensions & verify image integrity
         try:
-            with Image.open(img_path) as tmp_img:
+            with Image.open(img_p) as tmp_img:
+                tmp_img.verify()
+            with Image.open(img_p) as tmp_img:
                 img_w, img_h = tmp_img.size
         except Exception as e:
-            logger.warning(f"Failed to read image dimensions for {img_path}: {e}")
-            img_w, img_h = 1280, 720
+            logger.error(f"Failed to read image dimensions or corrupt image {img_p}: {e}")
+            raise ValueError(f"Failed to read or corrupt panel image {img_p}: {e}") from e
+
+        # Prepare audio input arguments (supports sliced audio for multi-panel segments)
+        audio_input_args = ["-i", str(audio_path)]
+        if audio_offset_sec > 0.0:
+            audio_input_args = ["-ss", f"{audio_offset_sec:.3f}", "-i", str(audio_path)]
 
         # Determine camera motion mode
         motion_mode = camera_motion
@@ -411,13 +428,12 @@ class VideoEngine:
                         "ffmpeg",
                         "-y",
                         "-i",
-                        str(img_path),
+                        str(img_p),
                         "-loop",
                         "1",
                         "-i",
                         str(temp_overlay_png),
-                        "-i",
-                        str(audio_path),
+                        *audio_input_args,
                         "-filter_complex",
                         filter_complex,
                         "-map",
@@ -425,7 +441,7 @@ class VideoEngine:
                         "-map",
                         "2:a",
                         "-t",
-                        f"{duration_sec:.3f}",
+                        f"{duration_sec:.4f}",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -451,12 +467,9 @@ class VideoEngine:
                         "-y",
                         "-loop",
                         "1",
-                        "-t",
-                        f"{duration_sec:.3f}",
                         "-i",
-                        str(img_path),
-                        "-i",
-                        str(audio_path),
+                        str(img_p),
+                        *audio_input_args,
                         "-loop",
                         "1",
                         "-i",
@@ -468,7 +481,7 @@ class VideoEngine:
                         "-map",
                         "1:a",
                         "-t",
-                        f"{duration_sec:.3f}",
+                        f"{duration_sec:.4f}",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -490,9 +503,8 @@ class VideoEngine:
                         "ffmpeg",
                         "-y",
                         "-i",
-                        str(img_path),
-                        "-i",
-                        str(audio_path),
+                        str(img_p),
+                        *audio_input_args,
                         "-filter_complex",
                         f"[0:v]{cam_filter}[outv]",
                         "-map",
@@ -500,7 +512,7 @@ class VideoEngine:
                         "-map",
                         "1:a",
                         "-t",
-                        f"{duration_sec:.3f}",
+                        f"{duration_sec:.4f}",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -521,12 +533,9 @@ class VideoEngine:
                         "-y",
                         "-loop",
                         "1",
-                        "-t",
-                        f"{duration_sec:.3f}",
                         "-i",
-                        str(img_path),
-                        "-i",
-                        str(audio_path),
+                        str(img_p),
+                        *audio_input_args,
                         "-filter_complex",
                         f"[0:v]{cam_filter}[outv]",
                         "-map",
@@ -534,7 +543,7 @@ class VideoEngine:
                         "-map",
                         "1:a",
                         "-t",
-                        f"{duration_sec:.3f}",
+                        f"{duration_sec:.4f}",
                         "-c:v",
                         "libx264",
                         "-preset",
@@ -705,6 +714,11 @@ class VideoEngine:
                 raise ValueError(f"RecapScript has no segments in {script_path}")
 
             quality_clean = quality.lower().strip()
+            if quality_clean == "final" or suffix == "final":
+                if allow_placeholders:
+                    raise RuntimeError("Placeholder media is strictly disallowed in final production renders.")
+                allow_placeholders = False
+
             if quality_clean == "preview":
                 preset = "ultrafast"
                 crf = "28"
@@ -727,58 +741,149 @@ class VideoEngine:
             subtitles_dir.mkdir(parents=True, exist_ok=True)
             audio_dir.mkdir(parents=True, exist_ok=True)
 
+            # Load manifest.json if present to prioritize panel relative_path resolution
+            manifest = load_manifest(chap_dir)
+            if not manifest:
+                recut_manifest_p = p_dir / "image" / "recut" / f"chap_{chapter_num}" / "manifest.json"
+                if recut_manifest_p.exists():
+                    with contextlib.suppress(Exception):
+                        manifest = load_manifest(recut_manifest_p.parent)
+
+            panel_index: Dict[str, Path] = {}
+            if manifest and manifest.panels:
+                for panel in manifest.panels:
+                    p_resolved: Optional[Path] = None
+                    if panel.relative_path:
+                        rel_p = Path(panel.relative_path)
+                        cands = [
+                            chap_dir / rel_p,
+                            chap_dir / "panels" / rel_p.name,
+                            chap_dir / rel_p.name,
+                            p_dir / rel_p,
+                            p_dir / "image" / "panels" / rel_p.name,
+                        ]
+                        for c in cands:
+                            if c.exists():
+                                p_resolved = c.resolve()
+                                break
+                    if not p_resolved and panel.filename:
+                        fn = panel.filename
+                        cands = [
+                            chap_dir / "panels" / fn,
+                            chap_dir / fn,
+                            p_dir / "image" / "panels" / fn,
+                        ]
+                        for c in cands:
+                            if c.exists():
+                                p_resolved = c.resolve()
+                                break
+                    if p_resolved:
+                        if panel.panel_id:
+                            panel_index[panel.panel_id] = p_resolved
+                        if panel.filename:
+                            panel_index[panel.filename] = p_resolved
+                            panel_index[Path(panel.filename).stem] = p_resolved
+                        if panel.relative_path:
+                            panel_index[panel.relative_path] = p_resolved
+                            panel_index[Path(panel.relative_path).name] = p_resolved
+                            panel_index[Path(panel.relative_path).stem] = p_resolved
+
             # 1. Resolve Segment Audio Files & Exact Measured Durations
-            resolved_segments: List[Tuple[ScriptSegment, Path, Path]] = []
+            search_dirs = [
+                chap_dir / "panels",
+                chap_dir / "raw",
+                chap_dir / "images",
+                chap_dir,
+                p_dir / "image" / "panels",
+            ]
+
+            resolved_segments: List[Tuple[ScriptSegment, List[Path], Path]] = []
             segment_audio_paths: List[Path] = []
             timeline_durations: List[float] = []
             script_dirty = False
 
             for seg in script.segments:
-                # Find panel image
-                panel_p = None
-                candidate_panel_names = []
+                # Resolve ALL referenced panels in sequence without skipping
                 if seg.panel_ids:
-                    candidate_panel_names.extend(seg.panel_ids)
-                candidate_panel_names.extend([
-                    f"panel_{seg.seq_id}.jpg",
-                    f"panel_{seg.seq_id}.png",
-                    f"panel_{seg.seq_id}.webp",
-                    f"panel_{int(seg.seq_id):03d}.jpg" if seg.seq_id.isdigit() else f"panel_{seg.seq_id}.jpg",
-                ])
-
-                search_dirs = [
-                    chap_dir / "panels",
-                    chap_dir / "raw",
-                    chap_dir / "images",
-                    p_dir / "image" / "panels",
-                ]
-
-                for s_dir in search_dirs:
-                    if s_dir.exists():
-                        for c_name in candidate_panel_names:
-                            cand = s_dir / c_name
-                            if cand.exists():
-                                panel_p = cand
+                    target_panel_ids = list(seg.panel_ids)
+                else:
+                    # Fallback candidate resolution if panel_ids is empty
+                    candidate_panel_names = [
+                        f"panel_{seg.seq_id}.jpg",
+                        f"panel_{seg.seq_id}.png",
+                        f"panel_{seg.seq_id}.webp",
+                        f"panel_{int(seg.seq_id):03d}.jpg" if seg.seq_id.isdigit() else f"panel_{seg.seq_id}.jpg",
+                        f"panel_{seg.seq_id}",
+                    ]
+                    found_cand = None
+                    for c_name in candidate_panel_names:
+                        if c_name in panel_index:
+                            found_cand = c_name
+                            break
+                        for s_dir in search_dirs:
+                            if (s_dir / c_name).exists():
+                                found_cand = str(s_dir / c_name)
                                 break
-                    if panel_p:
-                        break
+                        if found_cand:
+                            break
+                    target_panel_ids = [found_cand if found_cand else f"panel_{seg.seq_id}.jpg"]
 
-                # Create synthetic panel placeholder if none found
-                if not panel_p:
-                    if not allow_placeholders:
-                        raise StorageFileNotFoundError(
-                            f"Missing panel image for segment {seg.seq_id} in chapter {chapter_num}. "
-                            f"Searched candidates: {candidate_panel_names}. "
-                            "Placeholders are disabled for video render integrity."
-                        )
-                    panels_default_dir = chap_dir / "panels"
-                    panels_default_dir.mkdir(parents=True, exist_ok=True)
-                    panel_p = panels_default_dir / f"panel_{seg.seq_id}.jpg"
-                    if not panel_p.exists():
-                        dummy_img = Image.new("RGB", (self.width, self.height), color=(30, 45, 60))
-                        d_draw = ImageDraw.Draw(dummy_img)
-                        d_draw.text((60, 60), f"Chapter {chapter_num} - Panel {seg.seq_id}", fill=(220, 220, 220))
-                        dummy_img.save(panel_p, "JPEG")
+                resolved_panels_for_seg: List[Path] = []
+                for pid in target_panel_ids:
+                    panel_p: Optional[Path] = None
+                    if pid in panel_index:
+                        panel_p = panel_index[pid]
+                    elif Path(pid).name in panel_index:
+                        panel_p = panel_index[Path(pid).name]
+                    elif Path(pid).stem in panel_index:
+                        panel_p = panel_index[Path(pid).stem]
+
+                    if not panel_p:
+                        direct_p = Path(pid)
+                        if direct_p.is_absolute() and direct_p.exists():
+                            panel_p = direct_p.resolve()
+                        else:
+                            cands = [pid, f"{pid}.jpg", f"{pid}.png", f"{pid}.webp"]
+                            if pid.isdigit():
+                                cands.append(f"panel_{int(pid):03d}.jpg")
+                            for s_dir in search_dirs:
+                                for c in cands:
+                                    cand_p = s_dir / c
+                                    if cand_p.exists():
+                                        panel_p = cand_p.resolve()
+                                        break
+                                if panel_p:
+                                    break
+
+                    if not panel_p or not panel_p.exists():
+                        if quality_clean == "final" or suffix == "final":
+                            raise RuntimeError(
+                                f"Missing panel image '{pid}' for segment {seg.seq_id} in chapter {chapter_num}. "
+                                "Placeholder media is strictly disallowed in final production renders."
+                            )
+                        if not allow_placeholders:
+                            raise StorageFileNotFoundError(
+                                f"Missing panel image '{pid}' for segment {seg.seq_id} in chapter {chapter_num}. "
+                                "Placeholders are disabled for video render integrity."
+                            )
+                        panels_default_dir = chap_dir / "panels"
+                        panels_default_dir.mkdir(parents=True, exist_ok=True)
+                        panel_p = (panels_default_dir / f"panel_{pid}.jpg").resolve()
+                        if not panel_p.exists():
+                            dummy_img = Image.new("RGB", (self.width, self.height), color=(30, 45, 60))
+                            d_draw = ImageDraw.Draw(dummy_img)
+                            d_draw.text((60, 60), f"Chapter {chapter_num} - Panel {pid}", fill=(220, 220, 220))
+                            dummy_img.save(panel_p, "JPEG")
+
+                    if panel_p.stat().st_size == 0:
+                        raise ValueError(f"Panel image '{panel_p}' is empty (0 bytes) for segment {seg.seq_id}.")
+                    try:
+                        with Image.open(panel_p) as tmp_im:
+                            tmp_im.verify()
+                    except Exception as e:
+                        raise ValueError(f"Corrupt or unreadable panel image '{panel_p}' for segment {seg.seq_id}: {e}")
+
+                    resolved_panels_for_seg.append(panel_p)
 
                 # Find utterance WAV audio
                 wav_p = None
@@ -787,10 +892,10 @@ class VideoEngine:
                     if not cand_audio.is_absolute():
                         for base in (chap_dir, p_dir):
                             if (base / cand_audio).exists():
-                                wav_p = base / cand_audio
+                                wav_p = (base / cand_audio).resolve()
                                 break
                     elif cand_audio.exists():
-                        wav_p = cand_audio
+                        wav_p = cand_audio.resolve()
 
                 if not wav_p:
                     audio_search_cands = [
@@ -802,11 +907,16 @@ class VideoEngine:
                     ]
                     for cand in audio_search_cands:
                         if cand.exists() and cand.stat().st_size > 44:
-                            wav_p = cand
+                            wav_p = cand.resolve()
                             break
 
-                # If WAV missing, synthesize 48kHz silence WAV for segment duration
+                # If WAV missing, synthesize 48kHz silence WAV for segment duration or raise
                 if not wav_p:
+                    if quality_clean == "final" or suffix == "final":
+                        raise RuntimeError(
+                            f"Missing audio clip for segment {seg.seq_id} in chapter {chapter_num}. "
+                            "Placeholder media is strictly disallowed in final production renders."
+                        )
                     if not allow_placeholders:
                         raise StorageFileNotFoundError(
                             f"Missing audio clip for segment {seg.seq_id} in chapter {chapter_num}. "
@@ -815,7 +925,7 @@ class VideoEngine:
                         )
                     clip_audio_dir = chap_dir / "audio" / "clips"
                     clip_audio_dir.mkdir(parents=True, exist_ok=True)
-                    wav_p = clip_audio_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
+                    wav_p = (clip_audio_dir / f"audio_{chapter_num}_{seg.seq_id}.wav").resolve()
                     dur_fallback = float(seg.duration or max(1.5, len(seg.narrator_text) * 0.08))
                     num_frames = int(round(dur_fallback * 48000))
                     with wave.open(str(wav_p), "wb") as wf:
@@ -831,7 +941,7 @@ class VideoEngine:
                     script_dirty = True
                 else:
                     seg.duration = exact_dur
-                resolved_segments.append((seg, panel_p, wav_p))
+                resolved_segments.append((seg, resolved_panels_for_seg, wav_p))
                 segment_audio_paths.append(wav_p)
                 timeline_durations.append(exact_dur)
 
@@ -861,7 +971,7 @@ class VideoEngine:
             clip_paths: List[Path] = []
             cumulative_time = 0.0
 
-            for idx, (seg, panel_p, wav_p) in enumerate(resolved_segments):
+            for idx, (seg, panel_paths, wav_p) in enumerate(resolved_segments):
                 seg_dur = timeline_durations[idx]
                 t_start = cumulative_time
                 t_end = cumulative_time + seg_dur
@@ -869,99 +979,147 @@ class VideoEngine:
 
                 f_start = round(t_start * self.fps)
                 f_end = round(t_end * self.fps)
-                clip_frames = max(1, f_end - f_start)
-                exact_clip_dur = clip_frames / float(self.fps)
+                f_total = max(len(panel_paths), f_end - f_start)
 
-                clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
-                clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
-                clip_paths.append(clip_p)
+                n_panels = len(panel_paths)
+                f_base = f_total // n_panels
+                r_frames = f_total % n_panels
 
-                duration_ms = int(round(exact_clip_dur * 1000.0))
+                audio_offset = 0.0
 
-                # Compute clip render fingerprint based on quality, resolution, motion, text, audio, image, and subtitle settings
-                audio_stat = wav_p.stat() if wav_p.exists() else None
-                panel_stat = panel_p.stat() if panel_p.exists() else None
-                audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
-                panel_hash = compute_file_sha256(panel_p) if panel_p and panel_p.exists() else ""
-                script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
-                focus_box_spec = seg.focus_box.model_dump() if seg.focus_box else None
+                for k, panel_p in enumerate(panel_paths):
+                    f_k = f_base + (1 if k < r_frames else 0)
+                    dur_k = f_k / float(self.fps)
+                    duration_ms_k = int(round(dur_k * 1000.0))
 
-                current_fingerprint = {
-                    "quality": quality_clean,
-                    "target_width": self.width,
-                    "target_height": self.height,
-                    "fps": self.fps,
-                    "duration_ms": duration_ms,
-                    "narrator_text": seg.narrator_text.strip(),
-                    "script_hash": script_hash,
-                    "audio_hash": audio_hash,
-                    "panel_hash": panel_hash,
-                    "camera_motion": seg.camera_motion.value if hasattr(seg.camera_motion, "value") else str(seg.camera_motion),
-                    "focus_box": focus_box_spec,
-                    "burn_subtitles": burn_subtitles,
-                    "allow_animation": allow_animation,
-                    "video_mode": str(video_mode),
-                    "audio_size": audio_stat.st_size if audio_stat else 0,
-                    "panel_size": panel_stat.st_size if panel_stat else 0,
-                }
+                    if n_panels == 1:
+                        clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
+                        clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
+                    else:
+                        clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.mp4"
+                        clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.meta.json"
 
-                # Skip if already rendered, fingerprint matches, and force is False
-                is_cached = False
-                if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
-                    try:
-                        cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
-                        if cached_meta == current_fingerprint:
-                            is_cached = True
-                    except Exception:
-                        is_cached = False
+                    clip_paths.append(clip_p)
 
-                if is_cached:
-                    continue
+                    # Compute clip render fingerprint based on quality, resolution, motion, text, audio, image, and subtitle settings
+                    audio_stat = wav_p.stat() if wav_p.exists() else None
+                    panel_stat = panel_p.stat() if panel_p.exists() else None
+                    audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
+                    panel_hash = compute_file_sha256(panel_p) if panel_p and panel_p.exists() else ""
+                    script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
+                    focus_box_spec = seg.focus_box.model_dump() if (seg.focus_box and k == 0) else None
+                    panel_cam = seg.camera_motion if (k == 0 or seg.camera_motion in (CameraMotionType.STATIC, "static")) else CameraMotionType.STATIC
 
-                if isinstance(video_mode, str) and video_mode != "auto":
-                    resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
-                elif isinstance(video_mode, VideoMode):
-                    resolved_mode = video_mode
-                else:
-                    try:
-                        with Image.open(panel_p) as tmp_im:
-                            pw, ph = tmp_im.size
-                        resolved_mode = self.detect_video_mode(pw, ph)
-                    except Exception:
-                        resolved_mode = VideoMode.PORTRAIT_PADDED
+                    current_fingerprint = {
+                        "quality": quality_clean,
+                        "target_width": self.width,
+                        "target_height": self.height,
+                        "fps": self.fps,
+                        "duration_ms": duration_ms_k,
+                        "narrator_text": seg.narrator_text.strip(),
+                        "script_hash": script_hash,
+                        "audio_hash": audio_hash,
+                        "panel_hash": panel_hash,
+                        "camera_motion": panel_cam.value if hasattr(panel_cam, "value") else str(panel_cam),
+                        "focus_box": focus_box_spec,
+                        "burn_subtitles": burn_subtitles,
+                        "allow_animation": allow_animation,
+                        "video_mode": str(video_mode),
+                        "audio_size": audio_stat.st_size if audio_stat else 0,
+                        "panel_size": panel_stat.st_size if panel_stat else 0,
+                        "audio_offset_sec": round(audio_offset, 3),
+                        "panel_index": k,
+                    }
 
-                self.generate_panel_clip(
-                    img_path=str(panel_p),
-                    audio_path=str(wav_p),
-                    duration_ms=duration_ms,
-                    output_path=str(clip_p),
-                    video_mode=resolved_mode,
-                    seq=idx + 1,
-                    panel_text=seg.narrator_text,
-                    burn_subtitles=burn_subtitles,
-                    camera_motion=seg.camera_motion,
-                    focus_box=seg.focus_box,
-                    preset=preset,
-                    crf=crf,
-                    allow_animation=allow_animation,
-                )
-
-                # Verify render output before committing metadata sidecar
-                if not clip_p.exists() or clip_p.stat().st_size <= 1000:
-                    if clip_meta_p.exists():
+                    # Skip if already rendered, fingerprint matches, and force is False
+                    is_cached = False
+                    if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
                         try:
-                            clip_meta_p.unlink()
+                            cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
+                            if cached_meta == current_fingerprint:
+                                is_cached = True
                         except Exception:
-                            pass
-                    raise RuntimeError(
-                        f"Render verification failed for segment {seg.seq_id}: "
-                        f"output clip {clip_p} is missing or corrupted (size: {clip_p.stat().st_size if clip_p.exists() else 0} bytes)."
-                    )
+                            is_cached = False
 
-                try:
-                    clip_meta_p.write_text(json.dumps(current_fingerprint, ensure_ascii=False, indent=2), encoding="utf-8")
-                except Exception as e:
-                    logger.warning(f"Failed to write clip metadata fingerprint for {clip_p}: {e}")
+                    if not is_cached:
+                        if clip_p.exists():
+                            try:
+                                clip_p.unlink()
+                            except Exception:
+                                pass
+                        if clip_meta_p.exists():
+                            try:
+                                clip_meta_p.unlink()
+                            except Exception:
+                                pass
+
+                        if isinstance(video_mode, str) and video_mode != "auto":
+                            resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
+                        elif isinstance(video_mode, VideoMode):
+                            resolved_mode = video_mode
+                        else:
+                            try:
+                                with Image.open(panel_p) as tmp_im:
+                                    pw, ph = tmp_im.size
+                                resolved_mode = self.detect_video_mode(pw, ph)
+                            except Exception:
+                                resolved_mode = VideoMode.PORTRAIT_PADDED
+
+                        render_ok = self.generate_panel_clip(
+                            img_path=str(panel_p),
+                            audio_path=str(wav_p),
+                            duration_ms=dur_k * 1000.0,
+                            output_path=str(clip_p),
+                            video_mode=resolved_mode,
+                            seq=idx + 1,
+                            panel_text=seg.narrator_text,
+                            burn_subtitles=burn_subtitles,
+                            camera_motion=panel_cam,
+                            focus_box=seg.focus_box if k == 0 else None,
+                            preset=preset,
+                            crf=crf,
+                            allow_animation=allow_animation,
+                            audio_offset_sec=audio_offset,
+                        )
+
+                        if not render_ok:
+                            if clip_p.exists():
+                                try:
+                                    clip_p.unlink()
+                                except Exception:
+                                    pass
+                            if clip_meta_p.exists():
+                                try:
+                                    clip_meta_p.unlink()
+                                except Exception:
+                                    pass
+                            raise RuntimeError(
+                                f"Failed to generate clip: {clip_p} for segment {seg.seq_id}, panel {panel_p.name}"
+                            )
+
+                        # Verify render output before committing metadata sidecar
+                        if not clip_p.exists() or clip_p.stat().st_size <= 1000:
+                            if clip_p.exists():
+                                try:
+                                    clip_p.unlink()
+                                except Exception:
+                                    pass
+                            if clip_meta_p.exists():
+                                try:
+                                    clip_meta_p.unlink()
+                                except Exception:
+                                    pass
+                            raise RuntimeError(
+                                f"Render verification failed for segment {seg.seq_id}, panel {panel_p.name}: "
+                                f"output clip {clip_p} is missing or corrupted (size: {clip_p.stat().st_size if clip_p.exists() else 0} bytes)."
+                            )
+
+                        try:
+                            clip_meta_p.write_text(json.dumps(current_fingerprint, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception as e:
+                            logger.warning(f"Failed to write clip metadata fingerprint for {clip_p}: {e}")
+
+                    audio_offset += dur_k
 
             # 5. Lossless Visual Stream Concatenation
             raw_video_path = video_dir / f"raw_video_{chapter_num}.mp4"

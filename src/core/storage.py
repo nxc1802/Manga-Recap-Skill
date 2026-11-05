@@ -30,6 +30,8 @@ from pydantic import BaseModel
 from src.core.schemas import (
     ChapterMetadata,
     CheckpointStatus,
+    Manifest,
+    PanelManifest,
     ProjectConfig,
     RecapScript,
     StageCheckpoint,
@@ -175,6 +177,9 @@ def calculate_sha256(content: Union[bytes, str, Path]) -> str:
         raise TypeError(f"Unsupported content type for SHA-256 calculation: {type(content)}")
 
     return hasher.hexdigest().lower()
+
+
+compute_file_sha256 = calculate_sha256
 
 
 def verify_checksum(file_path: Path, expected_hash: str) -> bool:
@@ -572,6 +577,30 @@ def save_recap_script(chapter_dir: Path, script: Union[RecapScript, Dict[str, An
     atomic_write_json(script_file, script)
 
 
+def load_manifest(chapter_dir: Path) -> Optional[PanelManifest]:
+    """
+    Loads and validates manifest.json for the given chapter directory or file path.
+    Returns None if manifest.json does not exist.
+    """
+    chapter_dir = Path(chapter_dir)
+    manifest_file = chapter_dir if chapter_dir.suffix == ".json" else chapter_dir / "manifest.json"
+    if not manifest_file.exists():
+        return None
+    data = read_json(manifest_file)
+    return PanelManifest.model_validate(data)
+
+
+def save_manifest(chapter_dir: Path, manifest: Union[PanelManifest, Dict[str, Any]]) -> Path:
+    """
+    Atomically writes manifest.json for the given chapter directory or file path.
+    Returns the resolved Path to the saved manifest.json.
+    """
+    chapter_dir = Path(chapter_dir)
+    manifest_file = chapter_dir if chapter_dir.suffix == ".json" else chapter_dir / "manifest.json"
+    atomic_write_json(manifest_file, manifest)
+    return manifest_file
+
+
 class StorageManager:
     """Convenience facade for storage management, paths, checkpoints, and cleanup."""
 
@@ -613,4 +642,12 @@ class StorageManager:
         checksums: Optional[Dict[str, str]] = None
     ) -> ChapterMetadata:
         return update_checkpoint(chapter_path, stage, status, error, artifacts, checksums)
+
+    @staticmethod
+    def load_manifest(chapter_dir: Path) -> Optional[PanelManifest]:
+        return load_manifest(chapter_dir)
+
+    @staticmethod
+    def save_manifest(chapter_dir: Path, manifest: Union[PanelManifest, Dict[str, Any]]) -> Path:
+        return save_manifest(chapter_dir, manifest)
 
