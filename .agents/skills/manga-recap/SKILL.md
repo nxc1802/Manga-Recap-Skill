@@ -38,22 +38,24 @@ The `manga-recap` skill enables coding agents (OpenCode, Claude Code, Antigravit
 3. **VieNeu-TTS Model Weights**: Downloaded and cached locally for VieNeu-TTS v3 Turbo (no network calls during synthesis).
 4. **CLI Entrypoint**: `manga-recap` or `python -m src.cli.main`.
 
-## Complete Workflow: Stage 0 to Stage 10
+## Streamlined 5-Stage Architecture & Consolidated Review Gates
+
+The pipeline operates across 5 streamlined operational stages:
 
 ```
-[0. User Config Gate] -> [1. Ingest/Crawl] -> [2. Segment/Inspect] -> [3. Character Sync]
-         │                       │                    │                       │
-         v                       v                    v                       v
-   project.json             Raw Images         Panel Manifest           characters.json
-                                                                              │
-                                                                              v
-[5. Validate Script] <───────────────────────────────────────── [4. 5/2 Window Scripting]
-         │                                                      (Subject-Centric Framing)
-         v
-[6. Local VieNeu-TTS] -> [7. Review Gate 1] -> [8. Render Video] -> [9. Review Gate 2] -> [10. Compile]
+[Gate 0: Series Config (project.json)] ───► [Gate 1: Voice Approval (voice_selection.json)]
+                                                       │
+                                                       ▼
+[Stage 1: INGEST] ───► [Stage 2: AGENT] ───► [Stage 3: AUDIO] ───► [Stage 4: RENDER] ───► [Stage 5: EXPORT]
+ (crawl/segment)       (script/validate)         (local TTS)        (1080p / optional Gate 2) (batch / compile)
 ```
 
-### Stage 0: User Configuration & Onboarding Gate (BẮT BUỘC)
+- **Gate 0 (Video Config)**: Configured **ONCE** per series in `data/projects/<slug>/project.json`. All chapters automatically inherit resolution, video mode, subtitles, animation, voice, and BGM settings without repeated prompts.
+- **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `data/projects/<slug>/voice_selection.json` (or `characters.json`) and inherited across all chapters.
+- **Gate 2 (Preview Approval)**: Optional preview verification; bypassed in batch runs (`--skip-preview`) to enable direct 1080p final render.
+- **Batch Mode**: Multi-chapter sequential processing via `manga-recap batch` with chapter failure isolation and single-chapter retry (`--retry-chapter`).
+
+### Stage 0: Series Configuration Gate (Configured ONCE per Series)
 Before launching any pipeline execution, the Agent **MUST** ask the user or explicitly confirm all video configurations:
 1. **Chapter & Source URL**: Chapter number and source URL (webtoon/manga reader link).
 2. **Giọng đọc (Voice ID)**: Selected from 25 VieNeu-TTS local presets:
@@ -142,21 +144,32 @@ Prior to full video rendering, present synthesized voice samples to the human us
 ### Stage 8: Cinematic Video Render
 Render preview or final video clips with dynamic FFmpeg filterchains:
 ```bash
+# Preview render (for manual inspection)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality preview --json
+
+# Final 1080p render (use --skip-preview to bypass Gate 2 preview requirement)
+manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --json
 ```
 - Applies chosen camera motion (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`, `vertical_scroll`).
 - Times panel duration exactly to synthesized audio duration.
 - Generates aligned `.srt` subtitles and ducks background music during speech.
 
 ### Stage 9: Human Review Gate 2 (Video Preview Verification)
-Verify output video stream using `ffprobe` and human inspection at Review Gate 2:
+Verify output video stream using `ffprobe` and human inspection at Review Gate 2 (optional, bypassed via `--skip-preview` or batch mode):
 1. Verify video stream: 1280x720 (preview) or 1920x1080 (final), 30 fps, H.264 video, AAC audio.
 2. Check subtitle readability and audio-visual synchronization.
 3. Ensure no dialogue or faces are cut off by focus_box crops.
 
-### Stage 10: Multi-Chapter Compilation
-Assemble multiple completed chapters into a continuous full-length recap video:
+### Stage 10: Multi-Chapter Compilation & Batch Mode
+Process multiple chapters in unattended batch mode or assemble into a master feature recap:
 ```bash
+# 1. Unattended sequential multi-chapter batch mode
+manga-recap batch --project <project_slug> --chapters 1-5 --compile --json
+
+# 2. Single-chapter retry without restarting completed chapters
+manga-recap batch --project <project_slug> --retry-chapter 2 --json
+
+# 3. Assemble multiple completed chapters into a continuous full-length recap video
 manga-recap compile --project <project_slug> --chapters 1,2 --output "data/projects/<project_slug>/video/full_recap.mp4" --json
 ```
 

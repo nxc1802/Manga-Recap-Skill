@@ -1,12 +1,10 @@
-# Human Review Gates & Quality Assurance Protocol
+## 0. Review Gate 0: Video Configuration & Series Setup Gate (Cấu hình 1 LẦN cho cả Series)
 
-## 0. Review Gate 0: Video Configuration & User Onboarding Gate (BẮT BUỘC)
-
-Diễn ra **ngay khi bắt đầu** trước khi thực thi bất kỳ bước nào (Crawl, Script, TTS, Render).
+Diễn ra **ngay khi khởi tạo project/series** trước khi thực thi bất kỳ bước nào (Crawl, Script, TTS, Render).
 
 ### Mục tiêu:
-Agent **bắt buộc** phải hỏi User (hoặc xác nhận rõ ràng) bộ tham số cấu hình:
-1. **Chapter & URL**: Số chapter và link truyện cần recap.
+Cấu hình một lần duy nhất cho toàn bộ Series vào `data/projects/<project_slug>/project.json`:
+1. **Chapter & URL**: Số chapter khởi điểm và link bộ truyện.
 2. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Trúc Ly` - Nữ miền Bắc truyền cảm, `Hải Đăng` - Nam miền Nam, `Thiền Tâm Đức` - Nam miền Bắc trầm cổ phong, `Thiện Minh` - Nam miền Bắc hào sảng, `Mai Anh` - Nữ miền Bắc tươi trẻ, v.v.).
 3. **Tốc độ đọc (Speed)**: `0.9x`, `1.0x` (chuẩn), `1.1x`, `1.2x`.
 4. **Phụ đề (Burn Subtitles)**: `Có` (`true`) hoặc `Không` (`false`).
@@ -16,13 +14,13 @@ Agent **bắt buộc** phải hỏi User (hoặc xác nhận rõ ràng) bộ tha
 6. **Chất lượng Video**: `preview` (720p) hoặc `final` (1080p).
 7. **BGM (Nhạc nền)**: File nhạc nền và âm lượng nếu có.
 
-Ghi nhận cấu hình vào `data/projects/<project_slug>/project.json`.
+**Quy tắc kế thừa (Inheritance Rule)**: Mọi chapter tiếp theo trong cùng series sẽ **tự động kế thừa** các thông số trên từ `project.json`. Agent và CLI **tuyệt đối không hỏi lại** người dùng cho các chapter sau.
 
 ---
 
-## 1. Review Gate 1: Voice & Emotion Strategy Approval
+## 1. Review Gate 1: Voice & Emotion Strategy Approval (Duyệt 1 LẦN cho cả Series)
 
-Occurs **after** Stage 6 (Local TTS Synthesis of screening samples) and **before** Stage 8 (Full Video Rendering).
+Diễn ra **sau** khi thử giọng / audition và **trước** khi render video.
 
 ### Objectives
 1. Verify synthesized audio quality, pronunciation of character names, and cadence.
@@ -30,7 +28,7 @@ Occurs **after** Stage 6 (Local TTS Synthesis of screening samples) and **before
    - **Strategy A (Single Narrator)**: Unified narration across all segments.
    - **Strategy B (Narrator + Characters)**: Main narrator + character-specific voices.
    - **Strategy C (Emotion-Aware Narrator)**: Narrator with fine-tuned punctuation and cue tags.
-3. User approval is recorded in `data/projects/<project_slug>/voice_selection.json`:
+3. User approval is recorded in `data/projects/<project_slug>/voice_selection.json` at the **project root level**:
    ```json
    {
      "approved_strategy": "single_narrator",
@@ -38,26 +36,23 @@ Occurs **after** Stage 6 (Local TTS Synthesis of screening samples) and **before
      "speed": 1.0,
      "reviewer": "user",
      "approved_at": "2026-11-03T14:30:00Z",
-     "notes": "Voice approved for full chapter render."
+     "notes": "Voice approved for entire series."
    }
    ```
-4. **Agent Action**: The agent MUST NOT proceed to high-resolution video rendering if `voice_selection.json` is missing or unapproved.
+4. **Series Inheritance**: All chapters in the project automatically inherit this single approval.
 
 ---
 
-## 2. Review Gate 2: Video Preview Approval
+## 2. Review Gate 2: Video Preview Approval (Tùy chọn / Bỏ qua trong Batch Mode)
 
-Occurs **after** Stage 8 (Preview Render at 720p) and **before** Stage 10 (Final High-Res Compile).
+Occurs when manual verification is desired at 720p preview quality.
 
-### Objectives
-1. Inspect audio-visual synchronization: verify that panel cuts align precisely with utterance ends.
-2. Inspect camera motions: ensure pan and zoom speeds feel cinematic and do not cause motion sickness.
-3. Check subtitle legibility: ensure Vietnamese font renders correctly with full diacritics and no text clipping.
-4. Verify BGM balance: ensure background music ducks cleanly under speech and crossfades smoothly.
-5. If changes are requested:
-   - Adjust `focus_box` or `camera_motion` in `script.json`.
-   - Re-run `manga-recap render --project <slug> --chapter <num> --quality preview`.
-6. Once approved, proceed to final 1080p compile.
+### Objectives & Bypass Rules:
+1. **Interactive Inspection**: Inspect audio-visual synchronization, Ken Burns motion, subtitle readability, and BGM ducking on `preview.mp4`.
+2. **Optional in Production / Batch Runs**:
+   - In single-chapter direct rendering: pass `--skip-preview` to bypass Gate 2 and render production 1080p directly.
+   - In batch runs (`manga-recap batch`): Gate 2 is **automatically bypassed by default** (`--skip-preview`), enabling fully automated, unattended 1080p video production.
+3. Once rendered, completing `StageType.RENDER` directly marks chapter status as `COMPLETED`.
 
 ---
 

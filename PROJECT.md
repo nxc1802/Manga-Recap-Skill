@@ -22,6 +22,9 @@
 | 10 | FIX-10: Cross-Platform Packaging | Add `pyproject.toml` with `manga-recap` CLI entrypoint; clean cloud API keys from setup scripts | M2 | ORIGINAL_REQUEST §R2 |
 | 11 | Phase 3: Comprehensive Regression Tests | Author unit/regression tests covering FIX-01..10, 100% pass on all 313+ existing tests | M3 | ORIGINAL_REQUEST §R3 |
 | 12 | Phase 4: Real E2E Chapter Verification | Real chapter test with neural TTS on Webtoons URL, verify anti-bot handling and timeline sync | M4 | ORIGINAL_REQUEST §R4 |
+| 13 | P2.1: Workflow Simplification | 5 operational stages (Ingest -> Agent -> Audio -> Render -> Export), eliminate FINALIZE | M3-P2 | ORIGINAL_REQUEST §R3 |
+| 14 | P2.2: Code Cleanup & Dead Code Removal | Remove supabase_client, youtube_uploader, legacy CLI scripts, strip Google API packages | M3-P2 | ORIGINAL_REQUEST §R3 |
+| 15 | P2.3: Sequential Multi-Chapter Batch Mode | Implement `manga-recap batch`, chapter error isolation, single-chapter retry, direct 1080p | M3-P2 | ORIGINAL_REQUEST §R3 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
@@ -30,6 +33,7 @@
 | M2 | P1 Data Integrity & Contracts | FIX-06, FIX-07, FIX-08, FIX-09, FIX-10 | M1 | DONE |
 | M3 | Regression Testing Suite | Comprehensive test suite for FIX-01..10 and baseline integrity | M1, M2 | DONE |
 | M4 | Real E2E Chapter Verification | Real Webtoons URL crawl, neural TTS, render, and forensic audit | M1, M2, M3 | DONE |
+| P2 | Phase 3: P2 Simplification & Batch | 5 operational stages, consolidated gates, dead code cleanup, batch CLI | M1, M2, M3 | IN_PROGRESS |
 
 ## Interface Contracts
 ### TTS Fingerprinting Contract (FIX-01)
@@ -50,22 +54,25 @@
   - Each panel $p \in [0, P)$ is committed to narration in exactly ONE window batch.
   - `validate_cmd.py` enforces: `set(all_seg_panel_ids) == set(manifest_panel_ids)` with zero duplicates.
 
-### Review Gates Contract (FIX-04)
-- Gate 1 (Voice Selection): `voice_selection.json` exists with `status: "approved"`, OR `--approved` flag provided.
-- Gate 2 (Preview Approval): `preview.mp4` exists AND `preview_approval.json` exists with `status: "approved"`, OR `--approved` flag provided.
-- Final 1080p render (`quality == "final"`) MUST enforce both Gate 1 and Gate 2. Remove `--skip-review` bypass.
+### Consolidated Review Gates Contract (P2 Simplification)
+- Gate 0 (Video Configuration): Configured ONCE per series in `project.json`; inherited automatically across all chapters.
+- Gate 1 (Voice Selection): Approved ONCE per series in `data/projects/<slug>/voice_selection.json`; inherited across all chapters.
+- Gate 2 (Preview Approval): Optional for interactive human inspection; bypassed in batch mode or via `--skip-preview` for direct 1080p final render.
+- Completing `RENDER` completes chapter checkpoint (`overall_status = CheckpointStatus.COMPLETED`).
 
-### CLI Sync Contract (FIX-05)
+### CLI Sync Contract (FIX-05 / P2)
 - `main.py` -> `render_cmd.py` -> `video_engine.py`: `--video-mode` (`auto`, `landscape_fit`, `portrait_vertical`, `portrait_padded`) forwarded to `render_chapter()`.
+- `batch_cmd.py`: sequential multi-chapter batch runner (`manga-recap batch`) with chapter error isolation and single retry (`--retry-chapter`).
 - `segment_cmd.py`: respects `--force`.
-- `compile_cmd.py`: `-ar 48000`.
+- `compile_cmd.py`: `-ar 48000`, inherits series Gate 1 and Gate 2.
 
 ## Code Layout
-- `src/cli/`: Command handlers (`main.py`, `crawl_cmd.py`, `segment_cmd.py`, `validate_cmd.py`, `tts_cmd.py`, `render_cmd.py`, `compile_cmd.py`, `status_cmd.py`).
+- `src/cli/`: Command handlers (`main.py`, `batch_cmd.py`, `crawl_cmd.py`, `segment_cmd.py`, `validate_cmd.py`, `tts_cmd.py`, `render_cmd.py`, `compile_cmd.py`, `status_cmd.py`, `tts_benchmark_cmd.py`).
 - `src/core/`: Schemas (`schemas.py`), storage (`storage.py`), config (`config.py`).
 - `src/crawler/`: Webtoons crawler service (`crawler_service.py`).
 - `src/segment/`: Panel segmenter (`streaming_segmenter.py`).
-- `src/tts/`: TTS engine abstraction (`engine.py`, `tts_service.py`).
+- `src/tts/`: TTS engine abstraction (`engine.py`, `tts_service.py`, `benchmark.py`).
 - `src/render/`: Video engine (`video_engine.py`), audio mixer (`audio_mixer.py`), subtitle generator (`subtitle.py`).
 - `tests/`: Unit, adversarial, and E2E tests (`tests/unit/`, `tests/adversarial/`, `tests/e2e/`).
 - `pyproject.toml`: Packaging specification for `pip install -e .`.
+

@@ -22,12 +22,15 @@ An autonomous, agent-native manga and webtoon recap video creation pipeline. Eng
    - Master narration synthesized offline at uncompressed **48 kHz 16-bit PCM WAV** with SHA-256 utterance-level caching (`src/tts/`).
    - Hardware-accelerated local neural execution (Apple Silicon MPS / NVIDIA CUDA / CPU ONNX) delivering high throughput ($RTF \approx 0.197$, ~5.1x faster than real-time speech).
 4. **Cinematic Video Engine V2**:
-   - 8 dynamic camera motion modes (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`).
+   - 8 dynamic camera motion modes (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`, `vertical_scroll`).
    - Motion speeds and clip durations strictly calculated from exact binary audio waveform headers.
    - Dynamic FFmpeg `sidechaincompress` BGM volume ducking and millisecond-synchronized `.srt` subtitles.
-5. **Human Quality Review Gates**:
-   - **Gate 1**: Voice & emotion audition and selection via local standalone HTML interface (`docs/lab/index.html`) producing `voice_selection.json`.
-   - **Gate 2**: Low-resolution chapter preview validation before final high-resolution encoding.
+5. **Streamlined 5-Stage Architecture & Consolidated Review Gates**:
+   - Streamlined into 5 operational stages: **Ingest** $\to$ **Agent** $\to$ **Audio** $\to$ **Render** $\to$ **Export**.
+   - **Gate 0 (Video Config)**: Configured **ONCE** per series in `project.json` and automatically inherited across all chapters without repetitive prompts.
+   - **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `voice_selection.json` and inherited by all chapters.
+   - **Gate 2 (Preview Approval)**: Optional for human inspection; automatically bypassed in batch runs (`--skip-preview`) to enable direct unattended 1080p rendering.
+   - **Batch Mode**: Multi-chapter sequential execution (`manga-recap batch`) with chapter error isolation and single-chapter retry (`--retry-chapter`).
 
 ---
 
@@ -129,13 +132,16 @@ manga-recap validate --project <slug> --chapter <num> --strict --json
 # 6. Synthesize local VieNeu-TTS 48 kHz audio utterances
 manga-recap tts --project <slug> --chapter <num> [--force] --json
 
-# 7. Render chapter video (preview or final) with camera motion & subtitles
-manga-recap render --project <slug> --chapter <num> --quality preview --json
+# 7. Render chapter video (preview or final 1080p; use --skip-preview to bypass preview gate)
+manga-recap render --project <slug> --chapter <num> --quality final --skip-preview --json
 
-# 8. Concatenate multiple chapter videos into a continuous feature recap
+# 8. Sequential multi-chapter batch processing (with failure isolation and direct 1080p render)
+manga-recap batch --project <slug> [--chapters 1-5] [--retry-chapter <num>] [--compile] --json
+
+# 9. Concatenate multiple chapter videos into a continuous feature recap
 manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 
-# 9. Run TTS voice screening and emotion evaluation benchmark
+# 10. Run isolated TTS voice screening and emotion evaluation benchmark
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 ```
 

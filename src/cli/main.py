@@ -136,6 +136,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
     p_ren.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
     p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (deprecated for final render)")
+    p_ren.add_argument("--skip-preview", action="store_true", help="Skip Review Gate 2 preview requirement and render final 1080p directly")
     p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
 
@@ -146,6 +147,24 @@ def build_parser() -> JsonAwareArgumentParser:
     p_com.add_argument("-o", "--output", default=None, help="Output final video path")
     p_com.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_com.add_argument("--extract-audio", action=argparse.BooleanOptionalAction, default=True, help="Extract master WAV")
+
+    # 9. batch
+    p_bat = subparsers.add_parser("batch", help="Sequential multi-chapter batch processing", parents=[common_parent])
+    p_bat.add_argument("-p", "--project", required=True, help="Project slug")
+    p_bat.add_argument("-c", "--chapters", default=None, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
+    p_bat.add_argument("--retry-chapter", default=None, help="Specific chapter number to retry")
+    p_bat.add_argument("--skip-preview", action=argparse.BooleanOptionalAction, default=True, help="Skip preview video and render final 1080p directly (default: True)")
+    p_bat.add_argument("--compile", action="store_true", help="Auto-compile completed chapters into master recap video")
+    p_bat.add_argument("--force", action="store_true", help="Force re-processing of already completed chapters")
+    p_bat.add_argument("--approved", action="store_true", help="Explicitly approve Review Gates for automated runs")
+    p_bat.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder assets (testing only)")
+    p_bat.add_argument("--voice", default=None, help="Voice name override")
+    p_bat.add_argument("--speed", type=float, default=None, help="TTS speed override")
+    p_bat.add_argument("--bgm", default=None, help="BGM audio file path")
+    p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
+    p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
+    p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_bat.add_argument("--keep-temp", action="store_true", help="Do not delete intermediate clips")
 
     return parser
 
@@ -179,6 +198,9 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "compile":
         from src.cli.compile_cmd import handle_compile
         return handle_compile(args)
+    elif subcommand == "batch":
+        from src.cli.batch_cmd import handle_batch
+        return handle_batch(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 
@@ -197,7 +219,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch"
         }:
             detected_subcommand = arg
             break

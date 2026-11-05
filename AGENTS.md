@@ -30,7 +30,7 @@ The repository provides a standardized Agentic Skill located at:
 .agents/skills/manga-recap/SKILL.md
 ```
 Whenever a user requests processing a manga chapter, writing a recap script, evaluating voice samples, or rendering a recap video:
-1. Read `.agents/skills/manga-recap/SKILL.md` to load the 10-stage execution workflow.
+1. Read `.agents/skills/manga-recap/SKILL.md` to load the streamlined 5-stage execution workflow (Ingest -> Agent -> Audio -> Render -> Export).
 2. Consult the specialized rulebooks in `.agents/skills/manga-recap/rules/`:
    - `narrative_recap.md`: Guidelines for pacing, hooks, character voice, and Vietnamese prose.
    - `vision_ocr.md`: Guidelines for reading contact sheets, detecting crop anomalies, and camera focus.
@@ -89,13 +89,16 @@ manga-recap validate --project <slug> [--chapter <num>] --json
 # 5. Synthesize local VieNeu-TTS audio
 manga-recap tts --project <slug> --chapter <num> [--force] --json
 
-# 6. Render preview or final video
-manga-recap render --project <slug> --chapter <num> --quality preview --json
+# 6. Render preview or final video (use --skip-preview to bypass preview requirement)
+manga-recap render --project <slug> --chapter <num> --quality final --skip-preview --json
 
-# 7. Compile multiple chapters into a feature video
+# 7. Sequential multi-chapter batch processing (with failure isolation and single-chapter retry)
+manga-recap batch --project <slug> [--chapters 1,2,3] [--retry-chapter <num>] [--compile] --json
+
+# 8. Compile multiple chapters into a feature video
 manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 
-# 8. Run TTS voice screening and emotion benchmarks
+# 9. Run TTS voice screening and emotion benchmarks (isolated testing lab)
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 ```
 
@@ -122,10 +125,13 @@ manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 
 ## 5. Coding Agent Behavioral Rules
 
-1. **Mandatory User Configuration Gate (Stage 0)**: Before starting crawl, scripting, or rendering, the Agent MUST ask the User for the complete set of video configurations (Chapter, URL, Voice ID, Speed, Burn Subtitles, Frame Animation, Video Quality, BGM).
+1. **Series-Level User Configuration Gate (Stage 0)**: Configure video settings (Resolution, Video Mode, Burn Subtitles, Frame Animation, BGM) once per series in `project.json`. Chapters automatically inherit these settings without repetitive re-prompting.
 2. **Subject-Centric Framing & Chat Box Avoidance**: Never set the frame focal center on speech bubbles / chat boxes. Always focus on character eyes, facial expressions, or physical action. Enforce safe crop scale ($\ge 0.45$) and clamp Ken Burns zoom factor ($\le 1.15\times$) to prevent over-zooming. For tall continuous panels ($H > 2W$), prefer `static` dual-layer mode with blurred wings or `vertical_scroll`. If the user disables animation (`--no-animation`), render all frames in `static` mode.
 3. **Look Before Scripting**: Never write narration from filenames (`panel_001.jpg`) or guesswork. Inspect contact sheets (`contact_sheets/sheet_*.jpg`) directly.
 4. **5-Panel Sliding Window**: Script in batches of 5 panels with 2 panels of overlap to guarantee narrative coherence.
 5. **No Hallucination**: If text in a speech bubble is unreadable, watermarked, or cut off, or if an action is ambiguous, mark `status: "needs_review"` and flag with `[CAN_XAC_MINH: <lý_do>]`. Never fabricate lore.
-6. **Enforce Human Gates**: Never render final 1080p video before the user approves voice selection (Review Gate 1) and preview video (Review Gate 2).
+6. **Consolidated Review Gates**:
+   - Approve Gate 1 (voice strategy) once per series in `voice_selection.json`; chapters inherit approval automatically.
+   - Gate 2 (preview verification) is optional for manual inspection and automatically bypassed in batch runs via `--skip-preview`.
 7. **Atomic Checkpointing**: Update `script.json` after every scripting batch so progress is never lost.
+

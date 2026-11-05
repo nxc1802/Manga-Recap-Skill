@@ -6,18 +6,22 @@ Subcommand handler: manga-recap render
 from __future__ import annotations
 
 import argparse
+import contextlib
 import shutil
 from pathlib import Path
 from typing import Any, Dict
 
 from src.cli.exit_codes import CliValidationError
-from src.core.schemas import CheckpointStatus, StageType
+from src.core.schemas import CheckpointStatus, StageType, utc_iso_now
 from src.core.storage import (
     StorageFileNotFoundError,
+    acquire_lock,
+    atomic_write_json,
     cleanup_intermediate_files,
     get_chapter_dir,
     get_project_dir,
     load_chapter_metadata,
+    read_json,
     update_checkpoint,
 )
 from src.core.utils import (
@@ -45,7 +49,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     burn_subs = getattr(args, "burn_subtitles", True)
     allow_animation = getattr(args, "animation", True)
     force = getattr(args, "force", False)
-    skip_review = getattr(args, "skip_review", False)
+    skip_preview = getattr(args, "skip_preview", False) or getattr(args, "skip_review", False)
     approved = getattr(args, "approved", False)
     video_mode = getattr(args, "video_mode", "auto")
     allow_placeholders = getattr(args, "allow_placeholders", False)
@@ -64,6 +68,23 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
             raise StorageFileNotFoundError(
                 f"Project '{project_slug}' directory not found at {project_dir}"
             )
+
+    # Gate 0: Inherit video and render settings from series-level project.json
+    proj_cfg_path = project_dir / "project.json"
+    if proj_cfg_path.exists():
+        with contextlib.suppress(Exception):
+            p_data = read_json(proj_cfg_path)
+            if isinstance(p_data, dict):
+                r_set = p_data.get("render_settings", {})
+                a_set = p_data.get("audio_settings", {})
+                if bgm_path is None:
+                    bgm_path = r_set.get("bgm_path") or a_set.get("bgm_path")
+                if video_mode == "auto" and r_set.get("video_mode"):
+                    video_mode = r_set.get("video_mode")
+                if getattr(args, "burn_subtitles", None) is None and "burn_subtitles" in r_set:
+                    burn_subs = r_set["burn_subtitles"]
+                if getattr(args, "animation", None) is None and "animation" in r_set:
+                    allow_animation = r_set["animation"]
 
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     if not chap_dir.exists():
@@ -126,50 +147,51 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                     f"Human Review Gate 1 invalid: approved voice '{approval.primary_voice}' is not recognized in official catalog."
                 )
 
-            # Gate 2: Preview Video & Approval
-            video_dir = chap_dir / "video"
-            has_preview_video = (
-                (video_dir / "preview.mp4").exists()
-                or (video_dir / f"chapter_{chapter_num}_preview.mp4").exists()
-                or (any(video_dir.glob("*preview*.mp4")) if video_dir.exists() else False)
-            )
-            if not has_preview_video:
-                raise CliValidationError(
-                    "Human Review Gate 2 not satisfied: preview video ('preview.mp4') not found. "
-                    "A preview render must be generated before final render (or pass --approved)."
+            # Gate 2: Preview Video & Approval (optional via --skip-preview)
+            if not skip_preview:
+                video_dir = chap_dir / "video"
+                has_preview_video = (
+                    (video_dir / "preview.mp4").exists()
+                    or (video_dir / f"chapter_{chapter_num}_preview.mp4").exists()
+                    or (any(video_dir.glob("*preview*.mp4")) if video_dir.exists() else False)
                 )
+                if not has_preview_video:
+                    raise CliValidationError(
+                        "Human Review Gate 2 not satisfied: preview video ('preview.mp4') not found. "
+                        "A preview render must be generated before final render (or pass --skip-preview or --approved)."
+                    )
 
-            prev_sel_path = project_dir / "preview_approval.json"
-            if not prev_sel_path.exists():
-                chap_prev_sel = chap_dir / "preview_approval.json"
-                if chap_prev_sel.exists():
-                    prev_sel_path = chap_prev_sel
+                prev_sel_path = project_dir / "preview_approval.json"
+                if not prev_sel_path.exists():
+                    chap_prev_sel = chap_dir / "preview_approval.json"
+                    if chap_prev_sel.exists():
+                        prev_sel_path = chap_prev_sel
 
-            if not prev_sel_path.exists():
-                raise CliValidationError(
-                    "Human Review Gate 2 not satisfied: 'preview_approval.json' not found. "
-                    "Preview video must be approved before final render (or pass --approved)."
-                )
+                if not prev_sel_path.exists():
+                    raise CliValidationError(
+                        "Human Review Gate 2 not satisfied: 'preview_approval.json' not found. "
+                        "Preview video must be approved before final render (or pass --skip-preview or --approved)."
+                    )
 
-            try:
-                raw_prev = json.loads(prev_sel_path.read_text(encoding="utf-8"))
-                prev_approval = PreviewApproval.model_validate(raw_prev)
-            except Exception as err:
-                raise CliValidationError(
-                    f"Human Review Gate 2 schema validation failed for '{prev_sel_path}': {err}."
-                ) from err
+                try:
+                    raw_prev = json.loads(prev_sel_path.read_text(encoding="utf-8"))
+                    prev_approval = PreviewApproval.model_validate(raw_prev)
+                except Exception as err:
+                    raise CliValidationError(
+                        f"Human Review Gate 2 schema validation failed for '{prev_sel_path}': {err}."
+                    ) from err
 
-            if not prev_approval.is_approved():
-                raise CliValidationError(
-                    f"Human Review Gate 2 rejected: '{prev_sel_path}' is not approved. "
-                    "A valid reviewer identifier is required."
-                )
+                if not prev_approval.is_approved():
+                    raise CliValidationError(
+                        f"Human Review Gate 2 rejected: '{prev_sel_path}' is not approved. "
+                        "A valid reviewer identifier is required."
+                    )
 
-            if prev_approval.project_slug and prev_approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
-                raise CliValidationError(
-                    f"Human Review Gate 2 project mismatch: 'preview_approval.json' is for project '{prev_approval.project_slug}', "
-                    f"but current render target is '{project_slug}'."
-                )
+                if prev_approval.project_slug and prev_approval.project_slug.strip() not in (project_slug, "default_project", "manga_recap_project"):
+                    raise CliValidationError(
+                        f"Human Review Gate 2 project mismatch: 'preview_approval.json' is for project '{prev_approval.project_slug}', "
+                        f"but current render target is '{project_slug}'."
+                    )
 
     # Execute full Video Engine V2 render pipeline
     engine = VideoEngine()
@@ -187,20 +209,14 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         allow_placeholders=allow_placeholders,
     )
 
-    # Auto-mark StageType.FINALIZE upon final render completion if not already marked
+    # Completing RENDER completes chapter checkpoint
     if quality == "final":
-        try:
-            chap_meta = load_chapter_metadata(chap_dir)
-            fin_cp = chap_meta.stages.get(StageType.FINALIZE)
-            if not fin_cp or fin_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(
-                    chap_dir,
-                    StageType.FINALIZE,
-                    CheckpointStatus.COMPLETED,
-                    artifacts=[str(render_result["video_path"])] if isinstance(render_result.get("video_path"), (str, Path)) else [],
-                )
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            with acquire_lock(chap_dir / "chapter.json"):
+                chap_meta = load_chapter_metadata(chap_dir)
+                chap_meta.overall_status = CheckpointStatus.COMPLETED
+                chap_meta.updated_at = utc_iso_now()
+                atomic_write_json(chap_dir / "chapter.json", chap_meta)
 
     # Clean intermediate files if keep_temp is False
     cleaned_files = cleanup_intermediate_files(chap_dir, keep_temp=keep_temp)

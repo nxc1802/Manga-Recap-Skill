@@ -32,9 +32,11 @@ from src.core.schemas import (
     ScriptSegment,
     StageType,
     VideoMode,
+    utc_iso_now,
 )
 from src.core.storage import (
     StorageFileNotFoundError,
+    acquire_lock,
     atomic_write_json,
     cleanup_intermediate_files,
     get_chapter_dir,
@@ -42,6 +44,7 @@ from src.core.storage import (
     load_chapter_metadata,
     load_manifest,
     load_recap_script,
+    read_json,
     save_manifest,
     update_checkpoint,
 )
@@ -1173,20 +1176,14 @@ class VideoEngine:
                 artifacts=artifacts,
             )
 
-            # Auto-mark StageType.FINALIZE upon final render completion
+            # Completing RENDER completes chapter checkpoint
             if quality_clean == "final":
-                try:
-                    chap_meta = load_chapter_metadata(chap_dir)
-                    fin_cp = chap_meta.stages.get(StageType.FINALIZE)
-                    if not fin_cp or fin_cp.status != CheckpointStatus.COMPLETED:
-                        update_checkpoint(
-                            chap_dir,
-                            StageType.FINALIZE,
-                            CheckpointStatus.COMPLETED,
-                            artifacts=artifacts,
-                        )
-                except Exception as ex:
-                    logger.warning(f"Failed to auto-mark FINALIZE checkpoint: {ex}")
+                with contextlib.suppress(Exception):
+                    with acquire_lock(chap_dir / "chapter.json"):
+                        chap_meta = load_chapter_metadata(chap_dir)
+                        chap_meta.overall_status = CheckpointStatus.COMPLETED
+                        chap_meta.updated_at = utc_iso_now()
+                        atomic_write_json(chap_dir / "chapter.json", chap_meta)
 
             return {
                 "project_slug": p_dir.name,

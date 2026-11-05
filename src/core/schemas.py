@@ -30,12 +30,36 @@ def utc_iso_now() -> str:
 
 class StageType(str, Enum):
     """Pipeline execution stages for chapter workflow."""
+    # 5 Operational Stages
+    INGEST = "ingest"
+    AGENT = "agent"
+    AUDIO = "audio"
+    RENDER = "render"
+    EXPORT = "export"
+
+    # Backward-Compatibility Aliases
     CRAWL = "crawl"
     SEGMENT = "segment"
     SCRIPT = "script"
     TTS = "tts"
-    RENDER = "render"
     FINALIZE = "finalize"
+
+
+OPERATIONAL_STAGES: List[StageType] = [
+    StageType.INGEST,
+    StageType.AGENT,
+    StageType.AUDIO,
+    StageType.RENDER,
+    StageType.EXPORT,
+]
+
+STAGE_ALIAS_MAP: Dict[StageType, StageType] = {
+    StageType.CRAWL: StageType.INGEST,
+    StageType.SEGMENT: StageType.INGEST,
+    StageType.SCRIPT: StageType.AGENT,
+    StageType.TTS: StageType.AUDIO,
+    StageType.FINALIZE: StageType.EXPORT,
+}
 
 
 class CheckpointStatus(str, Enum):

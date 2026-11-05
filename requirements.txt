@@ -15,10 +15,6 @@ beautifulsoup4
 # Local offline ONNX inference / pure-Python mock backend
 vieneu>=3.8.3
 
-# YouTube Data API v3 Integration
-google-api-python-client
-google-auth-oauthlib
-google-auth-httplib2
 
 # Testing & Quality Assurance
 pytest

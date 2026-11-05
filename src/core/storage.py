@@ -31,9 +31,11 @@ from src.core.schemas import (
     ChapterMetadata,
     CheckpointStatus,
     Manifest,
+    OPERATIONAL_STAGES,
     PanelManifest,
     ProjectConfig,
     RecapScript,
+    STAGE_ALIAS_MAP,
     StageCheckpoint,
     StageType,
     utc_iso_now,
@@ -396,6 +398,14 @@ STAGE_EXECUTION_ORDER: List[StageType] = [
     StageType.FINALIZE
 ]
 
+OPERATIONAL_STAGE_ORDER: List[StageType] = [
+    StageType.INGEST,
+    StageType.AGENT,
+    StageType.AUDIO,
+    StageType.RENDER,
+    StageType.EXPORT,
+]
+
 
 def update_checkpoint(
     chapter_path: Path,
@@ -447,8 +457,16 @@ def update_checkpoint(
             if checksums:
                 stage_cp.checksums.update(checksums)
             
-            # If all stages completed, set overall status to COMPLETED
-            if all(meta.stages.get(s) and meta.stages[s].status == CheckpointStatus.COMPLETED for s in STAGE_EXECUTION_ORDER):
+            # Check if all stages completed
+            legacy_complete = all(
+                meta.stages.get(s) and meta.stages[s].status == CheckpointStatus.COMPLETED
+                for s in STAGE_EXECUTION_ORDER
+            )
+            op_complete = all(
+                meta.stages.get(s) and meta.stages[s].status == CheckpointStatus.COMPLETED
+                for s in [StageType.INGEST, StageType.AGENT, StageType.AUDIO, StageType.RENDER]
+            )
+            if legacy_complete or op_complete or target_stage in (StageType.FINALIZE, StageType.EXPORT):
                 meta.overall_status = CheckpointStatus.COMPLETED
         elif target_status == CheckpointStatus.FAILED:
             stage_cp.error_message = error or "Unspecified error occurred"
@@ -512,7 +530,17 @@ def get_resumable_stage(chapter_path: Path) -> Optional[StageType]:
     raw_data = read_json(chap_file)
     meta = ChapterMetadata.model_validate(raw_data)
 
-    for stage in STAGE_EXECUTION_ORDER:
+    if meta.overall_status == CheckpointStatus.COMPLETED:
+        return None
+
+    # Determine whether chapter uses operational 5-stages or legacy stages
+    has_op = any(
+        meta.stages.get(s) and meta.stages[s].status != CheckpointStatus.PENDING
+        for s in (StageType.INGEST, StageType.AGENT, StageType.AUDIO)
+    )
+    order_to_check = OPERATIONAL_STAGE_ORDER if has_op else STAGE_EXECUTION_ORDER
+
+    for stage in order_to_check:
         cp = meta.stages.get(stage)
         if not cp or cp.status in (
             CheckpointStatus.PENDING,
