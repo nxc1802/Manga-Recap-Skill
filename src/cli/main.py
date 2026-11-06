@@ -168,6 +168,18 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
     p_bat.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
 
+    # 10. youtube
+    p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload"], help="YouTube action: 'metadata' (generate packaging SEO & timestamps) or 'upload' (publish video)")
+    p_yt.add_argument("-p", "--project", required=True, help="Project slug")
+    p_yt.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_yt.add_argument("--title", default=None, help="Video title override")
+    p_yt.add_argument("--description", default=None, help="Video description override")
+    p_yt.add_argument("--tags", default=None, help="Comma-separated tags")
+    p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default="private", help="Video privacy status (default: private)")
+    p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path")
+    p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
+
     return parser
 
 
@@ -203,6 +215,9 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "batch":
         from src.cli.batch_cmd import handle_batch
         return handle_batch(args)
+    elif subcommand == "youtube":
+        from src.cli.youtube_cmd import handle_youtube
+        return handle_youtube(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 
@@ -221,7 +236,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube"
         }:
             detected_subcommand = arg
             break

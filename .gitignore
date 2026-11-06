@@ -29,6 +29,7 @@ models/
 
 # Runtime data (inputs, outputs, database cache, logs)
 data/
+output/
 tts_references/
 .agents/teamwork/
 *.log

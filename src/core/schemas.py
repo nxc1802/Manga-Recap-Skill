@@ -620,3 +620,29 @@ class PreviewApproval(BaseModel):
     def is_approved(self) -> bool:
         return bool(self.status.lower().strip() == "approved" and self.reviewer.strip())
 
+
+# ==============================================================================
+# 9. YouTube Packaging & Metadata Models
+# ==============================================================================
+
+class YouTubeMetadata(BaseModel):
+    """
+    Schema for YouTube publishing metadata (title, description, tags, timestamps, SEO).
+    Generated automatically from script.json and story_summary.md or authored by agent.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: str = "3.0.0"
+    project_slug: str
+    chapter_number: str
+    title: str = Field(..., max_length=100, description="YouTube video title (recommended <= 65 chars)")
+    description: str = Field(..., description="Full formatted YouTube description with SEO, timestamps, credits")
+    tags: List[str] = Field(default_factory=list, description="YouTube search tags")
+    category_id: str = Field(default="24", description="YouTube Category ID (24 = Entertainment, 1 = Film & Animation)")
+    privacy_status: str = Field(default="private", description="public, unlisted, or private")
+    made_for_kids: bool = Field(default=False, description="COPPA compliance flag")
+    timestamps: List[Dict[str, str]] = Field(default_factory=list, description="Chapter marker timestamps [{'time': '00:00', 'label': '...'}]")
+    thumbnail_concept: Optional[str] = Field(default=None, description="Visual idea and overlay text for thumbnail")
+    shorts_highlight: Optional[Dict[str, Any]] = Field(default=None, description="Recommended 30-60s highlight snippet for YouTube Shorts")
+
+

@@ -167,6 +167,16 @@ manga-recap batch --project <project_slug> --retry-chapter 2 --json
 manga-recap compile --project <project_slug> --chapters 1,2 --output "data/projects/<project_slug>/video/full_recap.mp4" --json
 ```
 
+### Stage 11: YouTube SEO Packaging & Publishing
+Generate metadata (SEO description, click-worthy titles, timestamps, hashtags) and publish directly:
+```bash
+# 1. Generate SEO packaging and timestamps metadata
+manga-recap youtube metadata --project <slug> --chapter <num> --json
+
+# 2. Upload video with Vietnamese closed captions and thumbnail to YouTube
+manga-recap youtube upload --project <slug> --chapter <num> --privacy [private|unlisted|public] [--thumbnail <path>] --json
+```
+
 ## Narrative & Cinematic Guidelines
 
 - **5-Second Hook**: Every chapter recap starts with a dramatic 5-second hook (no generic greetings).
@@ -197,3 +207,4 @@ All commands accept `--json` for structured output and return standardized POSIX
 - **Vision, Contact Sheets & OCR**: `.agents/skills/manga-recap/rules/vision_ocr.md`
 - **Character Profiles & Continuity**: `.agents/skills/manga-recap/rules/character_consistency.md`
 - **Review Gates & Uncertainty**: `.agents/skills/manga-recap/rules/human_review_gates.md`
+- **YouTube SEO & Publishing**: `.agents/skills/manga-recap/rules/youtube_publishing.md`

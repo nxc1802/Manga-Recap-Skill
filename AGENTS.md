@@ -36,6 +36,7 @@ Whenever a user requests processing a manga chapter, writing a recap script, eva
    - `vision_ocr.md`: Guidelines for reading contact sheets, detecting crop anomalies, and camera focus.
    - `character_consistency.md`: Guidelines for character registry and voice mapping.
    - `human_review_gates.md`: Protocols for human checkpoints and uncertainty handling.
+   - `youtube_publishing.md`: Guidelines for YouTube packaging, title formulas, SEO, timestamps, and publishing.
 3. Use templates in `.agents/skills/manga-recap/templates/` for initial state documents.
 
 ---
@@ -100,6 +101,10 @@ manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 
 # 9. Run TTS voice screening and emotion benchmarks (isolated testing lab)
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
+
+# 10. YouTube SEO metadata packaging and video publishing
+manga-recap youtube metadata --project <slug> --chapter <num> --json
+manga-recap youtube upload --project <slug> --chapter <num> [--privacy private|unlisted|public] [--thumbnail <path>] --json
 ```
 
 ### Standard JSON Response Envelope
