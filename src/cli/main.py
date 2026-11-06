@@ -112,6 +112,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("--force", action="store_true", help="Re-synthesize all audio segments even if existing")
     p_tts.add_argument("--engine", choices=["neural", "mock", "auto"], default="neural", help="TTS synthesis engine backend (default: neural)")
     p_tts.add_argument("--mock", action="store_true", help="Shortcut for --engine mock (testing only)")
+    p_tts.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
 
     # 6. tts_benchmark
     p_bm = subparsers.add_parser("tts_benchmark", help="Run TTS voice and emotion screening benchmark", parents=[common_parent])
@@ -140,6 +141,8 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
     p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
     p_ren.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
+    p_ren.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
+    p_ren.add_argument("--hw-accel", choices=["none", "videotoolbox", "auto"], default=None, help="Hardware acceleration encoder")
 
     # 8. compile
     p_com = subparsers.add_parser("compile", help="Concatenate chapter videos into final recap", parents=[common_parent])
@@ -170,9 +173,11 @@ def build_parser() -> JsonAwareArgumentParser:
 
     # 10. youtube
     p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
-    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload"], help="YouTube action: 'metadata' (generate packaging SEO & timestamps) or 'upload' (publish video)")
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth"], help="YouTube action: 'metadata', 'upload', or 'auth'")
     p_yt.add_argument("-p", "--project", required=True, help="Project slug")
-    p_yt.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
+    p_yt.add_argument("--video", default=None, help="Custom video file path override")
+    p_yt.add_argument("--subtitles", default=None, help="Custom subtitles SRT file path override")
     p_yt.add_argument("--title", default=None, help="Video title override")
     p_yt.add_argument("--description", default=None, help="Video description override")
     p_yt.add_argument("--tags", default=None, help="Comma-separated tags")

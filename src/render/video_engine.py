@@ -81,10 +81,19 @@ class VideoEngine:
     audio concatenation & ducking, lossless muxing, and ffprobe validation.
     """
 
-    def __init__(self, target_width: int = 1280, target_height: int = 720, fps: int = 30):
+    def __init__(
+        self,
+        target_width: int = 1280,
+        target_height: int = 720,
+        fps: int = 30,
+        max_workers: int = 2,
+        hw_accel: Optional[str] = None,
+    ):
         self.width = target_width
         self.height = target_height
         self.fps = fps
+        self.max_workers = max(1, int(max_workers))
+        self.hw_accel = hw_accel
         self.camera_generator = CameraMotionGenerator(target_width, target_height, fps)
         self.subtitle_generator = SubtitleGenerator(max_chars_per_line=42, max_lines=2)
         self.audio_mixer = AudioMixer(target_sample_rate=48000, target_channels=2)
@@ -374,6 +383,7 @@ class VideoEngine:
         allow_animation: bool = True,
         audio_offset_sec: float = 0.0,
         subtitle_cues: Optional[List[SubtitleCue]] = None,
+        hw_accel: Optional[str] = None,
     ) -> bool:
         """
         Renders an individual panel video clip with camera motion, audio synchronization,
@@ -471,6 +481,26 @@ class VideoEngine:
             else:
                 filter_complex = f"[0:v]{cam_filter}[outv]"
 
+            active_hw = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
+            if active_hw == "videotoolbox":
+                codec_args = [
+                    "-c:v",
+                    "h264_videotoolbox",
+                    "-b:v",
+                    "4500k",
+                    "-prio_speed",
+                    "1",
+                ]
+            else:
+                codec_args = [
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    preset,
+                    "-crf",
+                    crf,
+                ]
+
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -485,12 +515,7 @@ class VideoEngine:
                 "1:a",
                 "-t",
                 f"{duration_sec:.4f}",
-                "-c:v",
-                "libx264",
-                "-preset",
-                preset,
-                "-crf",
-                crf,
+                *codec_args,
                 "-pix_fmt",
                 "yuv420p",
                 "-c:a",
@@ -613,6 +638,8 @@ class VideoEngine:
         video_mode: str = "auto",
         allow_animation: bool = True,
         allow_placeholders: bool = False,
+        max_workers: Optional[int] = None,
+        hw_accel: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Orchestrates full chapter video rendering using Video Engine V2.
@@ -649,6 +676,9 @@ class VideoEngine:
 
         # Set stage to RUNNING
         update_checkpoint(chap_dir, StageType.RENDER, CheckpointStatus.RUNNING)
+
+        active_workers = max_workers if max_workers is not None else getattr(self, "max_workers", 2)
+        active_hw_accel = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
 
         try:
             script = load_recap_script(chap_dir)
@@ -915,6 +945,8 @@ class VideoEngine:
             rendered_clips_count = 0
             cumulative_time = 0.0
 
+            render_tasks: List[Dict[str, Any]] = []
+
             for idx, (seg, panel_paths, wav_p) in enumerate(resolved_segments):
                 seg_dur = timeline_durations[idx]
                 t_start = cumulative_time
@@ -978,6 +1010,7 @@ class VideoEngine:
                         "panel_size": panel_stat.st_size if panel_stat else 0,
                         "audio_offset_sec": round(audio_offset, 3),
                         "panel_index": k,
+                        "hw_accel": str(active_hw_accel or "none"),
                     }
 
                     # Skip if already rendered, fingerprint matches, and force is False
@@ -993,18 +1026,6 @@ class VideoEngine:
                     if is_cached:
                         cached_clips_count += 1
                     else:
-                        rendered_clips_count += 1
-                        if clip_p.exists():
-                            try:
-                                clip_p.unlink()
-                            except Exception:
-                                pass
-                        if clip_meta_p.exists():
-                            try:
-                                clip_meta_p.unlink()
-                            except Exception:
-                                pass
-
                         if isinstance(video_mode, str) and video_mode != "auto":
                             resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
                         elif isinstance(video_mode, VideoMode) and video_mode != VideoMode.AUTO:
@@ -1017,62 +1038,100 @@ class VideoEngine:
                             except Exception:
                                 resolved_mode = VideoMode.PORTRAIT_PADDED
 
-                        render_ok = self.generate_panel_clip(
-                            img_path=str(panel_p),
-                            audio_path=str(wav_p),
-                            duration_ms=dur_k * 1000.0,
-                            output_path=str(clip_p),
-                            video_mode=resolved_mode,
-                            seq=idx + 1,
-                            panel_text=seg.narrator_text,
-                            burn_subtitles=burn_subtitles,
-                            camera_motion=panel_cam,
-                            focus_box=seg.focus_box if k == 0 else None,
-                            preset=preset,
-                            crf=crf,
-                            allow_animation=allow_animation,
-                            audio_offset_sec=audio_offset,
-                            subtitle_cues=seg_cues,
-                        )
-
-                        if not render_ok:
-                            if clip_p.exists():
-                                try:
-                                    clip_p.unlink()
-                                except Exception:
-                                    pass
-                            if clip_meta_p.exists():
-                                try:
-                                    clip_meta_p.unlink()
-                                except Exception:
-                                    pass
-                            raise RuntimeError(
-                                f"Failed to generate clip: {clip_p} for segment {seg.seq_id}, panel {panel_p.name}"
-                            )
-
-                        # Verify render output before committing metadata sidecar
-                        if not clip_p.exists() or clip_p.stat().st_size <= 1000:
-                            if clip_p.exists():
-                                try:
-                                    clip_p.unlink()
-                                except Exception:
-                                    pass
-                            if clip_meta_p.exists():
-                                try:
-                                    clip_meta_p.unlink()
-                                except Exception:
-                                    pass
-                            raise RuntimeError(
-                                f"Render verification failed for segment {seg.seq_id}, panel {panel_p.name}: "
-                                f"output clip {clip_p} is missing or corrupted (size: {clip_p.stat().st_size if clip_p.exists() else 0} bytes)."
-                            )
-
-                        try:
-                            clip_meta_p.write_text(json.dumps(current_fingerprint, ensure_ascii=False, indent=2), encoding="utf-8")
-                        except Exception as e:
-                            logger.warning(f"Failed to write clip metadata fingerprint for {clip_p}: {e}")
+                        render_tasks.append({
+                            "clip_p": clip_p,
+                            "clip_meta_p": clip_meta_p,
+                            "fingerprint": current_fingerprint,
+                            "seg_id": seg.seq_id,
+                            "panel_name": panel_p.name,
+                            "kwargs": {
+                                "img_path": str(panel_p),
+                                "audio_path": str(wav_p),
+                                "duration_ms": dur_k * 1000.0,
+                                "output_path": str(clip_p),
+                                "video_mode": resolved_mode,
+                                "seq": idx + 1,
+                                "panel_text": seg.narrator_text,
+                                "burn_subtitles": burn_subtitles,
+                                "camera_motion": panel_cam,
+                                "focus_box": seg.focus_box if k == 0 else None,
+                                "preset": preset,
+                                "crf": crf,
+                                "allow_animation": allow_animation,
+                                "audio_offset_sec": audio_offset,
+                                "subtitle_cues": seg_cues,
+                                "hw_accel": active_hw_accel,
+                            },
+                        })
 
                     audio_offset += dur_k
+
+            if render_tasks:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                rendered_clips_count = len(render_tasks)
+                logger.info(
+                    f"Rendering {rendered_clips_count} panel clips (cached: {cached_clips_count}) "
+                    f"using {active_workers} worker threads (Balanced mode)..."
+                )
+
+                def _execute_render_task(task: Dict[str, Any]) -> None:
+                    c_p = task["clip_p"]
+                    c_m = task["clip_meta_p"]
+                    if c_p.exists():
+                        try:
+                            c_p.unlink()
+                        except Exception:
+                            pass
+                    if c_m.exists():
+                        try:
+                            c_m.unlink()
+                        except Exception:
+                            pass
+
+                    ok = self.generate_panel_clip(**task["kwargs"])
+                    if not ok:
+                        if c_p.exists():
+                            try:
+                                c_p.unlink()
+                            except Exception:
+                                pass
+                        if c_m.exists():
+                            try:
+                                c_m.unlink()
+                            except Exception:
+                                pass
+                        raise RuntimeError(
+                            f"Failed to generate clip: {c_p} for segment {task['seg_id']}, panel {task['panel_name']}"
+                        )
+                    if not c_p.exists() or c_p.stat().st_size <= 1000:
+                        if c_p.exists():
+                            try:
+                                c_p.unlink()
+                            except Exception:
+                                pass
+                        if c_m.exists():
+                            try:
+                                c_m.unlink()
+                            except Exception:
+                                pass
+                        raise RuntimeError(
+                            f"Render verification failed for segment {task['seg_id']}, panel {task['panel_name']}: "
+                            f"output clip {c_p} is missing or corrupted (size: {c_p.stat().st_size if c_p.exists() else 0} bytes)."
+                        )
+                    try:
+                        c_m.write_text(json.dumps(task["fingerprint"], ensure_ascii=False, indent=2), encoding="utf-8")
+                    except Exception as err:
+                        logger.warning(f"Failed to write clip metadata fingerprint for {c_p}: {err}")
+
+                if active_workers > 1 and len(render_tasks) > 1:
+                    with ThreadPoolExecutor(max_workers=active_workers) as pool:
+                        futures = [pool.submit(_execute_render_task, t) for t in render_tasks]
+                        for f in as_completed(futures):
+                            f.result()
+                else:
+                    for t in render_tasks:
+                        _execute_render_task(t)
 
             # 5. Lossless Visual Stream Concatenation
             raw_video_path = video_dir / f"raw_video_{chapter_num}.mp4"

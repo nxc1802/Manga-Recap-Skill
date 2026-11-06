@@ -152,6 +152,8 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
         cached_count = 0
         artifacts = []
         total_duration = 0.0
+        workers = getattr(args, "workers", None) or 2
+        uncached_tasks = []
 
         for seg in script_obj.segments:
             voice, v_source = resolve_segment_voice(
@@ -199,39 +201,52 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                 cached_count += 1
                 total_duration += seg.duration
                 artifacts.append(seg.audio_path)
-                continue
-
-            dur, checksum, was_cached = engine.synthesize_utterance(
-                text=seg.narrator_text,
-                voice=voice,
-                output_path=seg_audio_file,
-                speed=speed,
-                emotion=seg.emotion,
-                emotion_cue=seg.emotion_cue,
-                force=force_resynth,
-            )
-
-            seg.synthesized_voice = voice
-            if v_source == "manual":
-                seg.voice_id = voice
-                seg.voice_source = "manual"
             else:
-                seg.voice_id = voice
-                seg.voice_source = "tts"
+                uncached_tasks.append((seg, voice, v_source, speed, seg_audio_file, calculated_fingerprint))
 
-            actual_checksum = calculate_sha256(seg_audio_file)
-            seg.audio_path = str(seg_audio_file.relative_to(chap_dir))
-            seg.duration = dur
-            seg.checksum = actual_checksum
-            seg.fingerprint = calculated_fingerprint
-            seg.status = "synthesized"
-            total_duration += dur
+        if uncached_tasks:
+            from concurrent.futures import ThreadPoolExecutor
 
-            synthesized_count += 1
-            artifacts.append(seg.audio_path)
+            def _synth_seg(task_item):
+                s, v, v_s, sp, s_file, c_fp = task_item
+                dur, checksum, was_cached = engine.synthesize_utterance(
+                    text=s.narrator_text,
+                    voice=v,
+                    output_path=s_file,
+                    speed=sp,
+                    emotion=s.emotion,
+                    emotion_cue=s.emotion_cue,
+                    force=force_resynth,
+                )
+                s.synthesized_voice = v
+                if v_s == "manual":
+                    s.voice_id = v
+                    s.voice_source = "manual"
+                else:
+                    s.voice_id = v
+                    s.voice_source = "tts"
+                actual_checksum = calculate_sha256(s_file)
+                s.audio_path = str(s_file.relative_to(chap_dir))
+                s.duration = dur
+                s.checksum = actual_checksum
+                s.fingerprint = c_fp
+                s.status = "synthesized"
+                return s, dur
 
-            # Checkpoint script after each newly synthesized segment for crash-safety
-            atomic_write_json(script_path, script_obj)
+            if workers > 1 and len(uncached_tasks) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    for s, dur in pool.map(_synth_seg, uncached_tasks):
+                        synthesized_count += 1
+                        total_duration += dur
+                        artifacts.append(s.audio_path)
+                        atomic_write_json(script_path, script_obj)
+            else:
+                for task_item in uncached_tasks:
+                    s, dur = _synth_seg(task_item)
+                    synthesized_count += 1
+                    total_duration += dur
+                    artifacts.append(s.audio_path)
+                    atomic_write_json(script_path, script_obj)
 
         script_obj.total_duration_seconds = round(total_duration, 3)
 

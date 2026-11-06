@@ -323,8 +323,25 @@ def get_youtube_oauth_credentials():
     return creds
 
 
+def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
+    """Tests and verifies YouTube OAuth credentials."""
+    token_file = os.getenv("YOUTUBE_CREDENTIALS_FILE", ".youtube_token.json")
+    force = getattr(args, "force", False)
+    if force and os.path.exists(token_file):
+        try:
+            os.remove(token_file)
+        except OSError:
+            pass
+    creds = get_youtube_oauth_credentials()
+    return {
+        "status": "success",
+        "valid": bool(creds and creds.valid),
+        "token_file": str(Path(token_file).resolve()),
+    }
+
+
 def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
-    """Uploads chapter video to YouTube, attaches captions and custom thumbnail."""
+    """Uploads chapter or feature compilation video to YouTube, attaches captions and custom thumbnail."""
     project_slug = getattr(args, "project", "")
     chapter_num = getattr(args, "chapter", None)
 
@@ -336,44 +353,102 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     out_dir = get_output_dir(project_slug)
 
-    # 1. Resolve final video file (prioritize standardized padded output)
-    padded_vid_name = format_chapter_filename(chapter_num, ext="mp4", padded=True)
-    video_path = out_dir / padded_vid_name
-    if not video_path.exists():
-        # Fallback to chapter dir
-        candidate = chap_dir / "video" / f"chapter_{chapter_num}_final.mp4"
-        if candidate.exists():
-            video_path = candidate
-        else:
-            raise StorageFileNotFoundError(
-                f"Video not found for chapter {chapter_num}. Looked at {video_path} and {candidate}. "
-                "Ensure chapter rendering is completed."
-            )
+    # 1. Resolve final video file (prioritize standardized padded output or feature compilation)
+    video_override = getattr(args, "video", None)
+    if video_override and Path(video_override).exists():
+        video_path = Path(video_override).resolve()
+    elif str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+        feature_candidates = [
+            out_dir / "warrior_grandpa_episodes_1_to_10_feature.mp4",
+            out_dir / f"{project_slug}_full_recap.mp4",
+            out_dir / "chapter_feature.mp4",
+        ]
+        video_path = None
+        for cand in feature_candidates:
+            if cand.exists():
+                video_path = cand
+                break
+        if not video_path:
+            raise StorageFileNotFoundError(f"Feature compilation video not found in {out_dir}")
+    else:
+        padded_vid_name = format_chapter_filename(chapter_num, ext="mp4", padded=True)
+        video_path = out_dir / padded_vid_name
+        if not video_path.exists():
+            # Fallback to chapter dir
+            candidate = chap_dir / "video" / f"chapter_{chapter_num}_final.mp4"
+            if candidate.exists():
+                video_path = candidate
+            else:
+                raise StorageFileNotFoundError(
+                    f"Video not found for chapter {chapter_num}. Looked at {video_path} and {candidate}. "
+                    "Ensure chapter rendering is completed."
+                )
 
     # 2. Resolve subtitle file
-    padded_srt_name = format_chapter_filename(chapter_num, ext="srt", padded=True)
-    subtitle_path = out_dir / padded_srt_name
-    if not subtitle_path.exists():
-        candidate_srt = chap_dir / "subtitles" / f"chapter_{chapter_num}.srt"
-        if candidate_srt.exists():
-            subtitle_path = candidate_srt
-        else:
-            subtitle_path = None
+    subtitle_override = getattr(args, "subtitles", None)
+    if subtitle_override and Path(subtitle_override).exists():
+        subtitle_path = Path(subtitle_override).resolve()
+    elif str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+        feature_srt_candidates = [
+            out_dir / "warrior_grandpa_episodes_1_to_10_feature.srt",
+            out_dir / f"{project_slug}_full_recap.srt",
+            out_dir / "chapter_feature.srt",
+        ]
+        subtitle_path = None
+        for cand in feature_srt_candidates:
+            if cand.exists():
+                subtitle_path = cand
+                break
+    else:
+        padded_srt_name = format_chapter_filename(chapter_num, ext="srt", padded=True)
+        subtitle_path = out_dir / padded_srt_name
+        if not subtitle_path.exists():
+            candidate_srt = chap_dir / "subtitles" / f"chapter_{chapter_num}.srt"
+            if candidate_srt.exists():
+                subtitle_path = candidate_srt
+            else:
+                subtitle_path = None
 
     # 3. Resolve metadata
     meta_file = chap_dir / "youtube_metadata.json"
-    if not meta_file.exists():
-        # Auto-generate metadata if not yet created
-        logger.info("youtube_metadata.json not found, auto-generating default metadata...")
-        handle_youtube_metadata(args)
+    if str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+        meta_file = out_dir / "feature.youtube.json"
 
-    meta_obj = YouTubeMetadata.model_validate(read_json(meta_file))
+    if meta_file.exists():
+        meta_obj = YouTubeMetadata.model_validate(read_json(meta_file))
+        def_title = meta_obj.title
+        def_desc = meta_obj.description
+        def_privacy = meta_obj.privacy_status
+        def_tags = meta_obj.tags
+        def_category = meta_obj.category_id or "24"
+        def_kids = meta_obj.made_for_kids
+    else:
+        if str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+            def_title = f"[Trọn Bộ] {project_slug} - Full Recap Tập 1-10"
+            def_desc = f"Trọn bộ {project_slug} siêu phẩm võ hiệp từ Tập 1 đến Tập 10."
+            def_privacy = "private"
+            def_tags = ["Manga Recap", "Review Truyện", project_slug, "Webtoon"]
+            def_category = "24"
+            def_kids = False
+        else:
+            # Auto-generate metadata if not yet created
+            logger.info("youtube_metadata.json not found, auto-generating default metadata...")
+            handle_youtube_metadata(args)
+            meta_obj = YouTubeMetadata.model_validate(read_json(meta_file))
+            def_title = meta_obj.title
+            def_desc = meta_obj.description
+            def_privacy = meta_obj.privacy_status
+            def_tags = meta_obj.tags
+            def_category = meta_obj.category_id or "24"
+            def_kids = meta_obj.made_for_kids
 
-    title = getattr(args, "title", None) or meta_obj.title
-    description = getattr(args, "description", None) or meta_obj.description
-    privacy = getattr(args, "privacy", None) or meta_obj.privacy_status
+    title = getattr(args, "title", None) or def_title
+    description = getattr(args, "description", None) or def_desc
+    privacy = getattr(args, "privacy", None) or def_privacy
     tags = getattr(args, "tags", None)
-    tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else meta_obj.tags
+    tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else def_tags
+    category_id = def_category
+    made_for_kids = def_kids
 
     # 4. Authenticate with YouTube Data API v3
     creds = get_youtube_oauth_credentials()
@@ -452,8 +527,13 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to upload closed captions: {e}")
 
-    # 7. Upload Custom Thumbnail (if provided)
+    # 7. Upload Custom Thumbnail (if provided or auto-detected)
     thumbnail_path = getattr(args, "thumbnail", None)
+    if not thumbnail_path and str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+        feature_thumb = out_dir / "feature_thumbnail.jpg"
+        if feature_thumb.exists():
+            thumbnail_path = str(feature_thumb)
+
     thumbnail_uploaded = False
     if thumbnail_path and Path(thumbnail_path).exists():
         try:
@@ -485,5 +565,7 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_metadata(args)
     if yt_action == "upload":
         return handle_youtube_upload(args)
+    if yt_action == "auth":
+        return handle_youtube_auth(args)
 
-    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload.")
+    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth.")

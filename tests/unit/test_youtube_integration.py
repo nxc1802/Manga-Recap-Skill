@@ -261,3 +261,23 @@ class TestYouTubeCliCommands:
         assert res["video_id"] == "yt_video_12345"
         assert res["video_url"] == "https://www.youtube.com/watch?v=yt_video_12345"
         assert res["captions_uploaded"] is True
+
+    def test_handle_youtube_auth(self, monkeypatch, tmp_path):
+        from src.cli.youtube_cmd import handle_youtube_auth, handle_youtube
+        token_path = tmp_path / ".test_token.json"
+        monkeypatch.setenv("YOUTUBE_CREDENTIALS_FILE", str(token_path))
+
+        mock_creds = MagicMock()
+        mock_creds.valid = True
+        mock_creds.expiry = None
+        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda: mock_creds)
+
+        args = argparse.Namespace(
+            youtube_action="auth",
+            force=False,
+        )
+        res = handle_youtube(args)
+        assert res["status"] == "success"
+        assert res["valid"] is True
+        assert res["token_file"] == str(token_path)
+

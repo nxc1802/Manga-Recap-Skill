@@ -33,7 +33,10 @@
 | M2 | P1 Data Integrity & Contracts | FIX-06, FIX-07, FIX-08, FIX-09, FIX-10 | M1 | DONE |
 | M3 | Regression Testing Suite | Comprehensive test suite for FIX-01..10 and baseline integrity | M1, M2 | DONE |
 | M4 | Real E2E Chapter Verification | Real Webtoons URL crawl, neural TTS, render, and forensic audit | M1, M2, M3 | DONE |
-| P2 | Phase 3: P2 Simplification & Batch | 5 operational stages, consolidated gates, dead code cleanup, batch CLI | M1, M2, M3 | IN_PROGRESS |
+| P2 | Phase 3: P2 Simplification & Batch | 5 operational stages, consolidated gates, dead code cleanup, batch CLI | M1, M2, M3 | DONE |
+| P3 | Production Release Ch 1–10 | Sequential pipeline execution Ch 1–10 (1,389 clips, 10 1080p MP4s) | P2 | DONE |
+| P4 | Multi-Chapter Feature Compilation | 10-chapter merged 1080p MP4 (9,315.6s, 2.59h, drift 57.4ms, 2,855 cues) | P3 | DONE |
+| P5 | Forensic Integrity & Release QA | Forensic audit CLEAN, 5,954 strict checks passed, Reviewer APPROVE | P4 | DONE |
 
 ## Interface Contracts
 ### TTS Fingerprinting Contract (FIX-01)

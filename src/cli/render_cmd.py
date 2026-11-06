@@ -58,6 +58,8 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     approved = getattr(args, "approved", False)
     video_mode = getattr(args, "video_mode", "auto")
     allow_placeholders = getattr(args, "allow_placeholders", False)
+    workers = getattr(args, "workers", None)
+    hw_accel = getattr(args, "hw_accel", None)
 
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
@@ -90,6 +92,15 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                     burn_subs = r_set["burn_subtitles"]
                 if getattr(args, "animation", None) is None and "animation" in r_set:
                     allow_animation = r_set["animation"]
+                if workers is None and "workers" in r_set:
+                    workers = r_set["workers"]
+                if hw_accel is None and "hw_accel" in r_set:
+                    hw_accel = r_set["hw_accel"]
+
+    if hw_accel == "auto" or hw_accel is None:
+        import platform
+        if platform.system() == "Darwin":
+            hw_accel = "videotoolbox"
 
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     if not chap_dir.exists():
@@ -199,7 +210,10 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                     )
 
     # Execute full Video Engine V2 render pipeline
-    engine = VideoEngine()
+    try:
+        engine = VideoEngine(max_workers=workers or 2, hw_accel=hw_accel)
+    except TypeError:
+        engine = VideoEngine()
     render_result = engine.render_chapter(
         project_dir=project_dir,
         chapter_num=chapter_num,
@@ -212,6 +226,8 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         video_mode=video_mode,
         allow_animation=allow_animation,
         allow_placeholders=allow_placeholders,
+        max_workers=workers or 2,
+        hw_accel=hw_accel,
     )
 
     # Completing RENDER completes chapter checkpoint & stages export
