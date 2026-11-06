@@ -88,8 +88,8 @@ class TestPhase4WorkspaceAndExportPaths:
         assert exp_path.name == "chapter_001.mp4"
         assert exp_path.parent.name == "sololeveling"
 
-    def test_stage_chapter_export_dual_support(self, tmp_path, monkeypatch):
-        """Verifies staging creates both padded chapter_001.mp4 and unpadded chapter_1.mp4."""
+    def test_stage_chapter_export_single_standard_padded(self, tmp_path, monkeypatch):
+        """Verifies staging creates only standardized padded chapter_007.mp4 without redundant duplicate copies."""
         out_root = tmp_path / "output"
         monkeypatch.setenv("MANGA_RECAP_OUTPUT_DIR", str(out_root))
 
@@ -108,12 +108,11 @@ class TestPhase4WorkspaceAndExportPaths:
 
         proj_out = out_root / "dual_series"
         assert (proj_out / "chapter_007.mp4").exists()
-        assert (proj_out / "chapter_7.mp4").exists()
+        assert not (proj_out / "chapter_7.mp4").exists()
         assert (proj_out / "chapter_007.srt").exists()
-        assert (proj_out / "chapter_7.srt").exists()
+        assert not (proj_out / "chapter_7.srt").exists()
 
         assert (proj_out / "chapter_007.mp4").read_bytes() == src_video.read_bytes()
-        assert (proj_out / "chapter_7.mp4").read_bytes() == src_video.read_bytes()
         assert staged["video_padded"] == proj_out / "chapter_007.mp4"
 
 
@@ -314,9 +313,9 @@ class TestCliIntegrationWorkspaceAndCleanup:
 
         # Assert staging into output/<slug>/
         assert (out_root / slug / "chapter_001.mp4").exists()
-        assert (out_root / slug / "chapter_1.mp4").exists()
+        assert not (out_root / slug / "chapter_1.mp4").exists()
         assert (out_root / slug / "chapter_001.srt").exists()
-        assert (out_root / slug / "chapter_1.srt").exists()
+        assert not (out_root / slug / "chapter_1.srt").exists()
 
         # Assert export paths in result
         assert res["export_video_path"] == str(out_root / slug / "chapter_001.mp4")
@@ -376,11 +375,11 @@ class TestCliIntegrationWorkspaceAndCleanup:
         res = batch_cmd.handle_batch(batch_args)
         assert res["success"] is True
 
-        # Verify staged exports in output/<slug>/ with both padded and unpadded formats
+        # Verify staged exports in output/<slug>/ with standardized padded format
         assert (out_root / slug / "chapter_001.mp4").exists()
-        assert (out_root / slug / "chapter_1.mp4").exists()
+        assert not (out_root / slug / "chapter_1.mp4").exists()
         assert (out_root / slug / "chapter_002.mp4").exists()
-        assert (out_root / slug / "chapter_2.mp4").exists()
+        assert not (out_root / slug / "chapter_2.mp4").exists()
 
     def test_compile_cmd_stages_final_recap_to_output_dir(self, tmp_path, monkeypatch):
         """manga-recap compile automatically copies/stages compiled recap to output/<slug>/."""

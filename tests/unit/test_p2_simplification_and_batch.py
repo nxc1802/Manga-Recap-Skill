@@ -402,8 +402,8 @@ class TestP2BatchExecution:
 
         # Verify staged exports in output/<slug>/
         out_dir = Path("output") / slug
-        assert (out_dir / "chapter_1.mp4").exists()
-        assert (out_dir / "chapter_2.mp4").exists()
+        assert (out_dir / "chapter_001.mp4").exists()
+        assert (out_dir / "chapter_002.mp4").exists()
 
         # 2. Re-run batch -> Both chapters must be recognized as CACHED
         res2 = handle_batch(batch_args)

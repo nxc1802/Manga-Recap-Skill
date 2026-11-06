@@ -168,7 +168,7 @@ def stage_chapter_export(
 ) -> Dict[str, Optional[Path]]:
     """
     Stages/copies verified final MP4 and SRT into standardized output/<project_slug>/ directory.
-    Guarantees that both chapter_{chapter_num:03d}.mp4 and chapter_{chapter_num}.mp4 are available.
+    Guarantees standard zero-padded format: chapter_{chapter_num:03d}.mp4 and .srt (single copy).
     """
     out_dir = get_output_dir(project_slug)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -176,47 +176,35 @@ def stage_chapter_export(
     result: Dict[str, Optional[Path]] = {
         "video_padded": None,
         "video": None,
+        "video_unpadded": None,
         "subtitle_padded": None,
         "subtitle": None,
+        "subtitle_unpadded": None,
     }
 
     if video_path:
         v_src = Path(video_path).resolve()
         if v_src.exists() and v_src.is_file():
-            # 1. Padded format (chapter_001.mp4)
+            # Standardized padded format (chapter_001.mp4)
             padded_name = format_chapter_filename(chapter_num, ext="mp4", padded=True)
             dest_padded = out_dir / padded_name
             if v_src != dest_padded.resolve():
                 shutil.copy2(v_src, dest_padded)
             result["video_padded"] = dest_padded
             result["video"] = dest_padded
-
-            # 2. Unpadded format (chapter_1.mp4) for dual-support
-            unpadded_name = format_chapter_filename(chapter_num, ext="mp4", padded=False)
-            dest_unpadded = out_dir / unpadded_name
-            if dest_unpadded.name != dest_padded.name:
-                if v_src != dest_unpadded.resolve():
-                    shutil.copy2(v_src, dest_unpadded)
-            result["video_unpadded"] = dest_unpadded
+            result["video_unpadded"] = dest_padded
 
     if subtitle_path:
         s_src = Path(subtitle_path).resolve()
         if s_src.exists() and s_src.is_file():
-            # 1. Padded format (chapter_001.srt)
+            # Standardized padded format (chapter_001.srt)
             padded_name = format_chapter_filename(chapter_num, ext="srt", padded=True)
             dest_padded = out_dir / padded_name
             if s_src != dest_padded.resolve():
                 shutil.copy2(s_src, dest_padded)
             result["subtitle_padded"] = dest_padded
             result["subtitle"] = dest_padded
-
-            # 2. Unpadded format (chapter_1.srt) for dual-support
-            unpadded_name = format_chapter_filename(chapter_num, ext="srt", padded=False)
-            dest_unpadded = out_dir / unpadded_name
-            if dest_unpadded.name != dest_padded.name:
-                if s_src != dest_unpadded.resolve():
-                    shutil.copy2(s_src, dest_unpadded)
-            result["subtitle_unpadded"] = dest_unpadded
+            result["subtitle_unpadded"] = dest_padded
 
     return result
 

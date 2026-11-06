@@ -199,12 +199,11 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                             srt_path = chap_dir / "subtitles" / "final.srt"
 
                         # Ensure staged export exists in output/<project_slug>/
-                        staged_vid = output_dir / f"chapter_{chap_num}.mp4"
                         staged_padded = output_dir / format_chapter_filename(chap_num, ext="mp4", padded=True)
-                        if vid_path.exists() and (not staged_vid.exists() or not staged_padded.exists()):
+                        if vid_path.exists() and not staged_padded.exists():
                             stage_chapter_export(project_slug, chap_num, video_path=vid_path, subtitle_path=srt_path)
 
-                        target_vid = staged_padded if staged_padded.exists() else (staged_vid if staged_vid.exists() else vid_path)
+                        target_vid = staged_padded if staged_padded.exists() else vid_path
                         chapter_results.append({
                             "chapter": str(chap_num),
                             "status": "cached",
