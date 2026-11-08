@@ -691,18 +691,22 @@ def safe_cleanup_chapter_intermediates(
     chapter_dir: Path,
     output_video_path: Path,
     min_size_bytes: int = 100000,
+    clean_clips: bool = True,
 ) -> List[str]:
     """
-    Safely cleans intermediate temporary files (split clips, temp concat files, temp cached frames)
+    Safely cleans intermediate temporary files (split clips, temp concat files, temp cached frames,
+    intermediate audio/video clips, and raw video concats)
     ONLY after verifying that output_video_path exists, is a valid file, and has size >= min_size_bytes.
 
     Safety Guarantees:
     - If output_video_path is missing, empty, or smaller than min_size_bytes, ABORTS and raises
       StorageError without deleting any files!
-    - NEVER deletes raw images (in raw/), manifest.json, script.json, or chapter.json.
+    - NEVER deletes raw images (in raw/), panels (in panels/), manifest.json, script.json, or chapter.json.
     - Preserves metadata, final audio, and final subtitles.
     - Cleans temporary split clips (*_raw_temp*.mp4, temp_clip_*.mp4, segment_*.mp4 in temp directories),
       concat files (*concat_list*.txt, .tmp_concat*), and temporary frames.
+    - When clean_clips=True, also unlinks intermediate clips in video/clips/, raw_video_*.mp4,
+      intermediate audio clips in audio/clips/, and speech_master_*.wav.
 
     Returns the list of unlinked filenames.
     """
@@ -751,6 +755,7 @@ def safe_cleanup_chapter_intermediates(
     seen = set()
 
     raw_dir = (chapter_dir / "raw").resolve()
+    panels_dir = (chapter_dir / "panels").resolve()
 
     # First clean files matching known temp patterns across the chapter
     for pattern in TEMP_PATTERNS:
@@ -759,12 +764,12 @@ def safe_cleanup_chapter_intermediates(
                 continue
             if p.name in PROTECTED_FILENAMES:
                 continue
-            # NEVER delete anything inside raw/
+            # NEVER delete anything inside raw/ or panels/
             try:
-                if p.resolve().is_relative_to(raw_dir):
+                if p.resolve().is_relative_to(raw_dir) or p.resolve().is_relative_to(panels_dir):
                     continue
             except (ValueError, AttributeError):
-                if "raw" in p.parts:
+                if "raw" in p.parts or "panels" in p.parts:
                     continue
             seen.add(p)
             try:
@@ -795,6 +800,74 @@ def safe_cleanup_chapter_intermediates(
             with contextlib.suppress(Exception):
                 if not any(temp_dir.iterdir()):
                     temp_dir.rmdir()
+
+    # When clean_clips is True, safely clean intermediate video clips, raw concat video, and audio clips
+    if clean_clips:
+        # 1. Video clips in video/clips/
+        v_clips_dir = chapter_dir / "video" / "clips"
+        if v_clips_dir.exists() and v_clips_dir.is_dir():
+            for p in list(v_clips_dir.iterdir()):
+                if p in seen or not p.is_file():
+                    continue
+                if p.name in PROTECTED_FILENAMES:
+                    continue
+                seen.add(p)
+                try:
+                    p.unlink(missing_ok=True)
+                    cleaned.append(str(p.name))
+                except Exception as e:
+                    with contextlib.suppress(Exception):
+                        from src.core.logger import logger
+                        logger.warning(f"Failed to remove video clip {p}: {e}")
+            with contextlib.suppress(Exception):
+                if not any(v_clips_dir.iterdir()):
+                    v_clips_dir.rmdir()
+
+        # 2. Raw concatenated videos in video/
+        v_dir = chapter_dir / "video"
+        if v_dir.exists() and v_dir.is_dir():
+            for p in v_dir.glob("raw_video_*.mp4"):
+                if p in seen or not p.is_file():
+                    continue
+                seen.add(p)
+                try:
+                    p.unlink(missing_ok=True)
+                    cleaned.append(str(p.name))
+                except Exception:
+                    pass
+
+        # 3. Intermediate audio clips in audio/clips/
+        a_clips_dir = chapter_dir / "audio" / "clips"
+        if a_clips_dir.exists() and a_clips_dir.is_dir():
+            for p in list(a_clips_dir.iterdir()):
+                if p in seen or not p.is_file():
+                    continue
+                if p.name in PROTECTED_FILENAMES:
+                    continue
+                seen.add(p)
+                try:
+                    p.unlink(missing_ok=True)
+                    cleaned.append(str(p.name))
+                except Exception as e:
+                    with contextlib.suppress(Exception):
+                        from src.core.logger import logger
+                        logger.warning(f"Failed to remove audio clip {p}: {e}")
+            with contextlib.suppress(Exception):
+                if not any(a_clips_dir.iterdir()):
+                    a_clips_dir.rmdir()
+
+        # 4. Intermediate uncompressed speech master WAVs in audio/
+        a_dir = chapter_dir / "audio"
+        if a_dir.exists() and a_dir.is_dir():
+            for p in a_dir.glob("speech_master_*.wav"):
+                if p in seen or not p.is_file():
+                    continue
+                seen.add(p)
+                try:
+                    p.unlink(missing_ok=True)
+                    cleaned.append(str(p.name))
+                except Exception:
+                    pass
 
     return cleaned
 
@@ -855,8 +928,18 @@ class StorageManager:
         return cleanup_intermediate_files(chapter_dir, keep_temp=keep_temp)
 
     @staticmethod
-    def safe_cleanup_chapter_intermediates(chapter_dir: Path, output_video_path: Path, min_size_bytes: int = 100000) -> List[str]:
-        return safe_cleanup_chapter_intermediates(chapter_dir, output_video_path=output_video_path, min_size_bytes=min_size_bytes)
+    def safe_cleanup_chapter_intermediates(
+        chapter_dir: Path,
+        output_video_path: Path,
+        min_size_bytes: int = 100000,
+        clean_clips: bool = True,
+    ) -> List[str]:
+        return safe_cleanup_chapter_intermediates(
+            chapter_dir,
+            output_video_path=output_video_path,
+            min_size_bytes=min_size_bytes,
+            clean_clips=clean_clips,
+        )
 
     @staticmethod
     def get_projects_root() -> Path:

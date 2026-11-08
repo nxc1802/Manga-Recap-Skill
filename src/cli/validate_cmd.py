@@ -27,7 +27,9 @@ from src.core.storage import (
     StorageCorruptError,
     StorageFileNotFoundError,
     calculate_sha256,
+    format_chapter_filename,
     get_chapter_dir,
+    get_output_dir,
     get_project_dir,
     read_json,
     update_checkpoint,
@@ -228,33 +230,42 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                         if not audio_file.is_absolute():
                             audio_file = chap_dir / audio_file
                         exists_and_nonempty = audio_file.exists() and audio_file.stat().st_size > 0
-                        check(
-                            exists_and_nonempty,
-                            f"segment:{seg.seq_id}:audio",
-                            f"Synthesized audio file missing or empty: {audio_file}",
+                        # If final video is already produced, intermediate audio clips may have been safely cleaned up
+                        final_vid_exists = (
+                            (chap_dir / "video" / "final.mp4").exists()
+                            or (get_output_dir(project_slug) / format_chapter_filename(chap_num)).exists()
                         )
-                        if exists_and_nonempty:
-                            if seg.checksum:
-                                actual_hash = calculate_sha256(audio_file)
-                                check(
-                                    actual_hash.lower() == seg.checksum.strip().lower(),
-                                    f"segment:{seg.seq_id}:audio_checksum",
-                                    f"Synthesized audio checksum mismatch for {audio_file}: expected {seg.checksum}, got {actual_hash}",
-                                )
-                            if seg.duration is not None:
-                                try:
-                                    actual_dur = get_wav_duration_seconds(audio_file)
+                        if not exists_and_nonempty and final_vid_exists:
+                            # Intermediate clips were safely cleaned up after final video render
+                            pass
+                        else:
+                            check(
+                                exists_and_nonempty,
+                                f"segment:{seg.seq_id}:audio",
+                                f"Synthesized audio file missing or empty: {audio_file}",
+                            )
+                            if exists_and_nonempty:
+                                if seg.checksum:
+                                    actual_hash = calculate_sha256(audio_file)
                                     check(
-                                        abs(actual_dur - float(seg.duration)) <= 0.05,
-                                        f"segment:{seg.seq_id}:audio_duration",
-                                        f"Synthesized audio duration mismatch for {audio_file}: expected {seg.duration}s, got {actual_dur:.3f}s",
+                                        actual_hash.lower() == seg.checksum.strip().lower(),
+                                        f"segment:{seg.seq_id}:audio_checksum",
+                                        f"Synthesized audio checksum mismatch for {audio_file}: expected {seg.checksum}, got {actual_hash}",
                                     )
-                                except Exception as err:
-                                    check(
-                                        False,
-                                        f"segment:{seg.seq_id}:audio_duration",
-                                        f"Failed to inspect duration for {audio_file}: {err}",
-                                    )
+                                if seg.duration is not None:
+                                    try:
+                                        actual_dur = get_wav_duration_seconds(audio_file)
+                                        check(
+                                            abs(actual_dur - float(seg.duration)) <= 0.05,
+                                            f"segment:{seg.seq_id}:audio_duration",
+                                            f"Synthesized audio duration mismatch for {audio_file}: expected {seg.duration}s, got {actual_dur:.3f}s",
+                                        )
+                                    except Exception as err:
+                                        check(
+                                            False,
+                                            f"segment:{seg.seq_id}:audio_duration",
+                                            f"Failed to inspect duration for {audio_file}: {err}",
+                                        )
 
                 if canonical_manifest_pids:
                     missing_pids = canonical_manifest_pids - covered_panel_ids

@@ -105,6 +105,9 @@ manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 # 10. YouTube SEO metadata packaging and video publishing
 manga-recap youtube metadata --project <slug> --chapter <num> --json
 manga-recap youtube upload --project <slug> --chapter <num> [--privacy private|unlisted|public] [--thumbnail <path>] --json
+
+# 11. Clean intermediate clips, temp files, and caches safely after final output verification
+manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 ```
 
 ### Standard JSON Response Envelope

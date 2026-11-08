@@ -110,6 +110,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("--voice", default=None, help="Preset voice override")
     p_tts.add_argument("--speed", type=float, default=None, help="Speech speed override")
     p_tts.add_argument("--force", action="store_true", help="Re-synthesize all audio segments even if existing")
+    p_tts.add_argument("--no-cache", action="store_true", help="Bypass and delete any existing cached audio clips and re-synthesize cleanly")
     p_tts.add_argument("--engine", choices=["neural", "mock", "auto"], default="neural", help="TTS synthesis engine backend (default: neural)")
     p_tts.add_argument("--mock", action="store_true", help="Shortcut for --engine mock (testing only)")
     p_tts.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
@@ -185,6 +186,12 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path")
     p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
 
+    # 12. clean
+    p_cln = subparsers.add_parser("clean", help="Safely clean intermediate caches and temporary clips", parents=[common_parent])
+    p_cln.add_argument("-p", "--project", required=True, help="Project slug")
+    p_cln.add_argument("-c", "--chapter", default=None, help="Specific chapter number (default: all completed chapters)")
+    p_cln.add_argument("--dry-run", action="store_true", help="Report reclaimable storage without unlinking files")
+
     return parser
 
 
@@ -223,6 +230,9 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "youtube":
         from src.cli.youtube_cmd import handle_youtube
         return handle_youtube(args)
+    elif subcommand == "clean":
+        from src.cli.clean_cmd import handle_clean
+        return handle_clean(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 

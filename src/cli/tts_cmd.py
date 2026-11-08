@@ -68,7 +68,8 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     chapter_num = getattr(args, "chapter", None)
     voice_override = getattr(args, "voice", None)
     speed_override = getattr(args, "speed", None)
-    force_resynth = getattr(args, "force", False)
+    no_cache = getattr(args, "no_cache", False)
+    force_resynth = getattr(args, "force", False) or no_cache
 
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
@@ -110,6 +111,9 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
 
         audio_clips_dir = chap_dir / "audio" / "clips"
         audio_clips_dir.mkdir(parents=True, exist_ok=True)
+        if no_cache and audio_clips_dir.exists():
+            for old_clip in audio_clips_dir.glob("*.wav"):
+                old_clip.unlink(missing_ok=True)
 
         # Check if voice_selection.json exists to load approved strategy, voice, and speed
         voice_sel_file = project_dir / "voice_selection.json"
