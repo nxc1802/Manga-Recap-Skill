@@ -34,9 +34,10 @@ The `manga-recap` skill enables coding agents (OpenCode, Claude Code, Antigravit
 ## Prerequisites & System Requirements
 
 1. **Python Environment**: Python 3.10+ with project dependencies installed (`pip install -e .` or active virtualenv in `./venv`).
-2. **FFmpeg & FFprobe**: Installed and available on system `$PATH` with `libx264` and `aac` codecs.
-3. **VieNeu-TTS Model Weights**: Downloaded and cached locally for VieNeu-TTS v3 Turbo (no network calls during synthesis).
-4. **CLI Entrypoint**: `manga-recap` or `python -m src.cli.main`.
+2. **FFmpeg & FFprobe**: Installed and available on system `$PATH` with `libx264` and `aac` codecs (or `h264_videotoolbox` on macOS Apple Silicon, `h264_nvenc` on NVIDIA GPUs).
+3. **VieNeu-TTS Model Weights**: Downloaded and cached locally for VieNeu-TTS v3 Turbo (or synthesized via Kaggle GPU with `--kaggle`).
+4. **Kaggle Cloud GPU (Optional for `--kaggle` mode)**: Kaggle API token configured in `~/.kaggle/access_token` (or `KAGGLE_API_TOKEN` environment variable). Provides free Tesla T4 GPU access for extreme-speed VieNeu-TTS batched synthesis and NVIDIA NVENC 1080p video rendering.
+5. **CLI Entrypoint**: `manga-recap` or `python -m src.cli.main`.
 
 ## Streamlined 5-Stage Architecture & Consolidated Review Gates
 
@@ -122,12 +123,17 @@ manga-recap validate --project <project_slug> --chapter <chapter_num> --json
 ```
 - Confirms: all sequence IDs are unique, referenced panel IDs exist in manifest, and focus boxes lie within normalized `[0.0, 1.0]` coordinates.
 
-### Stage 6: Local VieNeu-TTS Audio Generation
-Synthesize 48 kHz uncompressed WAV utterances using the local VieNeu-TTS v3 Turbo engine:
+### Stage 6: VieNeu-TTS Audio Generation (Local or Cloud GPU)
+Synthesize 48 kHz uncompressed WAV utterances using the VieNeu-TTS v3 Turbo engine:
 ```bash
+# Option A: Local synthesis (CPU or local Apple Silicon / CUDA)
 manga-recap tts --project <project_slug> --chapter <chapter_num> [--force] --json
+
+# Option B: Cloud GPU acceleration (Kaggle Tesla T4, batching 32 utterances/step)
+manga-recap tts --project <project_slug> --chapter <chapter_num> --kaggle --json
 ```
 - Generated utterances are written directly to `audio/clips/audio_<chapter>_<seq_id>.wav` via crash-safe atomic replacement, with exact measured waveform durations and actual SHA-256 file checksums recorded into `script.json`.
+- Cloud mode (`--kaggle`): Automatically packages script and assets, offloads batched inference to Kaggle GPU Tensor Cores (~0.32s/segment), and pulls back all `.wav` audio clips into local storage seamlessly.
 - Resumability: By default, re-running TTS resumes without re-synthesizing segments that already possess valid, verified audio matching the current voice. Pass `--force` to re-synthesize all chapter segments.
 
 ### Stage 7: Human Review Gate 1 (Voice Strategy)
@@ -135,7 +141,7 @@ Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (M�
 1. Direct the user to listen to voice samples or review `data/benchmarks/vieneu_v3_turbo/review/index.html`.
 2. Record human approval into `data/projects/<project_slug>/voice_selection.json` once per series.
 
-### Stage 8: Cinematic Video Render
+### Stage 8: Cinematic Video Render (Local or Cloud NVENC)
 Render preview or final video clips with dynamic FFmpeg filterchains:
 ```bash
 # Preview render (for manual inspection)
@@ -143,10 +149,14 @@ manga-recap render --project <project_slug> --chapter <chapter_num> --quality pr
 
 # Final 1080p render (use --skip-preview to bypass Gate 2 preview requirement)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --json
+
+# Cloud GPU extreme-speed render (NVIDIA Hardware NVENC h264_nvenc single-pass)
+manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --kaggle --json
 ```
 - Applies chosen camera motion (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`, `vertical_scroll`).
 - Times panel duration exactly to synthesized audio duration.
 - Generates aligned `.srt` subtitles and ducks background music during speech.
+- Cloud mode (`--kaggle`): Composites frames in parallel (8 workers), merges audio, and renders Full HD 1080p using NVIDIA NVENC hardware encoder in a single-pass concat demuxer (~76s for an 8-minute video). Automatically syncs `final.mp4`, `chapter_<num>.srt`, and `cloud_telemetry.json` back to local storage.
 
 ### Stage 9: Human Review Gate 2 (Video Preview Verification)
 Verify output video stream using `ffprobe` and human inspection at Review Gate 2 (optional, bypassed via `--skip-preview` or batch mode):
@@ -157,15 +167,34 @@ Verify output video stream using `ffprobe` and human inspection at Review Gate 2
 ### Stage 10: Multi-Chapter Compilation & Batch Mode
 Process multiple chapters in unattended batch mode or assemble into a master feature recap:
 ```bash
-# 1. Unattended sequential multi-chapter batch mode
+# 1. Unattended sequential multi-chapter batch mode (Local)
 manga-recap batch --project <project_slug> --chapters 1-5 --compile --json
 
-# 2. Single-chapter retry without restarting completed chapters
-manga-recap batch --project <project_slug> --retry-chapter 2 --json
+# 2. Extreme-speed Cloud GPU batch mode (Kaggle Tesla T4: TTS + NVENC per chapter)
+manga-recap batch --project <project_slug> --chapters 1-5 --kaggle --compile --json
 
-# 3. Assemble multiple completed chapters into a continuous full-length recap video
+# 3. Single-chapter retry without restarting completed chapters
+manga-recap batch --project <project_slug> --retry-chapter 2 --kaggle --json
+
+# 4. Assemble multiple completed chapters into a continuous full-length recap video
 manga-recap compile --project <project_slug> --chapters 1,2 --output "data/projects/<project_slug>/video/full_recap.mp4" --json
 ```
+
+### Stage 10b: Cloud GPU Acceleration & Extreme-Speed Pipeline (`--kaggle` Mode)
+When running on large chapters or resource-constrained local machines, offload heavy computation to Kaggle Cloud GPU:
+```bash
+# Check Kaggle API authentication & quota
+manga-recap cloud info --json
+
+# Run end-to-end cloud production job for a single chapter
+manga-recap cloud run --project <project_slug> --chapter <chapter_num> --json
+```
+**Extreme Speed Optimizations Implemented on Cloud GPU**:
+1. **VieNeu-TTS Batched Inference**: Utterances are grouped into batches (`infer_batch(..., batch_size=32)`) on Tensor Cores, cutting TTS time from ~75s down to **~20s** for 60+ lines.
+2. **Parallel Frame Compositing**: 8-worker thread pool composites 1080p frames with blurred background wings and centered panels in **~6.4s**.
+3. **Single-Pass Hardware Video Encoding**: Replaces multi-process rendering with an instant wave audio merge and a single FFmpeg concat demuxer pass powered by NVIDIA Hardware NVENC (`h264_nvenc -preset p4 -tune ll`), encoding an 8-minute video in **~76s** (overall render: **~82s**, 4.7x faster than real-time playback).
+4. **Auto-Packaging & Local Sync**: CLI packages local assets into a lightweight tarball, uploads to Kaggle Dataset `cuongnguyen1802/manga-recap-payload`, polls execution, and downloads results directly into local paths (`video/final.mp4`, `subtitles/*.srt`, `audio/clips/`, `cloud_telemetry.json`). Checkpoint status in `chapter.json` is updated atomically to `completed`.
+5. **Zero Cloud API / Zero Database Rule Compliance**: Reasoning, scriptwriting, and OCR remain 100% native to the Agent. VieNeu-TTS runs offline within the Kaggle container. State persistence is strictly local JSON.
 
 ### Stage 11: YouTube SEO Packaging & Publishing
 Generate metadata (SEO description, click-worthy titles, timestamps, hashtags) and publish directly:

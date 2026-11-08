@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "domain": "generic",
+  "name": "Generic Manga Reader",
+  "url_patterns": [],
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  },
+  "series_resolver": {
+    "chapter_list_selector": null,
+    "chapter_link_selector": "a",
+    "chapter_number_regex": "(?:chap(?:ter)?|ep(?:isode)?|tập)?[_ -]*(\\d+(?:\\.\\d+)?)",
+    "reverse_order": false
+  },
+  "chapter_extractor": {
+    "container_selector": null,
+    "image_selectors": ["img"],
+    "url_attributes": ["data-url", "data-src", "data-original", "data-lazy-src", "src"],
+    "script_regex": null,
+    "exclude_patterns": ["banner", "logo", "icon", "thumb", "bg_", "transparency", "advert", "avatar", "discord"]
+  },
+  "confidence": 0.6,
+  "requires_js": false,
+  "rate_limit_seconds": 0.5
+}

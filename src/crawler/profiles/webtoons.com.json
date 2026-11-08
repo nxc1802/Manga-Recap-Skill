@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "domain": "webtoons.com",
+  "name": "LINE Webtoons",
+  "url_patterns": [
+    "webtoons\\.com/.+/viewer",
+    "webtoons\\.com/.+/episode"
+  ],
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.webtoons.com/"
+  },
+  "series_resolver": {
+    "chapter_list_selector": "ul#_episodeList",
+    "chapter_link_selector": "a.card_item, li._episodeItem a",
+    "chapter_number_regex": "episode_no=(\\d+)",
+    "reverse_order": false
+  },
+  "chapter_extractor": {
+    "container_selector": "div#_imageList",
+    "image_selectors": ["img"],
+    "url_attributes": ["data-url", "data-src", "src"],
+    "script_regex": "url:\\s*\"([^\"]+)\"",
+    "exclude_patterns": ["banner", "logo", "icon", "thumb", "bg_", "transparency"]
+  },
+  "confidence": 0.95,
+  "requires_js": false,
+  "rate_limit_seconds": 0.5
+}

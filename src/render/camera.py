@@ -61,8 +61,11 @@ class CameraMotionGenerator:
             "zoom_out": CameraMotionType.ZOOM_OUT,
             "focus_crop": CameraMotionType.FOCUS_CROP,
             "crop": CameraMotionType.FOCUS_CROP,
+            "static_focus": CameraMotionType.STATIC_FOCUS,
             "vertical_scroll": CameraMotionType.VERTICAL_SCROLL,
             "scroll": CameraMotionType.VERTICAL_SCROLL,
+            "content_aware_scroll": CameraMotionType.CONTENT_AWARE_SCROLL,
+            "subject_pan": CameraMotionType.SUBJECT_PAN,
         }
         return alias_map.get(motion_str, CameraMotionType.STATIC)
 
@@ -171,8 +174,12 @@ class CameraMotionGenerator:
         T = max(0.5, float(duration_sec or 0.0))
         N = round(self.fps * T)
         motion = self.normalize_motion_type(motion_type)
+        has_focus = (focus_box is not None) or (focus_x is not None and focus_y is not None)
         if not allow_animation:
-            motion = CameraMotionType.STATIC
+            if motion in (CameraMotionType.FOCUS_CROP, CameraMotionType.STATIC_FOCUS) or has_focus:
+                motion = CameraMotionType.STATIC_FOCUS
+            else:
+                motion = CameraMotionType.STATIC
 
         # Guard against excessive crop on tall continuous webtoon panels (H > 2W)
         if img_h > 2 * img_w and motion in (
@@ -180,6 +187,7 @@ class CameraMotionGenerator:
             CameraMotionType.ZOOM_OUT,
             CameraMotionType.PAN_LEFT,
             CameraMotionType.PAN_RIGHT,
+            CameraMotionType.SUBJECT_PAN,
         ):
             logger.info(
                 f"Panel is tall webtoon ({img_w}x{img_h}, H > 2W); diverting {motion.value} to STATIC to prevent content crop."
@@ -237,9 +245,9 @@ class CameraMotionGenerator:
             return filter_str, False
 
         # ----------------------------------------------------------------------
-        # 2. PAN_RIGHT / PAN_LEFT (Horizontal Pan)
+        # 2. PAN_RIGHT / PAN_LEFT / SUBJECT_PAN (Horizontal Pan)
         # ----------------------------------------------------------------------
-        if motion in (CameraMotionType.PAN_RIGHT, CameraMotionType.PAN_LEFT):
+        if motion in (CameraMotionType.PAN_RIGHT, CameraMotionType.PAN_LEFT, CameraMotionType.SUBJECT_PAN):
             hv = self._ensure_even(img_h)
             wv = self._ensure_even(round(hv * self.target_ar))
             if wv > img_w:
@@ -250,7 +258,7 @@ class CameraMotionGenerator:
             y_pos = self._ensure_even((img_h - hv) // 2)
 
             # Cosine ease-in-ease-out kinematics
-            if motion == CameraMotionType.PAN_RIGHT:
+            if motion in (CameraMotionType.PAN_RIGHT, CameraMotionType.SUBJECT_PAN):
                 x_expr = f"'{delta_x}*0.5*(1-cos(PI*t/{T:.3f}))'"
             else:
                 x_expr = f"'{delta_x}*0.5*(1+cos(PI*t/{T:.3f}))'"
@@ -259,9 +267,9 @@ class CameraMotionGenerator:
             return filter_str, False
 
         # ----------------------------------------------------------------------
-        # 3. PAN_DOWN / PAN_UP / VERTICAL_SCROLL (Vertical Movement)
+        # 3. PAN_DOWN / PAN_UP / VERTICAL_SCROLL / CONTENT_AWARE_SCROLL (Vertical Movement)
         # ----------------------------------------------------------------------
-        if motion in (CameraMotionType.PAN_DOWN, CameraMotionType.PAN_UP, CameraMotionType.VERTICAL_SCROLL):
+        if motion in (CameraMotionType.PAN_DOWN, CameraMotionType.PAN_UP, CameraMotionType.VERTICAL_SCROLL, CameraMotionType.CONTENT_AWARE_SCROLL):
             wv = self._ensure_even(img_w)
             hv = self._ensure_even(round(wv / self.target_ar))
             if hv > img_h:
@@ -274,7 +282,7 @@ class CameraMotionGenerator:
             if motion == CameraMotionType.VERTICAL_SCROLL:
                 # Linear progression for webtoon scrolling
                 y_expr = f"'{delta_y}*(t/{T:.3f})'"
-            elif motion == CameraMotionType.PAN_DOWN:
+            elif motion in (CameraMotionType.PAN_DOWN, CameraMotionType.CONTENT_AWARE_SCROLL):
                 # Cosine ease-in-ease-out top to bottom
                 y_expr = f"'{delta_y}*0.5*(1-cos(PI*t/{T:.3f}))'"
             else:
@@ -309,9 +317,9 @@ class CameraMotionGenerator:
             return filter_str, True
 
         # ----------------------------------------------------------------------
-        # 5. FOCUS_CROP
+        # 5. FOCUS_CROP & STATIC_FOCUS
         # ----------------------------------------------------------------------
-        if motion == CameraMotionType.FOCUS_CROP:
+        if motion in (CameraMotionType.FOCUS_CROP, CameraMotionType.STATIC_FOCUS):
             # Scale around focus center preserving 16:9 aspect ratio
             # Enforce minimum safe scale (0.45) to prevent micro-crops on chat boxes
             clamped_scale = max(self.min_crop_scale, min(1.0, scale_ratio))

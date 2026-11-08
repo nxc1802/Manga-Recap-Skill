@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.cli.exit_codes import CliValidationError
 from src.core.logger import logger
-from src.core.schemas import YouTubeMetadata
+from src.core.schemas import ChapterMarker, FeatureTimeline, YouTubeMetadata
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
@@ -94,6 +94,76 @@ def generate_timestamps_from_script(script_data: Dict[str, Any]) -> List[Dict[st
     return timestamps
 
 
+def build_youtube_chapter_markers(
+    timeline: FeatureTimeline,
+    min_interval_seconds: float = 10.0,
+    min_markers_count: int = 3,
+) -> List[Dict[str, str]]:
+    """
+    Ensures strict compliance with YouTube Chapters specification:
+    1. First timestamp MUST start at 00:00.
+    2. At least 3 chapter markers.
+    3. Each marker interval >= 10.0 seconds.
+    4. Strictly monotonic and ascending.
+    """
+    markers: List[Dict[str, Any]] = []
+
+    use_chapters = len(timeline.chapters) >= min_markers_count
+    if use_chapters:
+        for idx in range(1, len(timeline.chapters)):
+            if timeline.chapters[idx].start_seconds - timeline.chapters[idx - 1].start_seconds < min_interval_seconds:
+                use_chapters = False
+                break
+
+    if use_chapters:
+        for idx, ch in enumerate(timeline.chapters):
+            t_str = "00:00" if idx == 0 else ch.start_timestamp
+            c_label = ch.title
+            if not c_label.lower().startswith(f"tập {ch.chapter_number}".lower()):
+                c_label = f"Tập {ch.chapter_number}: {ch.title}"
+            markers.append({
+                "time": t_str,
+                "label": c_label,
+                "seconds": 0.0 if idx == 0 else ch.start_seconds,
+            })
+    else:
+        # Fallback expansion using sub_markers from each chapter
+        all_sub_markers: List[ChapterMarker] = []
+        for ch in timeline.chapters:
+            all_sub_markers.extend(ch.sub_markers)
+
+        spaced_markers: List[ChapterMarker] = []
+        last_sec = -999.0
+        for sm in all_sub_markers:
+            if sm.seconds - last_sec >= min_interval_seconds or not spaced_markers:
+                spaced_markers.append(sm)
+                last_sec = sm.seconds
+
+        if spaced_markers:
+            if spaced_markers[0].seconds > 0.0 or spaced_markers[0].time != "00:00":
+                spaced_markers[0] = ChapterMarker(time="00:00", label="Mở đầu câu chuyện", seconds=0.0)
+        else:
+            spaced_markers.append(ChapterMarker(time="00:00", label="Mở đầu câu chuyện", seconds=0.0))
+
+        if len(spaced_markers) < min_markers_count and timeline.total_duration_seconds >= 30.0:
+            step = timeline.total_duration_seconds / float(min_markers_count)
+            spaced_markers = [
+                ChapterMarker(time="00:00", label="Mở đầu & Xuất thế", seconds=0.0),
+                ChapterMarker(time=format_seconds_to_timestamp(step), label="Cao trào xung đột", seconds=round(step, 2)),
+                ChapterMarker(time=format_seconds_to_timestamp(step * 2), label="Quyết chiến hồi kết", seconds=round(step * 2, 2)),
+            ]
+
+        for sm in spaced_markers:
+            markers.append({
+                "time": sm.time,
+                "label": sm.label,
+                "seconds": sm.seconds,
+            })
+
+    # Return clean format
+    return [{"time": m["time"], "label": m["label"]} for m in markers]
+
+
 def build_youtube_description(
     project_title: str,
     chapter_num: str,
@@ -154,10 +224,10 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Chapter number (--chapter) is required.")
 
     proj_dir = get_project_dir(project_slug)
-    chap_dir = get_chapter_dir(project_slug, chapter_num)
+    out_dir = get_output_dir(project_slug)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    if not chap_dir.exists():
-        raise StorageFileNotFoundError(f"Chapter directory does not exist: {chap_dir}")
+    is_feature = str(chapter_num).lower() in ("feature", "all", "compilation", "full")
 
     # 1. Load project info & story summary
     project_title = project_slug
@@ -174,42 +244,131 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
     if summary_path.exists():
         story_summary_text = summary_path.read_text(encoding="utf-8")
 
-    # 2. Load script.json
-    script_path = chap_dir / "script.json"
-    if not script_path.exists():
-        raise StorageFileNotFoundError(f"script.json missing in {chap_dir}. Run agent scripting first.")
+    thumb_concept = "Ảnh nhân vật chính trong trạng thái biến đổi hoặc giao đấu gay cấn, viền vàng nổi bật"
 
-    script_data = read_json(script_path)
-    timestamps = generate_timestamps_from_script(script_data)
+    if is_feature:
+        # Check feature timeline
+        timeline_path = proj_dir / "feature_timeline.json"
+        if not timeline_path.exists():
+            timeline_path = out_dir / f"{project_slug}_timeline.json"
 
-    # 3. Formulate Title
-    user_title = getattr(args, "title", None)
-    if user_title:
-        title = user_title.strip()
-    else:
-        # Generate dramatic title formula adhering to <= 65 chars
-        title = f"[Review Truyện] {project_title} - Tập {chapter_num}"
+        if timeline_path.exists():
+            t_data = read_json(timeline_path)
+            timeline = FeatureTimeline.model_validate(t_data)
+            timestamps = build_youtube_chapter_markers(timeline)
+            first_c = timeline.chapters[0].chapter_number if timeline.chapters else "1"
+            last_c = timeline.chapters[-1].chapter_number if timeline.chapters else "1"
+            default_title = f"[Trọn Bộ] {project_title} - Full Recap Tập {first_c}-{last_c}"
+        else:
+            timestamps = [{"time": "00:00", "label": "Bắt đầu full recap"}]
+            default_title = f"[Trọn Bộ] {project_title} - Full Recap Toàn Bộ Các Tập"
+
+        # Check for feature thumbnail
+        feat_thumb = out_dir / "feature_thumbnail.jpg"
+        if feat_thumb.exists():
+            thumb_concept = f"Ảnh đại diện feature chất lượng cao tại {feat_thumb.name}"
+
+        # Formulate Title & Description
+        title = getattr(args, "title", None) or default_title
         if len(title) > 90:
             title = title[:87] + "..."
 
-    # 4. Formulate Description
-    user_desc = getattr(args, "description", None)
-    if user_desc:
-        description = user_desc.strip()
+        description = getattr(args, "description", None) or build_youtube_description(
+            project_title=project_title,
+            chapter_num="Trọn Bộ",
+            story_summary=story_summary_text,
+            timestamps=timestamps,
+        )
+
+        user_tags = getattr(args, "tags", None)
+        tags = [t.strip() for t in user_tags.split(",") if t.strip()] if user_tags else [
+            "Manga Recap",
+            "Review Truyện",
+            project_title,
+            f"{project_title} trọn bộ",
+            "Webtoon",
+            "Manhwa",
+            "Tóm tắt truyện tranh",
+            "Full recap",
+        ]
+
+        privacy = getattr(args, "privacy", "private") or "private"
+
+        metadata = YouTubeMetadata(
+            project_slug=project_slug,
+            chapter_number="feature",
+            title=title,
+            description=description,
+            tags=tags,
+            category_id="24",
+            privacy_status=privacy,
+            made_for_kids=False,
+            timestamps=timestamps,
+            thumbnail_concept=thumb_concept,
+        )
+
+        meta_path = out_dir / "feature.youtube.json"
+        atomic_write_json(meta_path, metadata)
+        staged_meta_path = meta_path
+        logger.info(f"Feature YouTube metadata generated: {meta_path}")
+
+        return {
+            "status": "success",
+            "project_slug": project_slug,
+            "chapter_number": "feature",
+            "metadata_path": str(meta_path),
+            "staged_path": str(staged_meta_path),
+            "title": title,
+            "timestamps_count": len(timestamps),
+            "tags_count": len(tags),
+        }
+
     else:
-        description = build_youtube_description(
+        chap_dir = get_chapter_dir(project_slug, chapter_num)
+        if not chap_dir.exists():
+            raise StorageFileNotFoundError(f"Chapter directory does not exist: {chap_dir}")
+
+        script_path = chap_dir / "script.json"
+        if not script_path.exists():
+            raise StorageFileNotFoundError(f"script.json missing in {chap_dir}. Run agent scripting first.")
+
+        script_data = read_json(script_path)
+        timestamps = generate_timestamps_from_script(script_data)
+
+        # Check thumbnail candidate doc to upgrade thumbnail_concept
+        tc_path = chap_dir / "thumbnail_candidates.json"
+        if tc_path.exists():
+            try:
+                tc_data = read_json(tc_path)
+                candidates = tc_data.get("candidates", [])
+                sel_id = tc_data.get("selected_candidate_id") or "cand_01"
+                for cand in candidates:
+                    if cand.get("candidate_id") == sel_id:
+                        reason = cand.get("narrative_reason", "")
+                        reco = cand.get("text_overlay_recommendation", "")
+                        thumb_concept = f"{reason} — Chữ nổi bật: '{reco}'"
+                        break
+            except Exception:
+                pass
+
+        user_title = getattr(args, "title", None)
+        if user_title:
+            title = user_title.strip()
+        else:
+            title = f"[Review Truyện] {project_title} - Tập {chapter_num}"
+            if len(title) > 90:
+                title = title[:87] + "..."
+
+        user_desc = getattr(args, "description", None)
+        description = user_desc.strip() if user_desc else build_youtube_description(
             project_title=project_title,
             chapter_num=str(chapter_num),
             story_summary=story_summary_text,
             timestamps=timestamps,
         )
 
-    # 5. Formulate Tags
-    user_tags = getattr(args, "tags", None)
-    if user_tags:
-        tags = [t.strip() for t in user_tags.split(",") if t.strip()]
-    else:
-        tags = [
+        user_tags = getattr(args, "tags", None)
+        tags = [t.strip() for t in user_tags.split(",") if t.strip()] if user_tags else [
             "Manga Recap",
             "Review Truyện",
             project_title,
@@ -220,43 +379,41 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
             "Truyện tranh hay",
         ]
 
-    privacy = getattr(args, "privacy", "private") or "private"
+        privacy = getattr(args, "privacy", "private") or "private"
 
-    metadata = YouTubeMetadata(
-        project_slug=project_slug,
-        chapter_number=str(chapter_num),
-        title=title,
-        description=description,
-        tags=tags,
-        category_id="24",  # Entertainment
-        privacy_status=privacy,
-        made_for_kids=False,
-        timestamps=timestamps,
-        thumbnail_concept="Ảnh nhân vật chính trong trạng thái biến đổi hoặc giao đấu gay cấn, viền vàng nổi bật",
-    )
+        metadata = YouTubeMetadata(
+            project_slug=project_slug,
+            chapter_number=str(chapter_num),
+            title=title,
+            description=description,
+            tags=tags,
+            category_id="24",
+            privacy_status=privacy,
+            made_for_kids=False,
+            timestamps=timestamps,
+            thumbnail_concept=thumb_concept,
+        )
 
-    # Save to chapter directory and stage to output directory
-    meta_path = chap_dir / "youtube_metadata.json"
-    atomic_write_json(meta_path, metadata)
+        meta_path = chap_dir / "youtube_metadata.json"
+        atomic_write_json(meta_path, metadata)
 
-    out_dir = get_output_dir(project_slug)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    staged_meta_name = format_chapter_filename(chapter_num, ext="youtube.json", padded=True)
-    staged_meta_path = out_dir / staged_meta_name
-    shutil.copy2(meta_path, staged_meta_path)
+        staged_meta_name = format_chapter_filename(chapter_num, ext="youtube.json", padded=True)
+        staged_meta_path = out_dir / staged_meta_name
+        shutil.copy2(meta_path, staged_meta_path)
 
-    logger.info(f"YouTube metadata generated successfully: {meta_path} (Staged to {staged_meta_path})")
+        logger.info(f"YouTube metadata generated successfully: {meta_path} (Staged to {staged_meta_path})")
 
-    return {
-        "status": "success",
-        "project_slug": project_slug,
-        "chapter_number": str(chapter_num),
-        "metadata_path": str(meta_path),
-        "staged_path": str(staged_meta_path),
-        "title": title,
-        "timestamps_count": len(timestamps),
-        "tags_count": len(tags),
-    }
+        return {
+            "status": "success",
+            "project_slug": project_slug,
+            "chapter_number": str(chapter_num),
+            "metadata_path": str(meta_path),
+            "staged_path": str(staged_meta_path),
+            "title": title,
+            "timestamps_count": len(timestamps),
+            "tags_count": len(tags),
+        }
+
 
 
 def get_youtube_oauth_credentials():
@@ -529,10 +686,19 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 7. Upload Custom Thumbnail (if provided or auto-detected)
     thumbnail_path = getattr(args, "thumbnail", None)
-    if not thumbnail_path and str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
-        feature_thumb = out_dir / "feature_thumbnail.jpg"
-        if feature_thumb.exists():
-            thumbnail_path = str(feature_thumb)
+    if not thumbnail_path:
+        if str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
+            feature_thumb = out_dir / "feature_thumbnail.jpg"
+            if feature_thumb.exists():
+                thumbnail_path = str(feature_thumb)
+        else:
+            chap_thumb = out_dir / f"chapter_{chapter_num}_thumbnail.jpg"
+            if chap_thumb.exists():
+                thumbnail_path = str(chap_thumb)
+            else:
+                cand_clean = chap_dir / "thumbnails" / "cand_01_clean.jpg"
+                if cand_clean.exists():
+                    thumbnail_path = str(cand_clean)
 
     thumbnail_uploaded = False
     if thumbnail_path and Path(thumbnail_path).exists():
@@ -558,6 +724,68 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def handle_youtube_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
+    """Generates, scores, and selects YouTube thumbnail candidates."""
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", "1")
+    select_id = getattr(args, "select", None)
+
+    if not project_slug:
+        raise CliValidationError("Project slug (--project) is required.")
+
+    from src.render.thumbnail_director import thumbnail_director
+
+    is_feature = str(chapter_num).lower() in ("feature", "all", "compilation", "full")
+
+    # If feature, pick first chapter or available chapters
+    effective_ch = "1"
+    if is_feature:
+        proj_dir = get_project_dir(project_slug)
+        ch_dir = proj_dir / "chapters"
+        if ch_dir.exists():
+            subdirs = sorted([d.name for d in ch_dir.iterdir() if d.is_dir() and d.name.isdigit()], key=lambda x: int(x))
+            if subdirs:
+                effective_ch = subdirs[0]
+    else:
+        effective_ch = str(chapter_num)
+
+    doc = thumbnail_director.evaluate_chapter(project_slug, effective_ch)
+
+    out_dir = get_output_dir(project_slug)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    staged_thumb = out_dir / ("feature_thumbnail.jpg" if is_feature else f"chapter_{chapter_num}_thumbnail.jpg")
+
+    if select_id:
+        matched = False
+        chap_dir = get_chapter_dir(project_slug, effective_ch)
+        for cand in doc.candidates:
+            if cand.candidate_id == select_id:
+                cand.status = "selected"
+                doc.selected_candidate_id = select_id
+                matched = True
+                cand_file = chap_dir / "thumbnails" / f"{select_id}_clean.jpg"
+                if cand_file.exists():
+                    shutil.copy2(cand_file, staged_thumb)
+            else:
+                if cand.status == "selected":
+                    cand.status = "proposed"
+        if not matched:
+            raise CliValidationError(f"Candidate '{select_id}' not found. Available candidates: {[c.candidate_id for c in doc.candidates]}")
+
+        # Re-save document
+        atomic_write_json(chap_dir / "thumbnail_candidates.json", doc)
+
+    return {
+        "status": "success",
+        "project_slug": project_slug,
+        "chapter_number": str(chapter_num),
+        "candidates_count": len(doc.candidates),
+        "selected_candidate_id": doc.selected_candidate_id,
+        "staged_thumbnail": str(staged_thumb if staged_thumb.exists() else ""),
+        "candidates": [c.model_dump() for c in doc.candidates],
+    }
+
+
 def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
     """Top-level dispatch router for `manga-recap youtube` subcommands."""
     yt_action = getattr(args, "youtube_action", "metadata")
@@ -567,5 +795,8 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_upload(args)
     if yt_action == "auth":
         return handle_youtube_auth(args)
+    if yt_action == "thumbnail":
+        return handle_youtube_thumbnail(args)
 
-    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth.")
+    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, thumbnail.")
+

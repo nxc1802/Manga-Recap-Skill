@@ -88,12 +88,14 @@ class VideoEngine:
         fps: int = 30,
         max_workers: int = 2,
         hw_accel: Optional[str] = None,
+        encoder: Optional[str] = None,
     ):
         self.width = target_width
         self.height = target_height
         self.fps = fps
         self.max_workers = max(1, int(max_workers))
         self.hw_accel = hw_accel
+        self.encoder = encoder
         self.camera_generator = CameraMotionGenerator(target_width, target_height, fps)
         self.subtitle_generator = SubtitleGenerator(max_chars_per_line=42, max_lines=2)
         self.audio_mixer = AudioMixer(target_sample_rate=48000, target_channels=2)
@@ -180,14 +182,21 @@ class VideoEngine:
 
         draw = ImageDraw.Draw(overlay)
         font = self._get_font(scaled_font_size)
-        wrap_width = max(20, int(round(38 * (self.width / 1280.0))))
+        wrap_width = max(20, int(round(42 * (self.width / 1280.0))))
         raw_lines = clean_text.split("\n")
         lines = []
         for rl in raw_lines:
-            sublines = textwrap.wrap(rl, width=wrap_width)
-            lines.extend(sublines if sublines else [rl])
-        if len(lines) > 2:
-            lines = lines[:2]
+            rl_strip = rl.strip()
+            if not rl_strip:
+                continue
+            if len(rl_strip) <= wrap_width:
+                lines.append(rl_strip)
+            else:
+                sublines = textwrap.wrap(rl_strip, width=wrap_width)
+                lines.extend(sublines if sublines else [rl_strip])
+        max_lines_limit = getattr(self.subtitle_generator, "max_lines_per_block", 2)
+        if len(lines) > max_lines_limit:
+            lines = lines[:max_lines_limit]
         if not lines:
             overlay.save(out_p, "PNG")
             return str(out_p)
@@ -384,6 +393,8 @@ class VideoEngine:
         audio_offset_sec: float = 0.0,
         subtitle_cues: Optional[List[SubtitleCue]] = None,
         hw_accel: Optional[str] = None,
+        encoder: Optional[str] = None,
+        font_size: int = 26,
     ) -> bool:
         """
         Renders an individual panel video clip with camera motion, audio synchronization,
@@ -462,7 +473,7 @@ class VideoEngine:
             if burn_subtitles and active_cues:
                 for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
                     temp_overlay_png = out_p.parent / f"{out_p.stem}_sub_{idx_c}.png"
-                    self.create_subtitle_overlay_png(cue.text, temp_overlay_png)
+                    self.create_subtitle_overlay_png(cue.text, temp_overlay_png, font_size=font_size)
                     temp_overlay_files.append(temp_overlay_png)
                     subtitle_input_args.extend(["-loop", "1", "-i", str(temp_overlay_png)])
 
@@ -482,7 +493,19 @@ class VideoEngine:
                 filter_complex = f"[0:v]{cam_filter}[outv]"
 
             active_hw = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
-            if active_hw == "videotoolbox":
+            active_encoder = encoder if encoder is not None else getattr(self, "encoder", None)
+            if active_encoder == "h264_nvenc" or active_hw == "nvenc":
+                codec_args = [
+                    "-c:v",
+                    "h264_nvenc",
+                    "-preset",
+                    "p4",
+                    "-cq",
+                    "23",
+                    "-b:v",
+                    "4500k",
+                ]
+            elif active_encoder == "h264_videotoolbox" or active_hw == "videotoolbox":
                 codec_args = [
                     "-c:v",
                     "h264_videotoolbox",
@@ -640,6 +663,10 @@ class VideoEngine:
         allow_placeholders: bool = False,
         max_workers: Optional[int] = None,
         hw_accel: Optional[str] = None,
+        encoder: Optional[str] = None,
+        subtitle_lines: Optional[int] = None,
+        subtitle_font_size: Optional[int] = None,
+        subtitle_chunking: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Orchestrates full chapter video rendering using Video Engine V2.
@@ -678,7 +705,24 @@ class VideoEngine:
         update_checkpoint(chap_dir, StageType.RENDER, CheckpointStatus.RUNNING)
 
         active_workers = max_workers if max_workers is not None else getattr(self, "max_workers", 2)
+        active_encoder = encoder if encoder is not None else getattr(self, "encoder", None)
         active_hw_accel = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
+
+        if active_encoder == "h264_nvenc":
+            active_hw_accel = "nvenc"
+        elif active_encoder == "h264_videotoolbox":
+            active_hw_accel = "videotoolbox"
+        elif active_encoder == "libx264":
+            active_hw_accel = "none"
+        elif active_encoder is None and active_hw_accel:
+            if active_hw_accel == "videotoolbox":
+                active_encoder = "h264_videotoolbox"
+            elif active_hw_accel == "nvenc":
+                active_encoder = "h264_nvenc"
+            else:
+                active_encoder = "libx264"
+        else:
+            active_encoder = active_encoder or "libx264"
 
         try:
             script = load_recap_script(chap_dir)
@@ -704,6 +748,35 @@ class VideoEngine:
 
             # Synchronize camera motion generator with target resolution (critical for 1080p final render)
             self.camera_generator = CameraMotionGenerator(self.width, self.height, self.fps)
+
+            # Resolve subtitle settings (CLI overrides project settings)
+            sub_lines = subtitle_lines
+            sub_font_size = subtitle_font_size
+            sub_chunking = subtitle_chunking
+
+            project_cfg_path = p_dir / "project.json"
+            if project_cfg_path.exists():
+                with contextlib.suppress(Exception):
+                    proj_data = json.loads(project_cfg_path.read_text(encoding="utf-8"))
+                    render_cfg = proj_data.get("render_settings", {})
+                    sub_cfg = render_cfg.get("subtitle", {})
+                    if sub_lines is None and "max_lines" in sub_cfg:
+                        sub_lines = sub_cfg.get("max_lines")
+                    if sub_font_size is None and "font_size" in sub_cfg:
+                        sub_font_size = sub_cfg.get("font_size")
+                    if sub_chunking is None and "chunking" in sub_cfg:
+                        sub_chunking = sub_cfg.get("chunking")
+
+            sub_lines = sub_lines if sub_lines is not None else 1
+            sub_font_size = sub_font_size if sub_font_size is not None else 26
+            sub_chunking = sub_chunking if sub_chunking is not None else "sentence-aware"
+
+            # Synchronize subtitle generator with resolved settings
+            self.subtitle_generator = SubtitleGenerator(
+                max_chars_per_line=42,
+                max_lines_per_block=sub_lines,
+                chunking_mode=sub_chunking,
+            )
 
             video_dir = chap_dir / "video"
             clips_dir = video_dir / "clips"
@@ -955,11 +1028,7 @@ class VideoEngine:
 
                 f_start = round(t_start * self.fps)
                 f_end = round(t_end * self.fps)
-                f_total = max(len(panel_paths), f_end - f_start)
-
-                n_panels = len(panel_paths)
-                f_base = f_total // n_panels
-                r_frames = f_total % n_panels
+                f_total = max(len(panel_paths) if panel_paths else 1, f_end - f_start)
 
                 audio_offset = 0.0
                 seg_cues = self.subtitle_generator.split_text_into_cues(
@@ -968,103 +1037,249 @@ class VideoEngine:
                     start_offset=0.0,
                 )
 
-                for k, panel_p in enumerate(panel_paths):
-                    f_k = f_base + (1 if k < r_frames else 0)
-                    dur_k = f_k / float(self.fps)
-                    duration_ms_k = int(round(dur_k * 1000.0))
+                if seg.shots and len(seg.shots) > 0:
+                    # Multi-shot visual director branch (PR-01)
+                    shots = seg.shots
+                    total_ratio = sum(s.duration_ratio for s in shots)
+                    if total_ratio <= 0.0:
+                        total_ratio = 1.0
 
-                    if n_panels == 1:
-                        clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
-                        clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
-                    else:
-                        clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.mp4"
-                        clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.meta.json"
+                    cum_frames = 0
+                    for s_idx, shot in enumerate(shots):
+                        cum_ratio = sum(s.duration_ratio for s in shots[: s_idx + 1]) / total_ratio
+                        end_frame = round(cum_ratio * f_total) if s_idx < len(shots) - 1 else f_total
+                        f_k = max(1, end_frame - cum_frames)
+                        cum_frames = end_frame
+                        dur_k = f_k / float(self.fps)
+                        duration_ms_k = int(round(dur_k * 1000.0))
 
-                    clip_paths.append(clip_p)
+                        # Resolve shot panel image
+                        shot_panel_p = None
+                        if shot.source and shot.source.panel_id:
+                            pid = shot.source.panel_id
+                            if pid in panel_index:
+                                shot_panel_p = panel_index[pid]
+                            elif Path(pid).stem in panel_index:
+                                shot_panel_p = panel_index[Path(pid).stem]
+                            else:
+                                for s_dir in search_dirs:
+                                    for ext in ("", ".jpg", ".png", ".webp"):
+                                        c = s_dir / f"{pid}{ext}"
+                                        if c.exists():
+                                            shot_panel_p = c.resolve()
+                                            break
+                                    if shot_panel_p:
+                                        break
+                        if not shot_panel_p and panel_paths:
+                            shot_panel_p = panel_paths[min(s_idx, len(panel_paths) - 1)]
 
-                    # Compute clip render fingerprint based on quality, resolution, motion, text, audio, image, and subtitle settings
-                    audio_stat = wav_p.stat() if wav_p.exists() else None
-                    panel_stat = panel_p.stat() if panel_p.exists() else None
-                    audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
-                    panel_hash = compute_file_sha256(panel_p) if panel_p and panel_p.exists() else ""
-                    script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
-                    focus_box_spec = seg.focus_box.model_dump() if (seg.focus_box and k == 0) else None
-                    panel_cam = seg.camera_motion if (k == 0 or seg.camera_motion in (CameraMotionType.STATIC, "static")) else CameraMotionType.STATIC
-
-                    current_fingerprint = {
-                        "quality": quality_clean,
-                        "target_width": self.width,
-                        "target_height": self.height,
-                        "fps": self.fps,
-                        "duration_ms": duration_ms_k,
-                        "narrator_text": seg.narrator_text.strip(),
-                        "script_hash": script_hash,
-                        "audio_hash": audio_hash,
-                        "panel_hash": panel_hash,
-                        "camera_motion": panel_cam.value if hasattr(panel_cam, "value") else str(panel_cam),
-                        "focus_box": focus_box_spec,
-                        "burn_subtitles": burn_subtitles,
-                        "allow_animation": allow_animation,
-                        "video_mode": str(video_mode),
-                        "audio_size": audio_stat.st_size if audio_stat else 0,
-                        "panel_size": panel_stat.st_size if panel_stat else 0,
-                        "audio_offset_sec": round(audio_offset, 3),
-                        "panel_index": k,
-                        "hw_accel": str(active_hw_accel or "none"),
-                    }
-
-                    # Skip if already rendered, fingerprint matches, and force is False
-                    is_cached = False
-                    if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
-                        try:
-                            cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
-                            if cached_meta == current_fingerprint:
-                                is_cached = True
-                        except Exception:
-                            is_cached = False
-
-                    if is_cached:
-                        cached_clips_count += 1
-                    else:
-                        if isinstance(video_mode, str) and video_mode != "auto":
-                            resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
-                        elif isinstance(video_mode, VideoMode) and video_mode != VideoMode.AUTO:
-                            resolved_mode = video_mode
+                        if len(shots) == 1:
+                            clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
+                            clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
                         else:
+                            clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_shot_{s_idx}.mp4"
+                            clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_shot_{s_idx}.meta.json"
+
+                        clip_paths.append(clip_p)
+
+                        audio_stat = wav_p.stat() if wav_p and wav_p.exists() else None
+                        panel_stat = shot_panel_p.stat() if shot_panel_p and shot_panel_p.exists() else None
+                        audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
+                        panel_hash = compute_file_sha256(shot_panel_p) if shot_panel_p and shot_panel_p.exists() else ""
+                        script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
+                        shot_cam = shot.motion if shot.motion else seg.camera_motion
+                        shot_focus = shot.focus_box if shot.focus_box else seg.focus_box
+                        focus_box_spec = shot_focus.model_dump() if shot_focus else None
+
+                        current_fingerprint = {
+                            "quality": quality_clean,
+                            "target_width": self.width,
+                            "target_height": self.height,
+                            "fps": self.fps,
+                            "duration_ms": duration_ms_k,
+                            "narrator_text": seg.narrator_text.strip(),
+                            "script_hash": script_hash,
+                            "audio_hash": audio_hash,
+                            "panel_hash": panel_hash,
+                            "camera_motion": shot_cam.value if hasattr(shot_cam, "value") else str(shot_cam),
+                            "focus_box": focus_box_spec,
+                            "burn_subtitles": burn_subtitles,
+                            "allow_animation": allow_animation,
+                            "video_mode": str(video_mode),
+                            "audio_size": audio_stat.st_size if audio_stat else 0,
+                            "panel_size": panel_stat.st_size if panel_stat else 0,
+                            "audio_offset_sec": round(audio_offset, 3),
+                            "panel_index": s_idx,
+                            "shot_id": shot.shot_id,
+                            "encoder": str(active_encoder),
+                            "hw_accel": str(active_hw_accel or "none"),
+                            "subtitle_lines": sub_lines,
+                            "subtitle_font_size": sub_font_size,
+                            "subtitle_chunking": str(sub_chunking),
+                        }
+
+                        is_cached = False
+                        if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
                             try:
-                                with Image.open(panel_p) as tmp_im:
-                                    pw, ph = tmp_im.size
-                                resolved_mode = self.detect_video_mode(pw, ph)
+                                cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
+                                if cached_meta == current_fingerprint:
+                                    is_cached = True
                             except Exception:
-                                resolved_mode = VideoMode.PORTRAIT_PADDED
+                                is_cached = False
 
-                        render_tasks.append({
-                            "clip_p": clip_p,
-                            "clip_meta_p": clip_meta_p,
-                            "fingerprint": current_fingerprint,
-                            "seg_id": seg.seq_id,
-                            "panel_name": panel_p.name,
-                            "kwargs": {
-                                "img_path": str(panel_p),
-                                "audio_path": str(wav_p),
-                                "duration_ms": dur_k * 1000.0,
-                                "output_path": str(clip_p),
-                                "video_mode": resolved_mode,
-                                "seq": idx + 1,
-                                "panel_text": seg.narrator_text,
-                                "burn_subtitles": burn_subtitles,
-                                "camera_motion": panel_cam,
-                                "focus_box": seg.focus_box if k == 0 else None,
-                                "preset": preset,
-                                "crf": crf,
-                                "allow_animation": allow_animation,
-                                "audio_offset_sec": audio_offset,
-                                "subtitle_cues": seg_cues,
-                                "hw_accel": active_hw_accel,
-                            },
-                        })
+                        if is_cached:
+                            cached_clips_count += 1
+                        else:
+                            if isinstance(video_mode, str) and video_mode != "auto":
+                                resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
+                            elif isinstance(video_mode, VideoMode) and video_mode != VideoMode.AUTO:
+                                resolved_mode = video_mode
+                            else:
+                                try:
+                                    with Image.open(shot_panel_p) as tmp_im:
+                                        pw, ph = tmp_im.size
+                                    resolved_mode = self.detect_video_mode(pw, ph)
+                                except Exception:
+                                    resolved_mode = VideoMode.PORTRAIT_PADDED
 
-                    audio_offset += dur_k
+                            render_tasks.append({
+                                "clip_p": clip_p,
+                                "clip_meta_p": clip_meta_p,
+                                "fingerprint": current_fingerprint,
+                                "seg_id": seg.seq_id,
+                                "panel_name": shot_panel_p.name if shot_panel_p else f"shot_{s_idx}",
+                                "kwargs": {
+                                    "img_path": str(shot_panel_p),
+                                    "audio_path": str(wav_p),
+                                    "duration_ms": dur_k * 1000.0,
+                                    "output_path": str(clip_p),
+                                    "video_mode": resolved_mode,
+                                    "seq": idx + 1,
+                                    "panel_text": seg.narrator_text,
+                                    "burn_subtitles": burn_subtitles,
+                                    "camera_motion": shot_cam,
+                                    "focus_box": shot_focus,
+                                    "preset": preset,
+                                    "crf": crf,
+                                    "allow_animation": allow_animation,
+                                    "audio_offset_sec": audio_offset,
+                                    "subtitle_cues": seg_cues,
+                                    "hw_accel": active_hw_accel,
+                                    "encoder": active_encoder,
+                                    "font_size": sub_font_size,
+                                },
+                            })
+
+                        audio_offset += dur_k
+                else:
+                    # Legacy panel_ids fallback
+                    n_panels = max(1, len(panel_paths))
+                    f_base = f_total // n_panels
+                    r_frames = f_total % n_panels
+
+                    for k, panel_p in enumerate(panel_paths):
+                        f_k = f_base + (1 if k < r_frames else 0)
+                        dur_k = f_k / float(self.fps)
+                        duration_ms_k = int(round(dur_k * 1000.0))
+
+                        if n_panels == 1:
+                            clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.mp4"
+                            clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}.meta.json"
+                        else:
+                            clip_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.mp4"
+                            clip_meta_p = clips_dir / f"clip_{quality_clean}_{seg.seq_id}_{k}.meta.json"
+
+                        clip_paths.append(clip_p)
+
+                        # Compute clip render fingerprint based on quality, resolution, motion, text, audio, image, and subtitle settings
+                        audio_stat = wav_p.stat() if wav_p.exists() else None
+                        panel_stat = panel_p.stat() if panel_p.exists() else None
+                        audio_hash = compute_file_sha256(wav_p) if wav_p and wav_p.exists() else ""
+                        panel_hash = compute_file_sha256(panel_p) if panel_p and panel_p.exists() else ""
+                        script_hash = hashlib.sha256(seg.narrator_text.strip().encode("utf-8")).hexdigest()
+                        focus_box_spec = seg.focus_box.model_dump() if (seg.focus_box and k == 0) else None
+                        panel_cam = seg.camera_motion if (k == 0 or seg.camera_motion in (CameraMotionType.STATIC, "static")) else CameraMotionType.STATIC
+
+                        current_fingerprint = {
+                            "quality": quality_clean,
+                            "target_width": self.width,
+                            "target_height": self.height,
+                            "fps": self.fps,
+                            "duration_ms": duration_ms_k,
+                            "narrator_text": seg.narrator_text.strip(),
+                            "script_hash": script_hash,
+                            "audio_hash": audio_hash,
+                            "panel_hash": panel_hash,
+                            "camera_motion": panel_cam.value if hasattr(panel_cam, "value") else str(panel_cam),
+                            "focus_box": focus_box_spec,
+                            "burn_subtitles": burn_subtitles,
+                            "allow_animation": allow_animation,
+                            "video_mode": str(video_mode),
+                            "audio_size": audio_stat.st_size if audio_stat else 0,
+                            "panel_size": panel_stat.st_size if panel_stat else 0,
+                            "audio_offset_sec": round(audio_offset, 3),
+                            "panel_index": k,
+                            "encoder": str(active_encoder),
+                            "hw_accel": str(active_hw_accel or "none"),
+                            "subtitle_lines": sub_lines,
+                            "subtitle_font_size": sub_font_size,
+                            "subtitle_chunking": str(sub_chunking),
+                        }
+
+                        # Skip if already rendered, fingerprint matches, and force is False
+                        is_cached = False
+                        if not force and clip_p.exists() and clip_p.stat().st_size > 1000 and clip_meta_p.exists():
+                            try:
+                                cached_meta = json.loads(clip_meta_p.read_text(encoding="utf-8"))
+                                if cached_meta == current_fingerprint:
+                                    is_cached = True
+                            except Exception:
+                                is_cached = False
+
+                        if is_cached:
+                            cached_clips_count += 1
+                        else:
+                            if isinstance(video_mode, str) and video_mode != "auto":
+                                resolved_mode = VideoMode(video_mode) if video_mode in [m.value for m in VideoMode] else VideoMode.PORTRAIT_PADDED
+                            elif isinstance(video_mode, VideoMode) and video_mode != VideoMode.AUTO:
+                                resolved_mode = video_mode
+                            else:
+                                try:
+                                    with Image.open(panel_p) as tmp_im:
+                                        pw, ph = tmp_im.size
+                                    resolved_mode = self.detect_video_mode(pw, ph)
+                                except Exception:
+                                    resolved_mode = VideoMode.PORTRAIT_PADDED
+
+                            render_tasks.append({
+                                "clip_p": clip_p,
+                                "clip_meta_p": clip_meta_p,
+                                "fingerprint": current_fingerprint,
+                                "seg_id": seg.seq_id,
+                                "panel_name": panel_p.name,
+                                "kwargs": {
+                                    "img_path": str(panel_p),
+                                    "audio_path": str(wav_p),
+                                    "duration_ms": dur_k * 1000.0,
+                                    "output_path": str(clip_p),
+                                    "video_mode": resolved_mode,
+                                    "seq": idx + 1,
+                                    "panel_text": seg.narrator_text,
+                                    "burn_subtitles": burn_subtitles,
+                                    "camera_motion": panel_cam,
+                                    "focus_box": seg.focus_box if k == 0 else None,
+                                    "preset": preset,
+                                    "crf": crf,
+                                    "allow_animation": allow_animation,
+                                    "audio_offset_sec": audio_offset,
+                                    "subtitle_cues": seg_cues,
+                                    "hw_accel": active_hw_accel,
+                                    "encoder": active_encoder,
+                                    "font_size": sub_font_size,
+                                },
+                            })
+
+                        audio_offset += dur_k
 
             if render_tasks:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1261,6 +1476,7 @@ class VideoEngine:
                 "audio_duration_seconds": total_speech_dur,
                 "duration_diff_seconds": validation_res.get("duration_diff_seconds", 0.0),
                 "validation": validation_res,
+                "encoder": str(active_encoder),
                 "cached_clips_count": cached_clips_count,
                 "rendered_clips_count": rendered_clips_count,
                 "cleaned_files_count": cleaned_count,

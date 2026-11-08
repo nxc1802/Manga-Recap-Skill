@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "domain": "truyenqq.com",
+  "name": "TruyenQQ",
+  "url_patterns": [
+    "truyenqq.*\\.com/truyen-tranh/.+",
+    "truyenqq.*\\.com/.+/chap-\\d+"
+  ],
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://truyenqq.com/"
+  },
+  "series_resolver": {
+    "chapter_list_selector": "div.works-chapter-list, div.list_chapter",
+    "chapter_link_selector": "a",
+    "chapter_number_regex": "chap(?:ter)?[_ -]*(\\d+(?:\\.\\d+)?)",
+    "reverse_order": true
+  },
+  "chapter_extractor": {
+    "container_selector": "div.chapter_content, div.reading-content, div.page-chapter",
+    "image_selectors": ["img"],
+    "url_attributes": ["data-original", "data-src", "src"],
+    "script_regex": null,
+    "exclude_patterns": ["banner", "logo", "icon", "thumb", "advert", "discord"]
+  },
+  "confidence": 0.85,
+  "requires_js": false,
+  "rate_limit_seconds": 0.5
+}

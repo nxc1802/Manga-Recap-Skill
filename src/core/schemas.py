@@ -74,6 +74,7 @@ class CheckpointStatus(str, Enum):
 class CameraMotionType(str, Enum):
     """Cinematic camera motion modes supported by Video Engine V2."""
     STATIC = "static"
+    STATIC_FOCUS = "static_focus"
     PAN_LEFT = "pan_left"
     PAN_RIGHT = "pan_right"
     PAN_UP = "pan_up"
@@ -82,6 +83,8 @@ class CameraMotionType(str, Enum):
     ZOOM_OUT = "zoom_out"
     FOCUS_CROP = "focus_crop"
     VERTICAL_SCROLL = "vertical_scroll"
+    CONTENT_AWARE_SCROLL = "content_aware_scroll"
+    SUBJECT_PAN = "subject_pan"
 
 
 class VideoMode(str, Enum):
@@ -202,6 +205,77 @@ class FocusBox(BaseModel):
         return cls(x_min=round(x_min, 4), y_min=round(y_min, 4), x_max=round(x_max, 4), y_max=round(y_max, 4))
 
 
+# ---------------------------------------------------------------------------
+# Visual Shot & Shot Plan Models (PR-01)
+# ---------------------------------------------------------------------------
+
+class SourceKind(str, Enum):
+    PANEL = "panel"
+    RAW_REGION = "raw_region"
+    STITCHED = "stitched"
+
+
+class SourceRegion(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    kind: SourceKind = SourceKind.PANEL
+    panel_id: Optional[str] = None          # e.g. "panel_001.jpg"
+    image_id: Optional[str] = None          # e.g. "page_001.jpg"
+    sub_box: Optional[Tuple[int, int, int, int]] = None  # (left, top, right, bottom)
+
+
+class VisualShot(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    shot_id: str = Field(default="01")
+    source: SourceRegion = Field(default_factory=SourceRegion)
+    focus_box: Optional[FocusBox] = None
+    subject: Optional[str] = None           # e.g. "main_character", "monster"
+    motion: CameraMotionType = CameraMotionType.STATIC_FOCUS
+    duration_ratio: float = Field(default=1.0, gt=0.0, le=1.0)
+    reason: Optional[str] = None
+
+
+class VisualShotPlan(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    schema_version: str = "3.0.0"
+    project_slug: str
+    chapter_number: str
+    shots_by_segment: Dict[str, List[VisualShot]] = Field(default_factory=dict)
+    updated_at: str = Field(default_factory=utc_iso_now)
+
+
+# ---------------------------------------------------------------------------
+# Subtitle & Pacing Settings (PR-02 & PR-03)
+# ---------------------------------------------------------------------------
+
+class SubtitleChunkingMode(str, Enum):
+    SENTENCE_AWARE = "sentence-aware"
+    FIXED_CHARS = "fixed-chars"
+
+
+class SubtitleSettings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    max_lines: int = Field(default=1, ge=1, le=2)
+    font_size: int = Field(default=26, ge=16, le=48)
+    chunking: SubtitleChunkingMode = SubtitleChunkingMode.SENTENCE_AWARE
+    max_chars_per_line: int = Field(default=42, ge=20, le=80)
+
+
+class PacingMode(str, Enum):
+    CONCISE = "concise"
+    BALANCED = "balanced"
+    DETAILED = "detailed"
+    OFF = "off"
+
+
+class ScriptPacingConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    mode: PacingMode = PacingMode.BALANCED
+    target_total_minutes: Optional[float] = Field(default=None, gt=0.0)
+    tolerance: float = Field(default=0.20, ge=0.05, le=0.50)
+    preserve_important_dialogue: bool = True
+    adaptive_scene_density: bool = True
+
+
 class RenderSettings(BaseModel):
     """Project-level video rendering defaults."""
     model_config = ConfigDict(extra="ignore")
@@ -216,6 +290,7 @@ class RenderSettings(BaseModel):
     burn_subtitles: bool = True
     video_mode: str = "auto"
     render_pan_mode: str = "static"
+    subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)
 
 
 class AudioSettings(BaseModel):
@@ -284,6 +359,7 @@ class ProjectConfig(BaseModel):
     updated_at: str = Field(default_factory=utc_iso_now)
     render_settings: RenderSettings = Field(default_factory=RenderSettings)
     audio_settings: AudioSettings = Field(default_factory=AudioSettings)
+    script_pacing: ScriptPacingConfig = Field(default_factory=ScriptPacingConfig)
     chapters: List[str] = Field(default_factory=list, description="Registered chapter identifiers")
     schema_version: str = "3.0.0"
 
@@ -334,6 +410,7 @@ class ScriptSegment(BaseModel):
     voice_source: Optional[str] = Field(default=None, description="'manual' if set by Agent, 'tts' if auto-saved by TTS, 'approved' if from approval")
     camera_motion: CameraMotionType = Field(default=CameraMotionType.STATIC)
     focus_box: Optional[FocusBox] = None
+    shots: Optional[List[VisualShot]] = Field(default=None, description="Detailed multi-shot plan for segment")
     duration: Optional[float] = Field(default=None, ge=0.0, description="Measured waveform duration in seconds")
     audio_path: Optional[str] = Field(default=None, description="Relative path to synthesized utterance WAV")
     checksum: Optional[str] = Field(default=None, description="SHA-256 fingerprint of utterance audio/text")
@@ -644,5 +721,101 @@ class YouTubeMetadata(BaseModel):
     timestamps: List[Dict[str, str]] = Field(default_factory=list, description="Chapter marker timestamps [{'time': '00:00', 'label': '...'}]")
     thumbnail_concept: Optional[str] = Field(default=None, description="Visual idea and overlay text for thumbnail")
     shorts_highlight: Optional[Dict[str, Any]] = Field(default=None, description="Recommended 30-60s highlight snippet for YouTube Shorts")
+
+
+# ==============================================================================
+# 10. Feature Timeline & YouTube Chapter Models (PR-05)
+# ==============================================================================
+
+class ChapterMarker(BaseModel):
+    """Timestamp marker for YouTube Chapters or video milestones."""
+    model_config = ConfigDict(extra="ignore")
+
+    time: str = Field(..., description="Timestamp string (MM:SS or HH:MM:SS)")
+    label: str = Field(..., description="Chapter marker label or scene title")
+    seconds: float = Field(default=0.0, description="Exact offset in seconds from start")
+
+
+class ChapterTimelineItem(BaseModel):
+    """Segment boundary metadata for an individual chapter in a feature compilation."""
+    model_config = ConfigDict(extra="ignore")
+
+    chapter_number: str
+    title: str
+    start_seconds: float = Field(ge=0.0)
+    end_seconds: float = Field(ge=0.0)
+    duration_seconds: float = Field(ge=0.0)
+    start_timestamp: str = Field(..., description="e.g. '00:00'")
+    end_timestamp: str = Field(..., description="e.g. '05:12'")
+    source_video_path: str
+    sub_markers: List[ChapterMarker] = Field(default_factory=list)
+
+
+class FeatureTimeline(BaseModel):
+    """Schema for feature_timeline.json tracking multi-chapter cumulative compilation timeline."""
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: str = "3.0.0"
+    project_slug: str
+    compiled_video_path: str
+    total_duration_seconds: float = Field(ge=0.0)
+    chapters_count: int = Field(ge=1)
+    chapters: List[ChapterTimelineItem] = Field(default_factory=list)
+    youtube_chapter_markers: List[ChapterMarker] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_iso_now)
+
+
+# ==============================================================================
+# 11. Thumbnail Director & Composition Models (PR-06)
+# ==============================================================================
+
+class TextSafeZone(str, Enum):
+    TOP_LEFT = "top_left"
+    TOP_CENTER = "top_center"
+    LEFT_VERTICAL = "left_vertical"
+    BOTTOM_LEFT = "bottom_left"
+
+
+class CompositionFeatures(BaseModel):
+    """Visual composition metrics for thumbnail candidates."""
+    model_config = ConfigDict(extra="ignore")
+
+    subject_visibility: float = Field(default=0.8, ge=0.0, le=1.0)
+    facial_clarity: float = Field(default=0.8, ge=0.0, le=1.0)
+    safe_zone_clear: bool = Field(default=True, description="True if bottom-right 25%x20% duration badge area is clear")
+    recommended_text_zone: TextSafeZone = TextSafeZone.TOP_LEFT
+    contrast_ratio: float = Field(default=1.0, ge=0.0)
+
+
+class ThumbnailCandidate(BaseModel):
+    """Ranked key-frame panel candidate for YouTube thumbnail."""
+    model_config = ConfigDict(extra="ignore")
+
+    candidate_id: str = Field(..., description="e.g. 'cand_01'")
+    source_panel: str = Field(..., description="Panel filename, e.g. 'panel_005.jpg'")
+    source_path: str = Field(..., description="Path relative to project dir")
+    focus_box: Tuple[float, float, float, float] = Field(default=(0.1, 0.1, 0.9, 0.9))
+    ranking_score: float = Field(..., ge=0.0, le=1.0)
+    narrative_reason: str = Field(..., description="Why this frame is compelling")
+    emotion_tag: str = Field(default="climax", description="climax, shock, action, mystery, confrontation")
+    text_overlay_recommendation: str = Field(..., description="High-impact text <= 5 words")
+    composition: CompositionFeatures = Field(default_factory=CompositionFeatures)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
+    image_variant_clean: str = Field(..., description="Path to clean 16:9 thumbnail")
+    image_variant_text: Optional[str] = Field(default=None, description="Path to text overlay thumbnail mockup")
+    status: str = Field(default="proposed", description="proposed, selected, rejected")
+
+
+class ThumbnailCandidatesDocument(BaseModel):
+    """Schema for thumbnail_candidates.json document."""
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: str = "3.0.0"
+    project_slug: str
+    chapter_number: str
+    selected_candidate_id: Optional[str] = None
+    candidates: List[ThumbnailCandidate] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_iso_now)
+
 
 

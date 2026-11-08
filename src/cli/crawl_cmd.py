@@ -6,6 +6,7 @@ Subcommand handler: manga-recap crawl
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import shutil
 from pathlib import Path
@@ -19,6 +20,8 @@ from src.core.storage import (
     init_project_layout,
     update_checkpoint,
 )
+from src.crawler.errors import CrawlerError
+from src.crawler.verifier import ImageVerifier
 
 
 def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
@@ -28,6 +31,7 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
     url = getattr(args, "url", None)
     import_dir = getattr(args, "import_dir", None)
     max_panels = getattr(args, "max_panels", None)
+    verify_flag = getattr(args, "verify", False)
 
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
@@ -68,11 +72,26 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
         # Online crawl via crawler_service
         try:
             from src.services.crawler_service import crawler_service
-            import asyncio
             downloaded = asyncio.run(
-                crawler_service.crawl_raw_pages(url, raw_dir, max_panels=max_panels)
+                crawler_service.crawl_raw_pages(
+                    url=url,
+                    output_raw_dir=raw_dir,
+                    max_panels=max_panels,
+                    chapter_number=str(chapter_num),
+                    project_slug=project_slug,
+                    strict_verify=verify_flag,
+                )
             )
             imported_files.extend(downloaded)
+        except CrawlerError as e:
+            err_msg = f"[{e.code.value}] {e}"
+            update_checkpoint(
+                chap_dir,
+                StageType.CRAWL,
+                CheckpointStatus.FAILED,
+                error=err_msg,
+            )
+            raise CliValidationError(f"Crawl failed: {err_msg}") from e
         except Exception as e:
             err_msg = str(e)
             update_checkpoint(
@@ -95,6 +114,20 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
         )
         raise CliValidationError(f"Crawl failed: {err_msg}")
 
+    # Optional strict verification
+    report = None
+    if verify_flag:
+        report = ImageVerifier.verify_chapter_raw_images(raw_dir, strict=True)
+        if not report.is_valid:
+            err_msg = f"Raw image verification failed: {'; '.join(report.errors)}"
+            update_checkpoint(
+                chap_dir,
+                StageType.CRAWL,
+                CheckpointStatus.FAILED,
+                error=err_msg,
+            )
+            raise CliValidationError(err_msg)
+
     update_checkpoint(
         chap_dir,
         StageType.CRAWL,
@@ -102,10 +135,20 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
         artifacts=imported_files,
     )
 
-    return {
+    result: Dict[str, Any] = {
         "project_slug": project_slug,
         "chapter_number": str(chapter_num),
         "raw_images_count": raw_count,
         "source": url or str(import_dir),
         "status": "completed",
     }
+    if report:
+        result["verification"] = {
+            "is_valid": report.is_valid,
+            "total_pages": report.total_pages,
+            "corrupt_pages": report.corrupt_pages,
+            "duplicate_pages": report.duplicate_pages,
+            "missing_indices": report.missing_indices,
+        }
+
+    return result

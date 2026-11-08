@@ -399,6 +399,9 @@ class StreamingSegmenter:
 
             final_w, final_h = panel_crop.size
             panel_status = PanelStatus.ACTIVE
+            if crop_var < self.sufficiency_variance:
+                # Low variance blank/spacer panel
+                panel_status = PanelStatus.SKIP
 
             # Aspect Ratio & Padding
             if final_h < self.target_width:
@@ -418,10 +421,6 @@ class StreamingSegmenter:
                 panel_crop.close()
                 panel_crop = padded_img
                 final_w, final_h = self.target_width, self.target_width
-
-            elif crop_var < self.sufficiency_variance:
-                # Low variance blank/spacer panel
-                panel_status = PanelStatus.SKIP
 
             panel_id = f"panel_{idx:03d}"
             filename = f"{panel_id}.jpg"

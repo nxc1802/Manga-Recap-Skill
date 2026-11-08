@@ -242,38 +242,64 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.RUNNING)
                 update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
 
-            # Operational Stage 3: Audio (VieNeu-TTS)
-            tts_args = argparse.Namespace(
-                project=project_slug,
-                chapter=chap_num,
-                voice=getattr(args, "voice", None),
-                speed=getattr(args, "speed", None),
-                force=force,
-            )
-            handle_tts(tts_args)
-            c_meta = load_chapter_metadata(chap_dir)
-            audio_cp = c_meta.stages.get(StageType.AUDIO)
-            if not audio_cp or audio_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(chap_dir, StageType.AUDIO, CheckpointStatus.COMPLETED)
+            if getattr(args, "kaggle", False):
+                logger.info(f"[Batch] Offloading Chapter {chap_num} to Kaggle Cloud GPU (TTS + Hardware NVENC)...")
+                from src.cloud.kaggle_service import KaggleCloudService
+                service = KaggleCloudService()
+                if not service.is_authenticated:
+                    raise CliValidationError("Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token.")
+                cloud_res = service.dispatch_chapter_job(
+                    project_slug=project_slug,
+                    chapter_number=str(chap_num),
+                    gpu=True,
+                    wait=True,
+                )
+                render_res = {
+                    "video_path": cloud_res.get("final_video"),
+                    "subtitle_path": cloud_res.get("subtitles"),
+                    "telemetry": cloud_res.get("telemetry", {}),
+                }
+            else:
+                # Operational Stage 3: Audio (VieNeu-TTS)
+                tts_args = argparse.Namespace(
+                    project=project_slug,
+                    chapter=chap_num,
+                    engine=getattr(args, "engine", getattr(args, "tts_engine", "neural")),
+                    voice=getattr(args, "voice", None),
+                    speed=getattr(args, "speed", None),
+                    workers=getattr(args, "tts_workers", getattr(args, "workers", None)),
+                    force=force,
+                )
+                handle_tts(tts_args)
+                c_meta = load_chapter_metadata(chap_dir)
+                audio_cp = c_meta.stages.get(StageType.AUDIO)
+                if not audio_cp or audio_cp.status != CheckpointStatus.COMPLETED:
+                    update_checkpoint(chap_dir, StageType.AUDIO, CheckpointStatus.COMPLETED)
 
-            # Operational Stage 4: Render (Final 1080p, skip_preview=True)
-            render_args = argparse.Namespace(
-                project=project_slug,
-                chapter=chap_num,
-                quality="final",
-                suffix="final",
-                bgm=getattr(args, "bgm", None),
-                burn_subtitles=getattr(args, "burn_subtitles", True),
-                animation=getattr(args, "animation", True),
-                video_mode=getattr(args, "video_mode", "auto"),
-                force=force,
-                skip_preview=skip_preview,
-                approved=True,
-                allow_placeholders=allow_placeholders,
-                keep_temp=getattr(args, "keep_temp", None),
-                cleanup=cleanup,
-            )
-            render_res = handle_render(render_args)
+                # Operational Stage 4: Render (Final 1080p, skip_preview=True)
+                render_args = argparse.Namespace(
+                    project=project_slug,
+                    chapter=chap_num,
+                    quality="final",
+                    suffix="final",
+                    encoder=getattr(args, "encoder", None),
+                    hw_accel=getattr(args, "hw_accel", None),
+                    workers=getattr(args, "render_workers", getattr(args, "workers", None)),
+                    bgm=getattr(args, "bgm", None),
+                    burn_subtitles=getattr(args, "burn_subtitles", True),
+                    animation=getattr(args, "animation", True),
+                    video_mode=getattr(args, "video_mode", "auto"),
+                    force=force,
+                    skip_preview=skip_preview,
+                    approved=True,
+                    allow_placeholders=allow_placeholders,
+                    keep_temp=getattr(args, "keep_temp", None),
+                    cleanup=cleanup,
+                    subtitle_lines=getattr(args, "subtitle_lines", None),
+                    subtitle_font_size=getattr(args, "subtitle_font_size", None),
+                    subtitle_chunking=getattr(args, "subtitle_chunking", None),
+                )
+                render_res = handle_render(render_args)
 
             # Operational Stage 5: Export (Stage MP4 and SRT to output/)
             src_video = Path(render_res["video_path"]) if render_res.get("video_path") else (chap_dir / "video" / f"chapter_{chap_num}_final.mp4")

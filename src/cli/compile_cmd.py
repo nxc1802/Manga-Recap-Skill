@@ -15,14 +15,25 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.cli.exit_codes import CliValidationError
-from src.core.schemas import CheckpointStatus, PreviewApproval, VoiceSelectionApproval
+from src.core.schemas import (
+    ChapterMarker,
+    ChapterTimelineItem,
+    CheckpointStatus,
+    FeatureTimeline,
+    PreviewApproval,
+    VoiceSelectionApproval,
+)
 from src.core.storage import (
     StorageFileNotFoundError,
+    atomic_write_json,
     get_output_dir,
     get_project_dir,
     read_json,
 )
 from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
+from src.render.validator import FFprobeValidator
+from src.cli.youtube_cmd import format_seconds_to_timestamp
+
 
 
 def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
@@ -280,6 +291,114 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
             with contextlib.suppress(Exception):
                 shutil.copy2(final_audio_path, default_staged_audio)
 
+    # Generate Feature Timeline with ffprobe durations and cumulative offsets
+    def _probe_duration(vid_path: Path) -> float:
+        if shutil.which("ffprobe"):
+            try:
+                validator = FFprobeValidator()
+                probe_data = validator.probe_media_file(vid_path)
+                fmt_dur = probe_data.get("format", {}).get("duration")
+                if fmt_dur is not None:
+                    d = float(fmt_dur)
+                    if d > 0:
+                        return d
+                for s in probe_data.get("streams", []):
+                    if s.get("codec_type") == "video" and "duration" in s:
+                        d = float(s["duration"])
+                        if d > 0:
+                            return d
+            except Exception:
+                pass
+        return 0.0
+
+    current_offset = 0.0
+    timeline_items: List[ChapterTimelineItem] = []
+    youtube_markers: List[ChapterMarker] = []
+
+    for c_num in sorted_chaps:
+        vid_p = chapter_videos[c_num]
+        dur = _probe_duration(vid_p)
+
+        c_chap_dir = chapters_dir / str(c_num) if chapters_dir.exists() else None
+        c_title = f"Tập {c_num}"
+        sub_markers: List[ChapterMarker] = []
+
+        if c_chap_dir and c_chap_dir.exists():
+            c_json = c_chap_dir / "chapter.json"
+            if c_json.exists():
+                try:
+                    c_data = read_json(c_json)
+                    c_title = c_data.get("title") or c_title
+                except Exception:
+                    pass
+
+            s_json = c_chap_dir / "script.json"
+            if s_json.exists():
+                try:
+                    s_data = read_json(s_json)
+                    if dur <= 0:
+                        dur = float(s_data.get("total_duration_seconds", 0.0) or 0.0)
+
+                    scene_time = current_offset
+                    for s_idx, seg in enumerate(s_data.get("segments", [])):
+                        seg_dur = float(seg.get("duration", 0.0) or 4.0)
+                        txt = seg.get("narrator_text", "")
+                        lbl = f"{c_title} - Cảnh {s_idx + 1}"
+                        if txt:
+                            lbl = f"{c_title}: {txt[:35].strip()}..."
+                        sub_markers.append(
+                            ChapterMarker(
+                                time=format_seconds_to_timestamp(scene_time),
+                                label=lbl,
+                                seconds=round(scene_time, 2),
+                            )
+                        )
+                        scene_time += seg_dur
+                except Exception:
+                    pass
+
+        if dur <= 0:
+            dur = 10.0
+
+        start_sec = current_offset
+        end_sec = current_offset + dur
+        current_offset += dur
+
+        item = ChapterTimelineItem(
+            chapter_number=str(c_num),
+            title=c_title,
+            start_seconds=round(start_sec, 2),
+            end_seconds=round(end_sec, 2),
+            duration_seconds=round(dur, 2),
+            start_timestamp=format_seconds_to_timestamp(start_sec),
+            end_timestamp=format_seconds_to_timestamp(end_sec),
+            source_video_path=str(vid_p),
+            sub_markers=sub_markers,
+        )
+        timeline_items.append(item)
+        youtube_markers.append(
+            ChapterMarker(
+                time=item.start_timestamp,
+                label=f"Tập {c_num}: {c_title}" if not c_title.startswith(f"Tập {c_num}") else c_title,
+                seconds=round(start_sec, 2),
+            )
+        )
+
+    feature_timeline = FeatureTimeline(
+        project_slug=project_slug,
+        compiled_video_path=str(output_path),
+        total_duration_seconds=round(current_offset, 2),
+        chapters_count=len(sorted_chaps),
+        chapters=timeline_items,
+        youtube_chapter_markers=youtube_markers,
+    )
+
+    feature_timeline_path = project_dir / "feature_timeline.json"
+    atomic_write_json(feature_timeline_path, feature_timeline)
+
+    staged_timeline_path = out_dir / f"{project_slug}_timeline.json"
+    atomic_write_json(staged_timeline_path, feature_timeline)
+
     return {
         "project_slug": project_slug,
         "compiled_video": str(output_path),
@@ -287,4 +406,7 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         "export_video_path": str(default_staged_path if default_staged_path.exists() else output_path),
         "export_audio_path": str(default_staged_audio if (default_staged_audio and default_staged_audio.exists()) else final_audio_path),
         "chapters_compiled": [str(c) for c in sorted_chaps],
+        "timeline_path": str(staged_timeline_path),
+        "feature_timeline": str(feature_timeline_path),
     }
+

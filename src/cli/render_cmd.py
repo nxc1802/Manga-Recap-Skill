@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from src.cli.exit_codes import CliValidationError
+from src.core.logger import logger
 from src.core.schemas import CheckpointStatus, StageType, utc_iso_now
 from src.core.storage import (
     StorageFileNotFoundError,
@@ -37,6 +38,38 @@ from src.render.video_engine import VideoEngine
 
 def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     """Renders panel video clips, mixes BGM, burns subtitles, and outputs MP4."""
+    # Kaggle Cloud Offloading Mode
+    if getattr(args, "kaggle", False):
+        project_slug = getattr(args, "project", "")
+        chapter_num = getattr(args, "chapter", None)
+        if not project_slug:
+            raise CliValidationError("Project slug (--project) is required.")
+        if chapter_num is None:
+            raise CliValidationError("Chapter number (--chapter) is required.")
+
+        logger.info(f"Offloading Render for {project_slug} ch.{chapter_num} to Kaggle Cloud GPU (Hardware NVENC)...")
+        from src.cloud.kaggle_service import KaggleCloudService
+        service = KaggleCloudService()
+        if not service.is_authenticated:
+            raise CliValidationError("Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token.")
+        cloud_res = service.dispatch_chapter_job(
+            project_slug=project_slug,
+            chapter_number=str(chapter_num),
+            gpu=True,
+            wait=True,
+        )
+        return {
+            "status": "success",
+            "command": "render",
+            "project": project_slug,
+            "chapter": str(chapter_num),
+            "provider": "kaggle",
+            "mode": "cloud_nvenc",
+            "video_path": cloud_res.get("final_video"),
+            "subtitle_path": cloud_res.get("subtitles"),
+            "telemetry": cloud_res.get("telemetry", {}),
+        }
+
     # Check binary dependencies first
     if not shutil.which("ffmpeg"):
         raise DependencyNotFoundError("FFmpeg executable not found on system PATH. Please install FFmpeg.")
@@ -60,6 +93,10 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     allow_placeholders = getattr(args, "allow_placeholders", False)
     workers = getattr(args, "workers", None)
     hw_accel = getattr(args, "hw_accel", None)
+    encoder = getattr(args, "encoder", None)
+    subtitle_lines = getattr(args, "subtitle_lines", None)
+    subtitle_font_size = getattr(args, "subtitle_font_size", None)
+    subtitle_chunking = getattr(args, "subtitle_chunking", None)
 
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
@@ -96,11 +133,40 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                     workers = r_set["workers"]
                 if hw_accel is None and "hw_accel" in r_set:
                     hw_accel = r_set["hw_accel"]
+                if encoder is None and "encoder" in r_set:
+                    encoder = r_set["encoder"]
+                sub_set = r_set.get("subtitle", {})
+                if subtitle_lines is None and "max_lines" in sub_set:
+                    subtitle_lines = sub_set["max_lines"]
+                if subtitle_font_size is None and "font_size" in sub_set:
+                    subtitle_font_size = sub_set["font_size"]
+                if subtitle_chunking is None and "chunking" in sub_set:
+                    subtitle_chunking = sub_set["chunking"]
 
-    if hw_accel == "auto" or hw_accel is None:
-        import platform
-        if platform.system() == "Darwin":
-            hw_accel = "videotoolbox"
+    # Resolve encoder with runtime probing & smoke test
+    from src.production.hardware import resolve_video_encoder
+    requested_enc = encoder
+    if not requested_enc and hw_accel:
+        if hw_accel == "videotoolbox":
+            requested_enc = "h264_videotoolbox"
+        elif hw_accel == "nvenc":
+            requested_enc = "h264_nvenc"
+        elif hw_accel == "none":
+            requested_enc = "libx264"
+        elif hw_accel == "auto":
+            requested_enc = "auto"
+    if not requested_enc:
+        requested_enc = "auto"
+
+    resolved_encoder, codec_args, enc_msg = resolve_video_encoder(requested_enc)
+    logger.info(f"Video Encoder: {enc_msg} ({resolved_encoder})")
+    encoder = resolved_encoder
+    if encoder == "h264_nvenc":
+        hw_accel = "nvenc"
+    elif encoder == "h264_videotoolbox":
+        hw_accel = "videotoolbox"
+    else:
+        hw_accel = "none"
 
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     if not chap_dir.exists():
@@ -228,6 +294,10 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         allow_placeholders=allow_placeholders,
         max_workers=workers or 2,
         hw_accel=hw_accel,
+        encoder=encoder,
+        subtitle_lines=subtitle_lines,
+        subtitle_font_size=subtitle_font_size,
+        subtitle_chunking=subtitle_chunking,
     )
 
     # Completing RENDER completes chapter checkpoint & stages export
@@ -284,6 +354,7 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         "audio_duration_seconds": render_result.get("audio_duration_seconds", 0.0),
         "duration_diff_seconds": render_result.get("duration_diff_seconds", 0.0),
         "validation": render_result.get("validation", {}),
+        "encoder": render_result.get("encoder", encoder),
         "cached_clips_count": render_result.get("cached_clips_count", 0),
         "rendered_clips_count": render_result.get("rendered_clips_count", 0),
         "cleaned_files_count": len(cleaned_files) + len(safe_cleaned_files) + render_result.get("cleaned_files_count", 0),

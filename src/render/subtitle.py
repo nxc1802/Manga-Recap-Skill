@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Union
 from PIL import Image, ImageDraw, ImageFont
 
 from src.core.logger import logger
-from src.core.schemas import RecapScript, ScriptSegment
+from src.core.schemas import RecapScript, ScriptSegment, SubtitleChunkingMode
 
 
 def format_srt_time(seconds: float) -> str:
@@ -110,39 +110,129 @@ class SubtitleCue:
 SubtitleBlock = SubtitleCue
 
 
+def chunk_vietnamese_text_sentence_aware(
+    text: str,
+    max_chars_per_line: int = 42,
+    max_lines: int = 1,
+) -> List[str]:
+    """
+    Sentence-aware Vietnamese subtitle chunker.
+    Splits first on sentence punctuation (.?!…), then on clause punctuation (,;:—),
+    guaranteeing no orphan words (minimum 2 words per chunk if sentence has >= 2 words).
+    """
+    clean_text = sanitize_subtitle_text(text)
+    if not clean_text:
+        return []
+
+    # 1. Split into natural sentences: delimiters [.?!…]
+    sentence_pattern = r"(?<=[.?!…])\s+"
+    raw_sentences = [s.strip() for s in re.split(sentence_pattern, clean_text) if s.strip()]
+
+    single_line_chunks: List[str] = []
+    for sent in raw_sentences:
+        if len(sent) <= max_chars_per_line:
+            single_line_chunks.append(sent)
+            continue
+
+        # 2. Sentence exceeds line limit: split at clause delimiters [,;:—]
+        clause_pattern = r"(?<=[,;:—])\s+"
+        clauses = [c.strip() for c in re.split(clause_pattern, sent) if c.strip()]
+
+        current_accum: List[str] = []
+        for clause in clauses:
+            # If the clause itself is longer than max_chars_per_line, split by words
+            if len(clause) > max_chars_per_line:
+                words = clause.split()
+                w_accum: List[str] = []
+                w_len = 0
+                for w in words:
+                    cand_len = len(w) if not w_accum else w_len + 1 + len(w)
+                    if cand_len <= max_chars_per_line:
+                        w_accum.append(w)
+                        w_len = cand_len
+                    else:
+                        if w_accum:
+                            current_accum.append(" ".join(w_accum))
+                        w_accum = [w]
+                        w_len = len(w)
+                if w_accum:
+                    current_accum.append(" ".join(w_accum))
+            else:
+                if not current_accum:
+                    current_accum.append(clause)
+                else:
+                    # Check if clause fits in current chunk
+                    if len(current_accum[-1]) + 1 + len(clause) <= max_chars_per_line:
+                        current_accum[-1] = f"{current_accum[-1]} {clause}"
+                    else:
+                        current_accum.append(clause)
+
+        # 3. Post-process to eliminate orphan words (minimum 2 words per chunk)
+        rebalanced: List[str] = []
+        for c in current_accum:
+            words = c.split()
+            if len(words) == 1 and rebalanced:
+                prev_words = rebalanced[-1].split()
+                if len(prev_words) >= 3:
+                    # Borrow last word from previous chunk
+                    moved_word = prev_words.pop()
+                    rebalanced[-1] = " ".join(prev_words)
+                    rebalanced.append(f"{moved_word} {words[0]}")
+                elif len(rebalanced[-1]) + 1 + len(words[0]) <= max_chars_per_line + 5:
+                    # Merge into previous chunk
+                    rebalanced[-1] = f"{rebalanced[-1]} {words[0]}"
+                else:
+                    rebalanced.append(c)
+            else:
+                rebalanced.append(c)
+
+        single_line_chunks.extend(rebalanced)
+
+    if max_lines <= 1:
+        return single_line_chunks
+
+    # Group into max_lines per block if max_lines > 1
+    blocks: List[str] = []
+    i = 0
+    while i < len(single_line_chunks):
+        group = single_line_chunks[i : i + max_lines]
+        blocks.append("\n".join(group))
+        i += max_lines
+    return blocks
+
+
 class SubtitleGenerator:
     """
     Generates and validates synchronized SRT subtitles and renders fallback PNG overlays.
-    Enforces maximum 38 characters per line and maximum 2 lines per subtitle block.
+    Defaults to 1 line, base font size 26 at 1280px, and sentence-aware chunking.
     """
 
     def __init__(
         self,
-        max_chars_per_line: int = 38,
-        max_lines_per_block: int = 2,
+        max_chars_per_line: int = 42,
+        max_lines_per_block: int = 1,
         max_lines: Optional[int] = None,
         style: Optional[SubtitleStyle] = None,
+        chunking_mode: Union[SubtitleChunkingMode, str] = SubtitleChunkingMode.SENTENCE_AWARE,
     ):
         self.max_chars_per_line = max_chars_per_line
         self.max_lines_per_block = max_lines if max_lines is not None else max_lines_per_block
         self.style = style or SubtitleStyle()
+        if isinstance(chunking_mode, SubtitleChunkingMode):
+            self.chunking_mode = chunking_mode.value
+        else:
+            self.chunking_mode = str(chunking_mode).lower()
 
     def sanitize(self, text: str) -> str:
         """Sanitizes text by removing audible cues and normalizing whitespace."""
         return sanitize_subtitle_text(text)
 
-    def chunk_vietnamese_text(self, text: str) -> List[str]:
-        """
-        Splits Vietnamese text into subtitle blocks conforming to:
-        - Maximum max_chars_per_line (default 38) characters per line
-        - Maximum max_lines_per_block (default 2) lines per block
-        - Preserves word boundaries and punctuation
-        """
+    def chunk_vietnamese_text_fixed_chars(self, text: str) -> List[str]:
+        """Legacy fixed-character chunking algorithm."""
         clean_text = self.sanitize(text)
         if not clean_text:
             return []
 
-        # If entire text fits within a single line
         if len(clean_text) <= self.max_chars_per_line:
             return [clean_text]
 
@@ -174,6 +264,19 @@ class SubtitleGenerator:
             blocks.append("\n".join(current_block_lines))
 
         return blocks
+
+    def chunk_vietnamese_text(self, text: str) -> List[str]:
+        """
+        Splits Vietnamese text into subtitle blocks.
+        Uses sentence-aware chunking by default, with fixed-chars fallback.
+        """
+        if self.chunking_mode in ("fixed-chars", "fixed_chars"):
+            return self.chunk_vietnamese_text_fixed_chars(text)
+        return chunk_vietnamese_text_sentence_aware(
+            text,
+            max_chars_per_line=self.max_chars_per_line,
+            max_lines=self.max_lines_per_block,
+        )
 
     def split_text_into_cues(
         self,

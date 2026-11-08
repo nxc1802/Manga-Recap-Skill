@@ -58,9 +58,11 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
 
     strict = getattr(args, "strict", False)
     chapter_arg = getattr(args, "chapter", None)
+    check_pacing = getattr(args, "pacing", False)
 
     errors: List[Dict[str, Any]] = []
     warnings: List[Dict[str, Any]] = []
+    pacing_reports: Dict[str, Any] = {}
     total_checks = 0
     passed_checks = 0
 
@@ -78,10 +80,11 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 2. Validate project.json
     project_json_path = project_dir / "project.json"
+    proj_config: Optional[ProjectConfig] = None
     if project_json_path.exists():
         try:
             p_data = read_json(project_json_path)
-            ProjectConfig.model_validate(p_data)
+            proj_config = ProjectConfig.model_validate(p_data)
             check(True, "project.json", "Valid ProjectConfig schema")
         except (ValidationError, StorageCorruptError) as e:
             check(False, "project.json", f"Invalid project.json schema: {e}")
@@ -276,6 +279,18 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                             f"Script segments do not cover all active manifest panels. Missing panels: {sorted(list(missing_pids))}",
                         )
 
+                if check_pacing:
+                    from src.core.pacing import estimate_script_duration_seconds
+                    pacing_cfg = proj_config.script_pacing if proj_config else None
+                    speed = proj_config.audio_settings.default_speed if proj_config else 1.0
+                    p_report = estimate_script_duration_seconds(script_obj, speed=speed, pacing_config=pacing_cfg)
+                    pacing_reports[str(chap_num)] = p_report
+                    if not p_report.get("within_budget", True):
+                        recs = "; ".join(p_report.get("recommendations", []))
+                        check(False, f"chapter_{chap_num}/script_pacing", f"Script pacing warning: {recs}", is_warning=not strict)
+                    else:
+                        check(True, f"chapter_{chap_num}/script_pacing", "Script pacing is within budget")
+
                 # When script validation passes without new errors, complete StageType.SCRIPT checkpoint
                 if len(errors) == script_errors_before and chap_meta:
                     current_script_status = None
@@ -331,6 +346,8 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
     }
+    if check_pacing:
+        result_payload["pacing_reports"] = pacing_reports
 
     if not is_valid:
         raise CliValidationError(

@@ -87,26 +87,30 @@ manga-recap inspect --project <slug> --chapter <num> --json
 # 4. Validate script and chapter schemas
 manga-recap validate --project <slug> [--chapter <num>] --json
 
-# 5. Synthesize local VieNeu-TTS audio
-manga-recap tts --project <slug> --chapter <num> [--force] --json
+# 5. Synthesize local VieNeu-TTS audio (pass --kaggle to offload batched synthesis to Cloud GPU)
+manga-recap tts --project <slug> --chapter <num> [--force] [--kaggle] --json
 
-# 6. Render preview or final video (use --skip-preview to bypass preview requirement)
-manga-recap render --project <slug> --chapter <num> --quality final --skip-preview --json
+# 6. Render preview or final video (pass --kaggle to render with Cloud Hardware NVENC)
+manga-recap render --project <slug> --chapter <num> --quality final --skip-preview [--kaggle] --json
 
-# 7. Sequential multi-chapter batch processing (with failure isolation and single-chapter retry)
-manga-recap batch --project <slug> [--chapters 1,2,3] [--retry-chapter <num>] [--compile] --json
+# 7. Sequential multi-chapter batch processing (pass --kaggle for full cloud GPU execution)
+manga-recap batch --project <slug> [--chapters 1,2,3] [--retry-chapter <num>] [--compile] [--kaggle] --json
 
-# 8. Compile multiple chapters into a feature video
+# 8. End-to-end Cloud GPU production runner (Kaggle Tesla T4)
+manga-recap cloud run --project <slug> --chapter <num> --json
+manga-recap cloud info --json
+
+# 9. Compile multiple chapters into a feature video
 manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 
-# 9. Run TTS voice screening and emotion benchmarks (isolated testing lab)
+# 10. Run TTS voice screening and emotion benchmarks (isolated testing lab)
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 
-# 10. YouTube SEO metadata packaging and video publishing
+# 11. YouTube SEO metadata packaging and video publishing
 manga-recap youtube metadata --project <slug> --chapter <num> --json
 manga-recap youtube upload --project <slug> --chapter <num> [--privacy private|unlisted|public] [--thumbnail <path>] --json
 
-# 11. Clean intermediate clips, temp files, and caches safely after final output verification
+# 12. Clean intermediate clips, temp files, and caches safely after final output verification
 manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 ```
 

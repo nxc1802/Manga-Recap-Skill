@@ -10,6 +10,8 @@ import math
 import os
 import shutil
 import struct
+import threading
+import time
 import uuid
 import wave
 from abc import ABC, abstractmethod
@@ -87,6 +89,12 @@ class MockTTSBackend(BaseTTSBackend):
     CHANNELS = 1
     BYTES_PER_SAMPLE = 2  # 16-bit PCM
 
+    def __init__(self):
+        self._infer_lock = threading.Lock()
+        self.init_duration_seconds: float = 0.0
+        self.total_inference_seconds: float = 0.0
+        self.utterance_count: int = 0
+
     def estimate_duration(self, text: str, speed: float = 1.0) -> float:
         """
         Estimates speech duration based on Vietnamese speech cadence:
@@ -129,11 +137,15 @@ class MockTTSBackend(BaseTTSBackend):
             sample_val = int(800 * envelope * math.sin(2 * math.pi * freq * (i / self.SAMPLE_RATE)))
             frames.extend(struct.pack("<h", max(-32768, min(32767, sample_val))))
 
-        with wave.open(str(output_path), "wb") as wf:
-            wf.setnchannels(self.CHANNELS)
-            wf.setsampwidth(self.BYTES_PER_SAMPLE)
-            wf.setframerate(self.SAMPLE_RATE)
-            wf.writeframes(bytes(frames))
+        t_infer_0 = time.monotonic()
+        with self._infer_lock:
+            with wave.open(str(output_path), "wb") as wf:
+                wf.setnchannels(self.CHANNELS)
+                wf.setsampwidth(self.BYTES_PER_SAMPLE)
+                wf.setframerate(self.SAMPLE_RATE)
+                wf.writeframes(bytes(frames))
+        self.total_inference_seconds += (time.monotonic() - t_infer_0)
+        self.utterance_count += 1
 
         return get_wav_duration_seconds(output_path)
 
@@ -151,7 +163,13 @@ class NeuralTTSBackend(BaseTTSBackend):
         self.mode = mode
         self.precision = precision
         self._sdk = None
+        self._infer_lock = threading.Lock()
+        self.init_duration_seconds: float = 0.0
+        self.total_inference_seconds: float = 0.0
+        self.utterance_count: int = 0
+        t0 = time.monotonic()
         self._init_sdk()
+        self.init_duration_seconds = round(time.monotonic() - t0, 3)
 
     def _init_sdk(self):
         # Specifically verify that VieNeu weights exist in HF cache before enabling offline mode
@@ -190,11 +208,15 @@ class NeuralTTSBackend(BaseTTSBackend):
             if emotion_cue not in input_text:
                 input_text = f"{emotion_cue} {input_text}"
 
-        audio_data = self._sdk.infer(
-            text=input_text,
-            voice=resolved_voice,
-            **kwargs,
-        )
+        t_infer_0 = time.monotonic()
+        with self._infer_lock:
+            audio_data = self._sdk.infer(
+                text=input_text,
+                voice=resolved_voice,
+                **kwargs,
+            )
+        self.total_inference_seconds += (time.monotonic() - t_infer_0)
+        self.utterance_count += 1
         self._sdk.save(audio_data, str(output_path))
 
         # Speed adjustment via FFmpeg atempo if speed differs from 1.0
@@ -234,20 +256,68 @@ class VieNeuEngine:
     """
 
     _instance: Optional[VieNeuEngine] = None
+    _lock = threading.Lock()
 
-    def __init__(self, force_mode: Optional[EngineMode] = None):
-        self.force_mode = force_mode
+    def __init__(self, force_mode: Optional[Union[EngineMode, str]] = None):
+        if isinstance(force_mode, str):
+            try:
+                self.force_mode: Optional[EngineMode] = EngineMode(force_mode)
+            except ValueError:
+                self.force_mode = None
+        else:
+            self.force_mode = force_mode
         self.backend: BaseTTSBackend = self._create_backend()
 
     @classmethod
-    def get_instance(cls, force_mode: Optional[EngineMode] = None) -> VieNeuEngine:
-        if cls._instance is None or force_mode is not None:
-            cls._instance = cls(force_mode=force_mode)
-        return cls._instance
+    def get_instance(
+        cls,
+        force_mode: Optional[Union[EngineMode, str]] = None,
+        force_reload: bool = False,
+    ) -> VieNeuEngine:
+        with cls._lock:
+            target_mode_str: Optional[str] = None
+            if force_mode is not None:
+                if isinstance(force_mode, EngineMode):
+                    target_mode_str = force_mode.value
+                else:
+                    target_mode_str = str(force_mode)
+
+            needs_init = (
+                cls._instance is None
+                or force_reload
+                or (target_mode_str is not None and cls._instance.mode != target_mode_str)
+            )
+            if needs_init:
+                mode_param = force_mode
+                if isinstance(force_mode, str):
+                    try:
+                        mode_param = EngineMode(force_mode)
+                    except ValueError:
+                        mode_param = None
+                cls._instance = cls(force_mode=mode_param)
+            return cls._instance
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Explicitly resets singleton instance for testing or resource reclamation."""
+        with cls._lock:
+            cls._instance = None
 
     @property
     def mode(self) -> str:
         return EngineMode.MOCK.value if isinstance(self.backend, MockTTSBackend) else EngineMode.NEURAL.value
+
+    @property
+    def init_duration_seconds(self) -> float:
+        return getattr(self.backend, "init_duration_seconds", 0.0)
+
+    @property
+    def total_inference_seconds(self) -> float:
+        return getattr(self.backend, "total_inference_seconds", 0.0)
+
+    @property
+    def utterance_count(self) -> int:
+        return getattr(self.backend, "utterance_count", 0)
 
     def _create_backend(self) -> BaseTTSBackend:
         # 1. Explicit Neural enforcement takes absolute precedence over VIENEU_MOCK
@@ -341,6 +411,9 @@ class VieNeuEngine:
         return dur
 
 
-def get_tts_engine(force_mode: Optional[EngineMode] = None) -> VieNeuEngine:
+def get_tts_engine(
+    force_mode: Optional[Union[EngineMode, str]] = None,
+    force_reload: bool = False,
+) -> VieNeuEngine:
     """Returns singleton VieNeuEngine instance."""
-    return VieNeuEngine.get_instance(force_mode=force_mode)
+    return VieNeuEngine.get_instance(force_mode=force_mode, force_reload=force_reload)

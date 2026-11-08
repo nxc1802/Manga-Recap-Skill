@@ -82,6 +82,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_val.add_argument("-p", "--project", required=True, help="Project slug")
     p_val.add_argument("-c", "--chapter", default=None, help="Chapter number (optional)")
     p_val.add_argument("--strict", action="store_true", help="Treat warnings as errors")
+    p_val.add_argument("--pacing", action="store_true", help="Generate pre-TTS script pacing diagnostic report")
 
     # 3. status
     p_stat = subparsers.add_parser("status", help="Get chapter checkpoints and resumable stage", parents=[common_parent])
@@ -95,6 +96,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_crawl.add_argument("-u", "--url", default=None, help="Source URL to scrape")
     p_crawl.add_argument("--import-dir", default=None, help="Local directory to import raw images from")
     p_crawl.add_argument("--max-panels", type=int, default=None, help="Max images limit")
+    p_crawl.add_argument("--verify", action="store_true", help="Perform strict image integrity and continuity verification")
+    p_crawl.add_argument("--profile", default=None, help="Specific source profile domain override")
+
 
     # 4b. segment
     p_seg = subparsers.add_parser("segment", help="Segment raw manga chapter pages into panels and contact sheets", parents=[common_parent])
@@ -114,6 +118,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("--engine", choices=["neural", "mock", "auto"], default="neural", help="TTS synthesis engine backend (default: neural)")
     p_tts.add_argument("--mock", action="store_true", help="Shortcut for --engine mock (testing only)")
     p_tts.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
+    p_tts.add_argument("--kaggle", action="store_true", help="Offload TTS speech synthesis to Kaggle Cloud GPU")
 
     # 6. tts_benchmark
     p_bm = subparsers.add_parser("tts_benchmark", help="Run TTS voice and emotion screening benchmark", parents=[common_parent])
@@ -144,6 +149,11 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
     p_ren.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
     p_ren.add_argument("--hw-accel", choices=["none", "videotoolbox", "auto"], default=None, help="Hardware acceleration encoder")
+    p_ren.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder (default: auto or matches --hw-accel)")
+    p_ren.add_argument("--subtitle-lines", type=int, default=1, choices=[1, 2], help="Maximum subtitle lines per cue (default: 1)")
+    p_ren.add_argument("--subtitle-font-size", type=int, default=26, help="Subtitle base font size at 1280px (default: 26)")
+    p_ren.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default="sentence-aware", help="Subtitle chunking strategy (default: sentence-aware)")
+    p_ren.add_argument("--kaggle", action="store_true", help="Offload video rendering and TTS to Kaggle Cloud GPU")
 
     # 8. compile
     p_com = subparsers.add_parser("compile", help="Concatenate chapter videos into final recap", parents=[common_parent])
@@ -169,12 +179,20 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
     p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
     p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_bat.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Maximum subtitle lines per cue")
+    p_bat.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle base font size at 1280px")
+    p_bat.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy")
+    p_bat.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder for rendering (default: auto)")
+    p_bat.add_argument("--tts-engine", choices=["neural", "mock"], default="neural", help="TTS engine mode (default: neural)")
+    p_bat.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
+    p_bat.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
     p_bat.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
     p_bat.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
+    p_bat.add_argument("--kaggle", action="store_true", help="Offload batch processing (TTS + Rendering) to Kaggle Cloud GPU")
 
     # 10. youtube
     p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
-    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth"], help="YouTube action: 'metadata', 'upload', or 'auth'")
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "thumbnail"], help="YouTube action: 'metadata', 'upload', 'auth', or 'thumbnail'")
     p_yt.add_argument("-p", "--project", required=True, help="Project slug")
     p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
     p_yt.add_argument("--video", default=None, help="Custom video file path override")
@@ -184,13 +202,53 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("--tags", default=None, help="Comma-separated tags")
     p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default="private", help="Video privacy status (default: private)")
     p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path")
+    p_yt.add_argument("--select", default=None, help="Candidate ID to select for thumbnail (e.g. cand_01)")
     p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
+
+    # 11. thumbnail (top-level shortcut)
+    p_thumb = subparsers.add_parser("thumbnail", help="Generate or select YouTube thumbnail candidates", parents=[common_parent])
+    p_thumb.add_argument("-p", "--project", required=True, help="Project slug")
+    p_thumb.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
+    p_thumb.add_argument("--select", default=None, help="Candidate ID to select (e.g. cand_01)")
 
     # 12. clean
     p_cln = subparsers.add_parser("clean", help="Safely clean intermediate caches and temporary clips", parents=[common_parent])
     p_cln.add_argument("-p", "--project", required=True, help="Project slug")
     p_cln.add_argument("-c", "--chapter", default=None, help="Specific chapter number (default: all completed chapters)")
     p_cln.add_argument("--dry-run", action="store_true", help="Report reclaimable storage without unlinking files")
+
+    # 13. produce
+    p_prod = subparsers.add_parser("produce", help="Single-session cloud production runner (Kaggle/Colab)", parents=[common_parent])
+    p_prod.add_argument("-p", "--project", required=True, help="Project slug")
+    p_prod.add_argument("-c", "--chapters", default=None, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
+    p_prod.add_argument("--job-file", default=None, help="Custom path to production_job.json")
+    p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default="auto", help="Video encoder (default: auto)")
+    p_prod.add_argument("--tts-engine", choices=["neural", "mock"], default="neural", help="TTS engine mode (default: neural)")
+    p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers (default: 2)")
+    p_prod.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
+    p_prod.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality (default: final)")
+    p_prod.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video framing mode")
+    p_prod.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles directly onto video frames")
+    p_prod.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_prod.add_argument("--bgm", default=None, help="Background music audio file path")
+    p_prod.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
+    p_prod.add_argument("--export-bundle", action=argparse.BooleanOptionalAction, default=True, help="Stage complete export bundle (default: True)")
+    p_prod.add_argument("--cleanup", action="store_true", help="Clean intermediate clips after successful render")
+    p_prod.add_argument("--force", action="store_true", help="Force re-execution of completed stages")
+    p_prod.add_argument("--voice", default=None, help="Voice override")
+    p_prod.add_argument("--speed", type=float, default=None, help="Speed override")
+    p_prod.add_argument("--subtitle-lines", type=int, default=1, choices=[1, 2], help="Subtitle max lines")
+    p_prod.add_argument("--subtitle-font-size", type=int, default=26, help="Subtitle font size")
+    p_prod.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default="sentence-aware", help="Subtitle chunking strategy")
+
+    # 14. cloud
+    p_cld = subparsers.add_parser("cloud", help="Kaggle/Remote Cloud GPU runner for extreme speed", parents=[common_parent])
+    p_cld.add_argument("cloud_action", choices=["run", "info", "pull"], default="run", nargs="?", help="Action (run, info, pull)")
+    p_cld.add_argument("-p", "--project", default=None, help="Project slug")
+    p_cld.add_argument("-c", "--chapter", default=None, help="Chapter number")
+    p_cld.add_argument("--provider", choices=["kaggle"], default="kaggle", help="Cloud provider (default: kaggle)")
+    p_cld.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
+    p_cld.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
 
     return parser
 
@@ -230,11 +288,21 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "youtube":
         from src.cli.youtube_cmd import handle_youtube
         return handle_youtube(args)
+    elif subcommand == "thumbnail":
+        from src.cli.youtube_cmd import handle_youtube_thumbnail
+        return handle_youtube_thumbnail(args)
     elif subcommand == "clean":
         from src.cli.clean_cmd import handle_clean
         return handle_clean(args)
+    elif subcommand == "produce":
+        from src.cli.production_cmd import handle_produce
+        return handle_produce(args)
+    elif subcommand == "cloud":
+        from src.cli.cloud_cmd import handle_cloud
+        return handle_cloud(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
+
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -251,7 +319,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "thumbnail", "clean", "produce", "cloud"
         }:
             detected_subcommand = arg
             break
