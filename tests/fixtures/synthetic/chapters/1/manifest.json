@@ -1,0 +1,135 @@
+{
+  "project_slug": "synthetic_fixture",
+  "chapter_number": "1",
+  "source_url": "https://example.com/synthetic/ch1",
+  "created_at": "2026-11-08T20:00:00Z",
+  "total_raw_images": 1,
+  "total_panels": 5,
+  "raw_images": [
+    {
+      "filename": "page_001.jpg",
+      "relative_path": "raw/page_001.jpg",
+      "width": 800,
+      "height": 3000,
+      "sha256": "957b08266b3ac3e8389120f7b6beca7d0f6aba334f86b383fd849087f66de074"
+    }
+  ],
+  "panels": [
+    {
+      "panel_id": "panel_001",
+      "sequence_number": 1,
+      "filename": "panel_001.jpg",
+      "relative_path": "panels/panel_001.jpg",
+      "source_image": "page_001.jpg",
+      "crop_box": [
+        0,
+        0,
+        800,
+        600
+      ],
+      "width": 800,
+      "height": 600,
+      "aspect_ratio": 1.3333,
+      "sha256": "a06e628b497f6dbb48c6b065ea65a8d1cfc0126873b14a39e37fa85be088c064",
+      "status": "active",
+      "ocr_text_en": "Text for panel_001.jpg",
+      "notes": "Active recap panel"
+    },
+    {
+      "panel_id": "panel_002",
+      "sequence_number": 2,
+      "filename": "panel_002.jpg",
+      "relative_path": "panels/panel_002.jpg",
+      "source_image": "page_001.jpg",
+      "crop_box": [
+        0,
+        600,
+        800,
+        1200
+      ],
+      "width": 800,
+      "height": 600,
+      "aspect_ratio": 1.3333,
+      "sha256": "133b0a8f1c2c21a7d230897373bc7957051621fbdd14aea41d743e18fc3747c7",
+      "status": "active",
+      "ocr_text_en": "Text for panel_002.jpg",
+      "notes": "Active recap panel"
+    },
+    {
+      "panel_id": "panel_003",
+      "sequence_number": 3,
+      "filename": "panel_003.jpg",
+      "relative_path": "panels/panel_003.jpg",
+      "source_image": "page_001.jpg",
+      "crop_box": [
+        0,
+        1200,
+        800,
+        1800
+      ],
+      "width": 800,
+      "height": 600,
+      "aspect_ratio": 1.3333,
+      "sha256": "5506cdbf38bb5f05defa6b1b3a38e6beae1afcec530c126fee6b086695e0c1e9",
+      "status": "active",
+      "ocr_text_en": "Text for panel_003.jpg",
+      "notes": "Active recap panel"
+    },
+    {
+      "panel_id": "panel_004",
+      "sequence_number": 4,
+      "filename": "panel_004.jpg",
+      "relative_path": "panels/panel_004.jpg",
+      "source_image": "page_001.jpg",
+      "crop_box": [
+        0,
+        1800,
+        800,
+        2400
+      ],
+      "width": 800,
+      "height": 600,
+      "aspect_ratio": 1.3333,
+      "sha256": "411372cb166dd3d24e20b73b7d062deff705b6140aabd517380bcc20b7a7e8ec",
+      "status": "active",
+      "ocr_text_en": "Text for panel_004.jpg",
+      "notes": "Active recap panel"
+    },
+    {
+      "panel_id": "panel_005",
+      "sequence_number": 5,
+      "filename": "panel_005.jpg",
+      "relative_path": "panels/panel_005.jpg",
+      "source_image": "page_001.jpg",
+      "crop_box": [
+        0,
+        2400,
+        800,
+        3000
+      ],
+      "width": 800,
+      "height": 600,
+      "aspect_ratio": 1.3333,
+      "sha256": "3fd1c3f780eac2db78a71882d98dfcd0d164069080a95cc32a1b21529328c2d4",
+      "status": "active",
+      "ocr_text_en": "Text for panel_005.jpg",
+      "notes": "Omitted from script"
+    }
+  ],
+  "contact_sheets": [
+    {
+      "sheet_id": "sheet_01",
+      "relative_path": "contact_sheets/sheet_01.jpg",
+      "panel_ids": [
+        "panel_001.jpg",
+        "panel_002.jpg",
+        "panel_003.jpg",
+        "panel_004.jpg",
+        "panel_005.jpg"
+      ],
+      "columns": 4,
+      "rows": 4
+    }
+  ],
+  "schema_version": "3.0.0"
+}

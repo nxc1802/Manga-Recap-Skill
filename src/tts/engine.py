@@ -6,10 +6,13 @@ All output audio is guaranteed 48 kHz uncompressed 16-bit PCM mono WAV.
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import math
 import os
 import shutil
 import struct
+import subprocess
 import threading
 import time
 import uuid
@@ -28,6 +31,121 @@ class EngineMode(str, Enum):
     MOCK = "mock"
 
 
+# Thread-safe in-memory cache for audio file metrics: (path_str, mtime_ns, size_bytes) -> (duration_sec, sha256_checksum)
+_AUDIO_METRIC_CACHE: Dict[Tuple[str, int, int], Tuple[float, str]] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _cache_audio_metrics(path: Path, duration: float, checksum: str) -> None:
+    """Stores verified duration and sha256 checksum in cache keyed by resolved path, mtime, and file size."""
+    try:
+        st = path.stat()
+        key = (str(path.resolve()), st.st_mtime_ns, st.st_size)
+        with _CACHE_LOCK:
+            if len(_AUDIO_METRIC_CACHE) > 8192:
+                _AUDIO_METRIC_CACHE.clear()
+            _AUDIO_METRIC_CACHE[key] = (duration, checksum)
+    except Exception:
+        pass
+
+
+def _get_cached_audio_metrics(path: Path) -> Optional[Tuple[float, str]]:
+    """Retrieves cached duration and sha256 if file has not been modified."""
+    try:
+        st = path.stat()
+        key = (str(path.resolve()), st.st_mtime_ns, st.st_size)
+        with _CACHE_LOCK:
+            return _AUDIO_METRIC_CACHE.get(key)
+    except Exception:
+        return None
+
+
+def _encode_wav_16bit_pcm(
+    audio_data: Any, sample_rate: int = 48000
+) -> Tuple[bytes, float, str]:
+    """
+    Direct in-memory encoding of audio waveform to standard 48 kHz
+    16-bit uncompressed PCM mono WAV binary.
+    Returns: (wav_bytes, duration_seconds, sha256_checksum)
+    Sub-millisecond execution, zero disk I/O, zero subprocess overhead.
+    """
+    import numpy as np
+
+    if not isinstance(audio_data, np.ndarray):
+        audio_data = np.asarray(audio_data, dtype=np.float32)
+    if audio_data.ndim > 1:
+        audio_data = audio_data.mean(axis=1 if audio_data.shape[1] < audio_data.shape[0] else 0)
+
+    audio_clipped = np.clip(audio_data, -1.0, 1.0)
+    pcm_bytes = (audio_clipped * 32767.0).astype(np.int16).tobytes()
+    data_bytes = len(pcm_bytes)
+
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        data_bytes + 36,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        sample_rate,
+        sample_rate * 2,
+        2,
+        16,
+        b"data",
+        data_bytes,
+    )
+    wav_bytes = header + pcm_bytes
+    checksum = hashlib.sha256(wav_bytes).hexdigest()
+    duration = round(len(audio_data) / float(sample_rate), 4)
+    return wav_bytes, duration, checksum
+
+
+def _apply_speed_to_file(
+    pcm_bytes: bytes,
+    speed: float,
+    output_path: Path,
+    sample_rate: int = 48000,
+) -> Tuple[float, str]:
+    """
+    Streams raw PCM bytes directly into ffmpeg atempo filter and writes to seekable output_path.
+    Calculates duration and SHA-256 in one pass without intermediate temp files.
+    """
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "s16le",
+        "-ar", str(sample_rate),
+        "-ac", "1",
+        "-i", "pipe:0",
+        "-filter:a", f"atempo={speed}",
+        "-ar", str(sample_rate),
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        str(output_path),
+    ]
+    try:
+        subprocess.run(
+            cmd,
+            input=pcm_bytes,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+    except Exception as e:
+        logger.warning(f"Streaming atempo speed filter failed: {e}")
+        raise
+
+    wav_bytes = output_path.read_bytes()
+    checksum = hashlib.sha256(wav_bytes).hexdigest()
+    if len(wav_bytes) >= 44:
+        frames = (len(wav_bytes) - 44) // 2
+        dur = round(frames / float(sample_rate), 4)
+    else:
+        dur = 0.0
+    return dur, checksum
+
+
 def get_wav_duration_seconds(file_path: Union[str, Path]) -> float:
     """
     Extracts duration in seconds directly from uncompressed WAV binary header.
@@ -37,13 +155,19 @@ def get_wav_duration_seconds(file_path: Union[str, Path]) -> float:
     if not path.exists():
         raise FileNotFoundError(f"WAV file not found: {path}")
 
+    cached = _get_cached_audio_metrics(path)
+    if cached is not None and cached[0] > 0.0:
+        return cached[0]
+
     try:
         with wave.open(str(path), "rb") as wf:
             framerate = wf.getframerate()
             nframes = wf.getnframes()
             if framerate <= 0:
                 raise ValueError(f"Invalid WAV framerate: {framerate}")
-            return round(nframes / float(framerate), 4)
+            dur = round(nframes / float(framerate), 4)
+            _cache_audio_metrics(path, dur, "")
+            return dur
     except Exception as e:
         logger.warning(f"Failed to read WAV header with wave.open ({e}), attempting fallback...")
         # Fallback to file size calculation for 48kHz 16-bit mono PCM:
@@ -51,7 +175,9 @@ def get_wav_duration_seconds(file_path: Union[str, Path]) -> float:
         # bytes_per_sec = 48000 * 1 * 2 = 96000
         size = path.stat().st_size
         if size > 44:
-            return round((size - 44) / 96000.0, 4)
+            dur = round((size - 44) / 96000.0, 4)
+            _cache_audio_metrics(path, dur, "")
+            return dur
         raise
 
 
@@ -138,16 +264,33 @@ class MockTTSBackend(BaseTTSBackend):
             frames.extend(struct.pack("<h", max(-32768, min(32767, sample_val))))
 
         t_infer_0 = time.monotonic()
+        data_bytes = len(frames)
+        header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            data_bytes + 36,
+            b"WAVE",
+            b"fmt ",
+            16,
+            1,
+            self.CHANNELS,
+            self.SAMPLE_RATE,
+            self.SAMPLE_RATE * self.BYTES_PER_SAMPLE,
+            self.BYTES_PER_SAMPLE,
+            16,
+            b"data",
+            data_bytes,
+        )
+        wav_bytes = header + bytes(frames)
         with self._infer_lock:
-            with wave.open(str(output_path), "wb") as wf:
-                wf.setnchannels(self.CHANNELS)
-                wf.setsampwidth(self.BYTES_PER_SAMPLE)
-                wf.setframerate(self.SAMPLE_RATE)
-                wf.writeframes(bytes(frames))
+            output_path.write_bytes(wav_bytes)
+            checksum = hashlib.sha256(wav_bytes).hexdigest()
+            self._last_checksum = checksum
+            _cache_audio_metrics(output_path, duration_sec, checksum)
         self.total_inference_seconds += (time.monotonic() - t_infer_0)
         self.utterance_count += 1
 
-        return get_wav_duration_seconds(output_path)
+        return duration_sec
 
     def list_voices(self) -> List[Tuple[str, str]]:
         return [(v.description, v.voice_id) for v in CATALOG_VOICES.values()]
@@ -183,8 +326,9 @@ class NeuralTTSBackend(BaseTTSBackend):
 
         try:
             from vieneu import Vieneu
-            self._sdk = Vieneu(mode=self.mode)
-            logger.info(f"Initialized local VieNeu-TTS engine (mode={self.mode})")
+            optimal_threads = min(max((os.cpu_count() or 8) // 2, 2), 6)
+            self._sdk = Vieneu(mode=self.mode, threads=optimal_threads)
+            logger.info(f"Initialized local VieNeu-TTS engine (mode={self.mode}, threads={optimal_threads})")
         except Exception as e:
             logger.error(f"Failed to initialize VieNeu-TTS neural backend: {e}")
             raise
@@ -199,6 +343,8 @@ class NeuralTTSBackend(BaseTTSBackend):
         emotion_cue: Optional[str] = None,
         **kwargs: Any,
     ) -> float:
+        import numpy as np
+
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         resolved_voice = resolve_voice_id(voice)
@@ -217,14 +363,21 @@ class NeuralTTSBackend(BaseTTSBackend):
             )
         self.total_inference_seconds += (time.monotonic() - t_infer_0)
         self.utterance_count += 1
-        self._sdk.save(audio_data, str(output_path))
 
-        # Speed adjustment via FFmpeg atempo if speed differs from 1.0
+        # File packaging and speed adjustment run OUTSIDE the infer lock!
         target_speed = max(0.5, min(2.0, float(speed)))
-        if abs(target_speed - 1.0) > 0.01:
-            self._apply_speed(output_path, target_speed)
-
-        return get_wav_duration_seconds(output_path)
+        if abs(target_speed - 1.0) <= 0.01:
+            wav_bytes, dur, checksum = _encode_wav_16bit_pcm(audio_data, 48000)
+            output_path.write_bytes(wav_bytes)
+            self._last_checksum = checksum
+            _cache_audio_metrics(output_path, dur, checksum)
+            return dur
+        else:
+            pcm_bytes = (np.clip(audio_data, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+            dur, checksum = _apply_speed_to_file(pcm_bytes, target_speed, output_path, 48000)
+            self._last_checksum = checksum
+            _cache_audio_metrics(output_path, dur, checksum)
+            return dur
 
     def _apply_speed(self, wav_path: Path, speed: float) -> None:
         """Applies pitch-preserving time stretching via ffmpeg atempo filter."""
@@ -385,12 +538,47 @@ class VieNeuEngine:
                 raise RuntimeError(f"TTS synthesis produced invalid or empty file at {tmp_path}")
 
             tmp_path.replace(output_path)
-            checksum = calculate_sha256(output_path)
+            checksum = getattr(self.backend, "_last_checksum", None)
+            if not checksum:
+                checksum = calculate_sha256(output_path)
+            _cache_audio_metrics(output_path, dur, checksum)
             return dur, checksum, False
         except Exception:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
             raise
+
+    def synthesize_batch(
+        self,
+        tasks: List[Dict[str, Any]],
+        workers: int = 2,
+    ) -> List[Tuple[float, str, bool]]:
+        """
+        Batch synthesis for multiple utterances.
+        Optimized to overlap neural inference and file I/O pipelines
+        via ThreadPoolExecutor, and minimize disk round-trips.
+        Each task dict contains: text, voice, output_path, speed (optional),
+        emotion (optional), emotion_cue (optional).
+        """
+        if not tasks:
+            return []
+
+        def _worker(t_dict: Dict[str, Any]) -> Tuple[float, str, bool]:
+            return self.synthesize_utterance(
+                text=t_dict["text"],
+                voice=t_dict.get("voice") or "Ngọc Huyền",
+                output_path=t_dict["output_path"],
+                speed=t_dict.get("speed", 1.0) or 1.0,
+                emotion=t_dict.get("emotion"),
+                emotion_cue=t_dict.get("emotion_cue"),
+            )
+
+        if workers > 1 and len(tasks) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(workers, len(tasks))) as pool:
+                return list(pool.map(_worker, tasks))
+        else:
+            return [_worker(t) for t in tasks]
 
     def synthesize_to_file(
         self,

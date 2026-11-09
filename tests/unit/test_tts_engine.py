@@ -145,3 +145,73 @@ def test_synthesize_utterance_atomic_failure_resilience(tmp_path, monkeypatch):
     tmp_files = list(tmp_path.glob(".*.tmp.*"))
     assert len(tmp_files) == 0
 
+
+def test_vieneu_engine_synthesize_batch(tmp_path):
+    """Verifies synthesize_batch processes multiple utterances with accurate durations and checksums."""
+    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    tasks = [
+        {
+            "text": "Câu thứ nhất trong loạt xử lý hàng loạt.",
+            "voice": "Trúc Ly",
+            "output_path": tmp_path / "batch_001.wav",
+            "speed": 1.0,
+        },
+        {
+            "text": "Câu thứ hai với tốc độ nhanh hơn một chút.",
+            "voice": "Hải Đăng",
+            "output_path": tmp_path / "batch_002.wav",
+            "speed": 1.15,
+        },
+        {
+            "text": "Câu thứ ba với âm hưởng buồn và tiếng thở dài.",
+            "voice": "Trúc Ly",
+            "output_path": tmp_path / "batch_003.wav",
+            "speed": 0.95,
+            "emotion": "sad",
+            "emotion_cue": "[thở dài]",
+        },
+    ]
+
+    results = engine.synthesize_batch(tasks, workers=2)
+    assert len(results) == 3
+
+    for i, (dur, checksum, was_cached) in enumerate(results):
+        out_file = tasks[i]["output_path"]
+        assert out_file.exists()
+        assert dur > 0.5
+        assert len(checksum) == 64
+        assert was_cached is False
+        with wave.open(str(out_file), "rb") as wf:
+            assert wf.getframerate() == 48000
+            assert wf.getnchannels() == 1
+            assert wf.getsampwidth() == 2
+
+
+def test_in_memory_wav_encoding_and_caching(tmp_path):
+    """Verifies direct in-memory 16-bit PCM WAV encoding and metric cache lookups."""
+    from src.tts.engine import _encode_wav_16bit_pcm, _cache_audio_metrics, _get_cached_audio_metrics
+    import numpy as np
+
+    # Synthetic 1.0 second sine wave at 48 kHz
+    t = np.linspace(0, 1.0, 48000, endpoint=False, dtype=np.float32)
+    audio = 0.5 * np.sin(2 * np.pi * 440 * t)
+
+    wav_bytes, dur, csum = _encode_wav_16bit_pcm(audio, sample_rate=48000)
+    assert len(wav_bytes) == 44 + 48000 * 2
+    assert dur == 1.0
+    assert len(csum) == 64
+
+    test_wav = tmp_path / "in_memory.wav"
+    test_wav.write_bytes(wav_bytes)
+
+    # Check that get_wav_duration_seconds correctly parses it
+    assert get_wav_duration_seconds(test_wav) == 1.0
+
+    # Cache metrics and verify cache retrieval
+    _cache_audio_metrics(test_wav, dur, csum)
+    cached = _get_cached_audio_metrics(test_wav)
+    assert cached is not None
+    assert cached[0] == 1.0
+    assert cached[1] == csum
+
+

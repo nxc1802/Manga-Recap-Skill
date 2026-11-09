@@ -136,9 +136,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_ren.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality")
     p_ren.add_argument("--bgm", default=None, help="BGM audio file path")
-    p_ren.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
-    p_ren.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
-    p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_ren.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video mode")
+    p_ren.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles")
+    p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
     p_ren.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
@@ -150,9 +150,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
     p_ren.add_argument("--hw-accel", choices=["none", "videotoolbox", "auto"], default=None, help="Hardware acceleration encoder")
     p_ren.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder (default: auto or matches --hw-accel)")
-    p_ren.add_argument("--subtitle-lines", type=int, default=1, choices=[1, 2], help="Maximum subtitle lines per cue (default: 1)")
-    p_ren.add_argument("--subtitle-font-size", type=int, default=26, help="Subtitle base font size at 1280px (default: 26)")
-    p_ren.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default="sentence-aware", help="Subtitle chunking strategy (default: sentence-aware)")
+    p_ren.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Maximum subtitle lines per cue (default: 1)")
+    p_ren.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle base font size at 1280px (default: 26)")
+    p_ren.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy (default: sentence-aware)")
     p_ren.add_argument("--kaggle", action="store_true", help="Offload video rendering and TTS to Kaggle Cloud GPU")
 
     # 8. compile
@@ -250,6 +250,13 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
     p_cld.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
 
+    # 15. review-pack
+    p_rp = subparsers.add_parser("review-pack", aliases=["review_pack"], help="Generate lightweight static human review pack", parents=[common_parent])
+    p_rp.add_argument("-p", "--project", required=True, help="Project slug")
+    p_rp.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_rp.add_argument("--format", choices=["md", "html", "json", "all"], default="all", help="Output format(s)")
+    p_rp.add_argument("--out-dir", default=None, help="Custom output directory")
+
     return parser
 
 
@@ -300,6 +307,9 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "cloud":
         from src.cli.cloud_cmd import handle_cloud
         return handle_cloud(args)
+    elif subcommand in {"review-pack", "review_pack"}:
+        from src.cli.review_pack import handle_review_pack
+        return handle_review_pack(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 
@@ -319,7 +329,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "thumbnail", "clean", "produce", "cloud"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "thumbnail", "clean", "produce", "cloud", "review-pack", "review_pack"
         }:
             detected_subcommand = arg
             break

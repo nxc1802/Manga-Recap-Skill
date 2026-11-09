@@ -1,6 +1,6 @@
 # Vision, Contact Sheets & OCR Rules
 
-## 1. Visual Inspection Protocol
+## 1. Visual Inspection Protocol & Agent Cognition Independence
 
 1. **Evidence-Based Scripting Only**:
    - The coding agent MUST visually inspect panel images (`panels/panel_*.jpg`) and multi-panel contact sheets (`contact_sheets/sheet_*.jpg`).
@@ -8,8 +8,14 @@
 2. **Contact Sheet Utilization**:
    - Contact sheets bundle up to 16 panels into a 4x4 grid with stamped sequence badges (`#001`, `#002`).
    - Use contact sheets to grasp macro scene flow, character positioning, and combat choreography before diving into individual high-res crops for small speech bubbles.
+3. **Agent Cognition Independence (Zero Automated Benchmarks)**:
+   - The agent freely selects its own OCR/VLM inspection methodology (e.g., native multimodal vision on contact sheets, inspecting full-res crops, reading dialogue).
+   - The pipeline enforces **zero automated confidence scores, OCR accuracy benchmarks, or LLM-as-judge metrics**. Storytelling quality, character voice authenticity, and visual fidelity are judged solely by human review.
+4. **Faithful Storytelling (Anti-Hallucination Mandate)**:
+   - All narration, dialogue, and character attributions must strictly reflect observable facts in the artwork and text.
+   - NEVER fabricate major plot revelations, invent character backstories, or falsify martial arts levels not grounded in the source panels.
 
-## 2. Multi-Language OCR Handling
+## 2. Multi-Language OCR Handling & Uncertainty Protocol
 
 1. **Source Bubble Transcription**:
    - Read speech bubbles in English, Korean (Hangul), Japanese, or Chinese.
@@ -19,6 +25,11 @@
    - If partially obscured or illegible, do NOT guess. Mark `[CAN_XAC_MINH: chữ trong bong bóng thoại mờ]` and flag `status: "needs_review"`.
 3. **Sound Effects (SFX) & Text Overlays**:
    - Korean/Japanese sound effects often overlay action art. Translate the emotional weight into descriptive narration rather than verbalizing the phonetic sound.
+4. **Uncertainty Protocol (Never Hallucinate)**:
+   - Whenever dialogue is truncated by page boundary, speech bubble is obscured, or visual action is genuinely ambiguous:
+     - Prepend `[CAN_XAC_MINH: <lý_do_chi_tiết>]` to `narrator_text` or `notes`.
+     - Mark segment `status: "needs_review"`.
+     - Describe only what is physically visible without guessing ungrounded lore.
 
 ## 3. Gutter Anomaly & Crop Defect Detection
 
@@ -30,13 +41,19 @@ During inspection, check for segmentation artifacts:
 3. **Advertisements & Watermarks**: Top/bottom banner ads, credit pages, or scanlation team recruitment pages.
    - Remedy: Mark panel status as `skip` in `manifest.json`. Never narrate advertisements.
 
-## 4. Panel Classification
+## 4. Panel Classification & N:M Mapping Handling
 
-In `manifest.json` and `script.json`, classify each panel:
+In `manifest.json` and `script.json`, classify and map each panel:
 - `active`: Standard story panel to be narrated and rendered into video.
 - `context_only`: Panel provides visual context for the agent's recap understanding, but is skipped in final video render (e.g. recap flashes of previous episodes).
 - `skip`: Promotional banner, credit card, or blank page. Completely excluded.
 - `needs_review`: Gutter error, corrupted image, or indecipherable scene requiring human intervention.
+
+### N:M Panel Mapping Protocol:
+1. **Multi-Panel Segments (1:N)**: A single dramatic beat or combat exchange can reference multiple panels in `panel_ids` (e.g., `["panel_002.jpg", "panel_003.jpg"]`). All referenced panels must exist in `manifest.json` and on disk.
+2. **Panel Reuse (N:1)**: High-impact panels (such as wide battlefield shots, villain reveals, or critical background locations) can be referenced across multiple segments.
+3. **Omission of Non-Essential Panels**: Panels in `manifest.json` that are purely transitional, filler background scenery, or blank margins may be omitted from `script.json`.
+4. **Essential Story Panel Retention Mandate**: Panels that advance the core plot, contain key dialogues, or depict critical combat actions **MUST NEVER BE OMITTED**. All omitted panels are logged in the Human Review Pack for reviewer verification.
 
 ## 5. Camera Motion & Focus Box Calculation
 

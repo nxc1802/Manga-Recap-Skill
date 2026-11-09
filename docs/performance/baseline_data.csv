@@ -1,0 +1,27 @@
+workload,stage,substage,metric,value,unit,notes
+small,stage_1_validation,manifest_check,elapsed_time,0.0019,seconds,"35 segments, 20 panels"
+small,stage_2_tts,cold_start,elapsed_time,44.7374,seconds,Cold engine boot + synthesis
+small,stage_2_tts,cold_start,real_time_factor,0.193,rtf,Real Time Factor
+small,stage_2_tts,warm_start,elapsed_time,45.1735,seconds,Resident model in memory
+small,stage_2_tts,cache_hit,elapsed_time,0.0232,seconds,All 35 clips pre-cached
+small,stage_3_render,videotoolbox_hw,elapsed_time,164.5356,seconds,Hardware VideoToolbox (workers=4)
+small,stage_3_render,libx264_cpu,elapsed_time,83.9207,seconds,Software libx264 CPU (workers=4)
+small,stage_3_render,cached,elapsed_time,60.3871,seconds,All 35 clips pre-rendered
+small,stage_4_export,packaging,elapsed_time,0.0,seconds,SRT and MP4 verification
+small,summary,end_to_end,wall_clock,209.27,seconds,Cold start E2E
+small,summary,end_to_end,throughput,66.33,video_min_per_hr,Production throughput
+small,summary,resource,peak_rss,2139.45,mb,Peak resident set size
+large,stage_1_validation,manifest_check,elapsed_time,0.0062,seconds,"120 segments, 40 panels"
+large,stage_2_tts,warm_start,elapsed_time,151.5466,seconds,120 segments synthesis
+large,stage_2_tts,warm_start,real_time_factor,0.189,rtf,Real Time Factor
+large,stage_3_render,videotoolbox_hw,elapsed_time,300.5681,seconds,Hardware VideoToolbox (workers=4)
+large,stage_4_export,packaging,elapsed_time,0.0,seconds,SRT and MP4 verification
+large,summary,end_to_end,wall_clock,452.12,seconds,Total E2E
+large,summary,end_to_end,throughput,106.69,video_min_per_hr,Production throughput
+large,summary,resource,peak_rss,2139.45,mb,Peak resident set size
+batch,summary,multi_chapter,total_segments,100,segments,5 chapters total
+batch,summary,multi_chapter,video_duration,651.12,seconds,Combined chapters duration
+batch,compilation,concat_mux,elapsed_time,0.95,seconds,Multi-chapter compile
+batch,summary,end_to_end,wall_clock,272.49,seconds,5 chapters + compilation
+batch,summary,end_to_end,throughput,143.37,video_min_per_hr,Production throughput
+batch,summary,resource,peak_rss,2111.89,mb,Peak resident set size

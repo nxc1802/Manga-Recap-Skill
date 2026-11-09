@@ -67,6 +67,23 @@
       "audio_path": null,
       "checksum": null,
       "status": "pending"
+    },
+    {
+      "seq_id": "004_1",
+      "panel_ids": [
+        "panel_001.jpg"
+      ],
+      "narrator_text": "Bóng người áo đen từ từ hiện rõ sau màn sương, sát khí ngút trời không hề thuyên giảm.",
+      "character": null,
+      "emotion": "suspense",
+      "emotion_cue": null,
+      "voice_id": "Trúc Ly",
+      "camera_motion": "zoom_in",
+      "focus_box": null,
+      "duration": null,
+      "audio_path": null,
+      "checksum": null,
+      "status": "pending"
     }
   ],
   "total_duration_seconds": 0.0,

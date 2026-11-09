@@ -29,7 +29,8 @@ The `manga-recap` skill enables coding agents (OpenCode, Claude Code, Antigravit
 - **Decoupled Intelligence**: All visual interpretation, character understanding, and creative scriptwriting reside in the coding agent. The core Python code contains **zero** direct calls to external LLM/VLM or Cloud TTS APIs.
 - **Offline Determinism**: Media processing, audio synthesis via VieNeu-TTS v3 Turbo, video rendering, and state management run 100% locally and deterministically.
 - **Strict Recoverability**: Every pipeline stage persists state atomically to JSON checkpoints (`data/projects/<slug>/chapters/<num>/chapter.json`). Any interrupted workflow can be safely resumed without duplicate work.
-- **Evidence-Grounded Review**: The agent examines actual panel imagery and contact sheets before scripting. It never invents plot points or character actions from filenames. Ambiguous panels are flagged for human review.
+- **Evidence-Grounded Faithful Storytelling**: The agent examines actual panel imagery and contact sheets before scripting. It never invents plot points or character actions from filenames. All panels containing essential story progression must be retained in the video. Ambiguous panels are flagged for human verification with `[CAN_XAC_MINH: ...]`.
+- **Zero Automated Quality Benchmarks**: Storytelling quality, character voice authenticity, pacing, and visual framing are evaluated exclusively through human review. The agent freely selects its OCR/VLM approach without arbitrary confidence thresholds or LLM-as-judge scoring.
 
 ## Prerequisites & System Requirements
 
@@ -53,7 +54,7 @@ The pipeline operates across 5 streamlined operational stages:
 
 - **Gate 0 (Video Config)**: Configured **ONCE** per series in `data/projects/<slug>/project.json`. All chapters automatically inherit resolution, video mode, subtitles, animation, voice, and BGM settings without repeated prompts.
 - **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `data/projects/<slug>/voice_selection.json` (or `characters.json`) and inherited across all chapters.
-- **Gate 2 (Preview Approval)**: Optional preview verification; bypassed in batch runs (`--skip-preview`) to enable direct 1080p final render.
+- **Gate 2 (Preview Approval)**: Optional preview verification; bypassed via `--skip-preview` or in batch runs to enable direct final render. When bypassed, `chapter.json` explicitly records `human_review_status = "unreviewed"`. Never auto-marked as approved without actual human review.
 - **Batch Mode**: Multi-chapter sequential processing via `manga-recap batch` with chapter failure isolation and single-chapter retry (`--retry-chapter`).
 
 ### Stage 0: Series Configuration Gate (Configured ONCE per Series)
@@ -101,17 +102,26 @@ Before scripting any dialogue or narration:
 2. Read `data/projects/<project_slug>/story_summary.md`. Review world-building rules and prior chapter events.
 3. If new characters appear in the panels, register them in `characters.json` following `.agents/skills/manga-recap/rules/character_consistency.md`.
 
-### Stage 4: 1-Panel Storytelling & Direct Dialogue Scripting
-Chuyển đổi hoàn toàn từ "Tóm tắt (Summarize)" sang **"Kể chuyện & Lồng thoại (Storytelling & Direct Dialogue)"**:
-1. **Nguyên tắc 1 Panel $\leftrightarrow$ 1 Segment**: Mặc định mỗi panel tranh hoặc mỗi lượt thoại là 1 `ScriptSegment` độc lập. Điều này đảm bảo mỗi panel lưu lại trên màn hình từ **4 đến 8 giây** tự nhiên, giúp người xem kịp nhìn tranh và đọc phụ đề (chống tua nhanh).
-2. **Cấu trúc 4 thành phần khuyến nghị cho 1 Panel đầy đủ**:
+### Stage 4: Storytelling, Direct Dialogue & N:M Panel Mapping
+Chuyển đổi hoàn toàn từ "Tóm tắt (Summarize)" sang **"Kể chuyện & Lồng thoại (Storytelling & Direct Dialogue)"** với cơ chế **N:M Panel Mapping linh hoạt**:
+1. **Quy tắc N:M Panel Mapping & Ghép Cảnh Linh Hoạt**:
+   - **1:1 Mapping**: 1 segment tương ứng 1 panel chính (chuẩn nhịp kể chuyện kịch tính).
+   - **1:N Mapping (Multi-panel Segment)**: 1 segment tham chiếu nhiều panel trong danh sách `panel_ids` (ví dụ `["panel_002.jpg", "panel_003.jpg", "panel_004.jpg"]`) để thể hiện các đòn thế võ thuật liên hoàn, phản ứng đối thoại nhanh, hoặc các khung tranh bị cắt rãnh (gutter split).
+   - **N:1 Mapping (Tái sử dụng Panel)**: Nhiều segment liên tiếp có thể tái sử dụng cùng 1 panel (`panel_ids: ["panel_001.jpg"]`) khi cảnh đối thoại kéo dài, khi nhân vật độc thoại nội tâm sâu sắc, hoặc khi giữ khung cảnh đại cục.
+   - **Lược bỏ panel thứ yếu (Omit Non-Essential Panels)**: Các panel trong `manifest.json` thuần túy là phong cảnh tĩnh lặp lại, khoảng trắng vô nghĩa, hoặc trang bìa/quảng cáo có thể được lược bỏ khỏi `script.json` mà không gây lỗi validation.
+   - **MỆNH LỆNH BẮT BUỘC — Giữ trọn panel mang thông tin cốt lõi (Essential Story Panel Retention)**: Tất cả panel chứa thông tin quan trọng (tình tiết cốt truyện chính, lời thoại then chốt, biểu cảm mang tính bước ngoặt, đòn đánh hạ màn) **BẮT BUỘC phải được giữ lại và xuất hiện trong video**. Agent tuyệt đối không được bỏ qua các panel quan trọng này.
+2. **Kể chuyện trung thực (Faithful Storytelling) & Tự chủ nhận thức**:
+   - Agent phải trung thành với nguyên tác: **tuyệt đối không bịa đặt** tình tiết, cảnh giới, tên chiêu thức hay diễn biến không có trong tranh.
+   - Agent tự do lựa chọn phương thức đọc/OCR/VLM thích hợp nhất (trực quan trên contact sheet, phóng to panel crop, phân tích văn cảnh) mà không cần tạo hay dựa vào các thang điểm confidence/accuracy tự động hoặc LLM-as-judge.
+   - Khi gặp bong bóng thoại bị mờ, chữ bị cắt góc hoặc tình huống chưa rõ ràng: tuân thủ **Uncertainty Protocol**, đặt `status: "needs_review"` và gắn cờ `[CAN_XAC_MINH: <lý_do_chi_tiết>]` để người duyệt kiểm tra.
+3. **Cấu trúc 4 thành phần khuyến nghị cho kịch bản hấp dẫn**:
    - `[Bối cảnh / Trạng ngữ]`: Thời gian, không gian, địa điểm hoặc biến chuyển ngoại cảnh.
    - `[Chủ thể & Thần sắc]`: Miêu tả nhân vật, trang phục, ánh mắt, khí chất.
    - `[Hành động & Đòn thế]`: Động tác thể chất, biến chuyển khí tức, cảm xúc nội tâm.
    - `[Lời thoại trực tiếp]`: Đọc nguyên văn lời nói trong bóng thoại (dịch chuẩn tiếng Việt, xưng hô tôn ti trật tự).
-3. **Độ dài khuyến nghị (Script Length Guidance)**: Khoảng **50–250 ký tự** cho mỗi segment (khoảng 3–12 giây phát âm). Đây là gợi ý trong Prompt để cân đối nhịp thở cho TTS, không phải là điều kiện validate lỗi cứng.
-4. Checkpoint results incrementally into `script.json` after scripting.
-5. Strictly apply rules from:
+4. **Độ dài và nhịp thở khuyến nghị (Pacing Guidance)**: Khoảng **50–250 ký tự** cho mỗi segment (khoảng 3–12 giây phát âm, lưu hình 4–8s mỗi visual beat). Đây là gợi ý nhịp thở tự nhiên cho người xem và TTS, **không phải là điều kiện validate lỗi cứng**.
+5. Checkpoint results incrementally into `script.json` after scripting.
+6. Strictly apply rules from:
    - `.agents/skills/manga-recap/rules/narrative_recap.md`
    - `.agents/skills/manga-recap/rules/vision_ocr.md`
    - `.agents/skills/manga-recap/rules/character_consistency.md`
@@ -160,9 +170,28 @@ manga-recap render --project <project_slug> --chapter <chapter_num> --quality fi
 
 ### Stage 9: Human Review Gate 2 (Video Preview Verification)
 Verify output video stream using `ffprobe` and human inspection at Review Gate 2 (optional, bypassed via `--skip-preview` or batch mode):
-1. Verify video stream: 1280x720 (preview) or 1920x1080 (final), 30 fps, H.264 video, AAC audio.
-2. Check subtitle readability and audio-visual synchronization.
-3. Ensure no dialogue or faces are cut off by focus_box crops.
+1. **Interactive Inspection**: Check audio-visual synchronization, Ken Burns motion, subtitle readability, and BGM ducking on `video/preview.mp4` or `video/final.mp4`.
+2. **Review Status Semantics**:
+   - If preview is skipped (`--skip-preview` or batch mode): `technical_status = "completed"` is recorded, but `human_review_status` is strictly recorded as **`unreviewed`**. It is **NEVER** automatically marked as `approved`.
+   - If human reviewer accepts: set `human_review_status = "approved"` (recorded in `chapter.json` or `preview_approval.json`).
+   - If human reviewer requests edits: set `human_review_status = "changes_requested"` with specific notes citing `seq_id` and/or `panel_ids`.
+3. Ensure no dialogue or character faces are cut off by focus_box crops.
+
+### Stage 9b: Minimal Human Review Pack & Feedback Loop
+To provide the human reviewer with a clear, transparent, and actionable inspection tool without building a complex frontend UI, generate a static **Human Review Pack**:
+```bash
+manga-recap review-pack --project <project_slug> --chapter <chapter_num> [--format md|html|json] --json
+```
+- **Review Pack Components**:
+  1. **Visual Overview**: Direct links/paths to 4x4 contact sheets (`contact_sheets/sheet_*.jpg`).
+  2. **Script Alignment Table**: Complete map of `seq_id` $\rightarrow$ `panel_ids` $\rightarrow$ `character` $\rightarrow$ `narrator_text` $\rightarrow$ `camera_motion` $\rightarrow$ audio clip status.
+  3. **Omitted Panels Log**: Full catalogue of panels in `manifest.json` not referenced in `script.json` with classification and omission reason, allowing the reviewer to instantly verify that **no essential story panels were omitted**.
+  4. **Uncertainty & Needs Review Flags**: Highlight of any segment containing `[CAN_XAC_MINH: ...]` for targeted editorial decision.
+  5. **Preview Media Links**: Direct file paths to synthesized `.wav` clips, `.srt` subtitles, and `.mp4` video.
+- **Human Feedback & Incremental Invalidation Loop**:
+  - The reviewer submits targeted feedback (e.g., *"Segment 002: sửa lại câu thoại của Thạch đại phu"*, *"Panel panel_005.jpg chứa tình tiết quan trọng, cần thêm vào kịch bản"*).
+  - The agent edits only the affected segments in `script.json`.
+  - Re-running `manga-recap tts` and `manga-recap render` automatically utilizes audio clip caching: unchanged segments are preserved instantly, and only modified segments are re-synthesized.
 
 ### Stage 10: Multi-Chapter Compilation & Batch Mode
 Process multiple chapters in unattended batch mode or assemble into a master feature recap:

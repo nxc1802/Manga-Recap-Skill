@@ -17,6 +17,7 @@ from src.core.schemas import (
     CharacterDictionary,
     ChapterMetadata,
     CheckpointStatus,
+    HumanReviewStatus,
     PanelManifest,
     PanelStatus,
     ProjectConfig,
@@ -139,6 +140,18 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                 ch_data = read_json(chap_json_path)
                 chap_meta = ChapterMetadata.model_validate(ch_data)
                 check(True, f"chapter_{chap_num}/chapter.json", "Valid ChapterMetadata schema")
+
+                # Validate independent review statuses (technical_status vs human_review_status)
+                check(
+                    chap_meta.technical_status in list(CheckpointStatus),
+                    f"chapter_{chap_num}:technical_status",
+                    f"Invalid technical_status: {chap_meta.technical_status}",
+                )
+                check(
+                    chap_meta.human_review_status in list(HumanReviewStatus),
+                    f"chapter_{chap_num}:human_review_status",
+                    f"Invalid human_review_status: {chap_meta.human_review_status}",
+                )
             except (ValidationError, StorageCorruptError) as e:
                 check(False, f"chapter_{chap_num}/chapter.json", f"Invalid chapter.json schema: {e}")
         else:
@@ -149,6 +162,7 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
         manifest_panel_ids: set[str] = set()
         canonical_manifest_pids: set[str] = set()
         panel_lookup: Dict[str, str] = {}
+        panel_disk_paths: Dict[str, Path] = {}
         if manifest_path.exists():
             try:
                 m_data = read_json(manifest_path)
@@ -181,7 +195,12 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                     candidate2 = panels_dir / panel.panel_id
                     candidate3 = panels_dir / Path(panel.relative_path).name
                     candidate4 = panels_dir / panel.filename if getattr(panel, "filename", None) else candidate2
-                    found = candidate1.exists() or candidate2.exists() or candidate3.exists() or candidate4.exists()
+                    found = False
+                    for cand in (candidate1, candidate2, candidate3, candidate4):
+                        if cand.exists() and cand.stat().st_size > 0:
+                            found = True
+                            panel_disk_paths[panel.panel_id] = cand
+                            break
                     check(
                         found,
                         f"panel:{panel.panel_id}",
@@ -199,11 +218,17 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                 script_obj = RecapScript.model_validate(s_data)
                 check(True, f"chapter_{chap_num}/script.json", "Valid RecapScript schema")
 
-                # Check panel references, 100% coverage, no duplicates, and synthesized audio
-                covered_panel_ids: set[str] = set()
-                duplicate_panel_ids: set[str] = set()
-
+                # Validate N:M panel mapping, opaque seq_id, and synthesized audio
+                panels_dir = chap_dir / "panels"
                 for seg in script_obj.segments:
+                    # Validate opaque seq_id (e.g. '001', '002_1', 'scene_01')
+                    check(
+                        bool(seg.seq_id and str(seg.seq_id).strip()),
+                        f"segment:{seg.seq_id}:seq_id",
+                        "Segment seq_id must be a non-empty string",
+                    )
+
+                    # Fail-fast: check panel references in manifest and on disk when manifest is present
                     if manifest_panel_ids:
                         for pid in seg.panel_ids:
                             canon_pid = (
@@ -217,16 +242,28 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                                     f"segment:{seg.seq_id}:panel:{pid}",
                                     f"Segment references panel '{pid}' not in manifest.json",
                                 )
-                            else:
-                                if canon_pid in covered_panel_ids:
-                                    duplicate_panel_ids.add(canon_pid)
-                                    check(
-                                        False,
-                                        f"segment:{seg.seq_id}:duplicate_panel:{canon_pid}",
-                                        f"Panel '{canon_pid}' is referenced multiple times across script segments",
-                                    )
-                                else:
-                                    covered_panel_ids.add(canon_pid)
+
+                            # Verify physical existence on disk (fail-fast)
+                            disk_found = False
+                            if canon_pid and canon_pid in panel_disk_paths:
+                                disk_p = panel_disk_paths[canon_pid]
+                                if disk_p.exists() and disk_p.stat().st_size > 0:
+                                    disk_found = True
+                            if not disk_found:
+                                for candidate in [
+                                    panels_dir / pid,
+                                    panels_dir / Path(pid).name,
+                                    chap_dir / pid,
+                                    panels_dir / f"{pid}.jpg",
+                                ]:
+                                    if candidate.exists() and candidate.stat().st_size > 0:
+                                        disk_found = True
+                                        break
+                            check(
+                                disk_found,
+                                f"segment:{seg.seq_id}:panel_disk:{pid}",
+                                f"Referenced panel image for segment '{seg.seq_id}' not found on disk: {pid}",
+                            )
 
                     if seg.status == "synthesized" and seg.audio_path:
                         audio_file = Path(seg.audio_path)
@@ -269,15 +306,6 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                                             f"segment:{seg.seq_id}:audio_duration",
                                             f"Failed to inspect duration for {audio_file}: {err}",
                                         )
-
-                if canonical_manifest_pids:
-                    missing_pids = canonical_manifest_pids - covered_panel_ids
-                    if missing_pids:
-                        check(
-                            False,
-                            f"chapter_{chap_num}:panel_coverage",
-                            f"Script segments do not cover all active manifest panels. Missing panels: {sorted(list(missing_pids))}",
-                        )
 
                 if check_pacing:
                     from src.core.pacing import estimate_script_duration_seconds

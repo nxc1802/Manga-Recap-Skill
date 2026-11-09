@@ -22,6 +22,10 @@ Recap videos are NOT raw literal translations. They are **dramatic narratives** 
    - If `VoiceStrategy.NARRATOR_AND_CHARACTERS`:
      - Third-person narration has `character: null`.
      - Direct character lines have `character: "<Canonical Name>"` and use the character's designated `voice_id`.
+4. **N:M Panel Mapping & Essential Panel Retention:**
+   - A segment may map to 1 panel, multiple panels (`panel_ids: ["panel_002.jpg", "panel_003.jpg"]`), or reuse panels across segments.
+   - Non-essential filler panels in `manifest.json` may be omitted from `script.json`.
+   - **MANDATORY**: Every panel containing key story revelations, core dialogues, or decisive combat actions MUST be retained and referenced in the video.
 
 ## 3. Directing Camera Movements & Visual Cues
 Every segment must specify cinematic visual direction:
@@ -40,7 +44,9 @@ Every segment must specify cinematic visual direction:
   - `[thở dài]` — for exhaustion, despair, deep contemplation.
   - `[hắng giọng]` — for commanding attention or breaking silence.
 
-## 5. Anti-Hallucination Guardrails
+## 5. Faithful Storytelling & Anti-Hallucination Guardrails
 - NEVER invent events, power levels, or character names not grounded in the manga panels.
+- **Faithful Storytelling**: Diligently follow the original comic storyline; do not fabricate filler events or imaginary lore.
+- **Zero Automated Quality Benchmarks**: Storytelling quality, nuance, and character voice authenticity are evaluated exclusively through human review. The agent freely selects its OCR/VLM approach without artificial automated scoring or confidence gating.
 - If a panel is an advertisement or credit slide, skip it.
-- If an event is ambiguous, narrate the mystery rather than inventing a false fact (*"Thân phận thực sự của kẻ bí ẩn này vẫn còn là một dấu hỏi lớn..."*).
+- If an event is ambiguous or speech bubble is obscured, apply the **Uncertainty Protocol**: flag `status: "needs_review"` and prepend `[CAN_XAC_MINH: <lý_do_chi_tiết>]` to `narrator_text` or `notes`.

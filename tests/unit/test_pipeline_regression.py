@@ -496,7 +496,7 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
         assert code == ExitCode.SUCCESS
 
     def test_sliding_window_validation_rejects_missing_panel(self, tmp_path, monkeypatch, capsys):
-        """Verifies that omitting even a single panel from a 7-panel chapter fails validation."""
+        """Verifies that omitting a non-essential panel succeeds under Gate 0, but missing referenced panel fails fast."""
         slug = "p_win_missing"
         proj_dir, chap_dir = setup_test_project_and_chapter(tmp_path, monkeypatch, slug, "1")
 
@@ -524,7 +524,7 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
             )
         atomic_write_json(chap_dir / "manifest.json", PanelManifest(project_slug=slug, chapter_number="1", panels=manifest_panels).model_dump())
 
-        # Omit panel_003
+        # Omit panel_003 (allowed under Gate 0 N:M contract)
         segments = [
             ScriptSegment(seq_id="s1", panel_ids=["panel_000", "panel_001", "panel_002"], narrator_text="B1", voice_id="Trúc Ly"),
             ScriptSegment(seq_id="s2", panel_ids=["panel_004", "panel_005", "panel_006"], narrator_text="B2", voice_id="Trúc Ly"),
@@ -532,15 +532,23 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
         atomic_write_json(chap_dir / "script.json", RecapScript(project_slug=slug, chapter_number="1", title="T", segments=segments).model_dump())
 
         code = main(["validate", "--project", slug, "--chapter", "1", "--json"])
+        assert code == ExitCode.SUCCESS
+        capsys.readouterr()
+
+        # But referencing a panel that does not exist in manifest/disk fails fast
+        segments.append(
+            ScriptSegment(seq_id="s3", panel_ids=["panel_999"], narrator_text="B3", voice_id="Trúc Ly")
+        )
+        atomic_write_json(chap_dir / "script.json", RecapScript(project_slug=slug, chapter_number="1", title="T", segments=segments).model_dump())
+        code = main(["validate", "--project", slug, "--chapter", "1", "--json"])
         assert code == ExitCode.VALIDATION_ERROR
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         err_str = str(data.get("data", {}).get("errors", []))
-        assert "panel_003" in err_str
-        assert "Missing panels" in err_str
+        assert "panel_999" in err_str
 
     def test_sliding_window_validation_rejects_duplicate_panel(self, tmp_path, monkeypatch, capsys):
-        """Verifies that referencing the same panel in multiple segments fails validation."""
+        """Verifies that referencing the same panel in multiple segments succeeds under Gate 0 N:M contract."""
         slug = "p_win_dup"
         proj_dir, chap_dir = setup_test_project_and_chapter(tmp_path, monkeypatch, slug, "1")
 
@@ -568,7 +576,7 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
             )
         atomic_write_json(chap_dir / "manifest.json", PanelManifest(project_slug=slug, chapter_number="1", panels=manifest_panels).model_dump())
 
-        # Duplicate panel_001 in both s1 and s2
+        # Duplicate panel_001 in both s1 and s2 (allowed under Gate 0 N:M contract)
         segments = [
             ScriptSegment(seq_id="s1", panel_ids=["panel_000", "panel_001"], narrator_text="B1", voice_id="Trúc Ly"),
             ScriptSegment(seq_id="s2", panel_ids=["panel_001", "panel_002", "panel_003"], narrator_text="B2", voice_id="Trúc Ly"),
@@ -576,12 +584,7 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
         atomic_write_json(chap_dir / "script.json", RecapScript(project_slug=slug, chapter_number="1", title="T", segments=segments).model_dump())
 
         code = main(["validate", "--project", slug, "--chapter", "1", "--json"])
-        assert code == ExitCode.VALIDATION_ERROR
-        captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        err_str = str(data.get("data", {}).get("errors", []))
-        assert "panel_001" in err_str
-        assert "referenced multiple times" in err_str
+        assert code == ExitCode.SUCCESS
 
 
 # ==============================================================================

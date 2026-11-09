@@ -126,6 +126,13 @@ class VoiceStrategy(str, Enum):
     NARRATOR_AND_CHARACTERS = "narrator_and_characters"# Backward-compatible alias (maps to single_narrator)
 
 
+class HumanReviewStatus(str, Enum):
+    """Classification of human review gate status for chapters."""
+    UNREVIEWED = "unreviewed"
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+
+
 # ==============================================================================
 # 2. Geometric & Sub-models
 # ==============================================================================
@@ -381,9 +388,25 @@ class ChapterMetadata(BaseModel):
     updated_at: str = Field(default_factory=utc_iso_now)
     current_stage: StageType = StageType.CRAWL
     overall_status: CheckpointStatus = CheckpointStatus.PENDING
+    technical_status: CheckpointStatus = CheckpointStatus.PENDING
+    human_review_status: HumanReviewStatus = HumanReviewStatus.UNREVIEWED
     stages: Dict[StageType, StageCheckpoint] = Field(default_factory=default_stages_factory)
     stats: ChapterStats = Field(default_factory=ChapterStats)
     schema_version: str = "3.0.0"
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_review_and_technical_status(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+        if "technical_status" not in d and "overall_status" in d:
+            d["technical_status"] = d["overall_status"]
+        elif "overall_status" not in d and "technical_status" in d:
+            d["overall_status"] = d["technical_status"]
+        if "human_review_status" not in d:
+            d["human_review_status"] = HumanReviewStatus.UNREVIEWED
+        return d
 
     @property
     def checkpoints(self) -> Dict[StageType, StageCheckpoint]:
@@ -435,9 +458,9 @@ class RecapScript(BaseModel):
     """Schema for data/projects/<project_slug>/chapters/<chapter_num>/script.json."""
     model_config = ConfigDict(extra="ignore")
 
-    project_slug: str
-    chapter_number: str
-    title: str
+    project_slug: str = Field(default="")
+    chapter_number: str = Field(default="1")
+    title: str = Field(default="Untitled Chapter")
     voice_strategy: VoiceStrategy = VoiceStrategy.SINGLE_NARRATOR
     default_voice: str = "Ngọc Huyền"
     segments: List[ScriptSegment] = Field(default_factory=list)

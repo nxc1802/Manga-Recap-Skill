@@ -1,0 +1,44 @@
+{
+  "project_slug": "synthetic_fixture",
+  "characters": {
+    "Ghislain Perdium": {
+      "canonical_name": "Ghislain Perdium",
+      "aliases": [
+        "Ghislain",
+        "Đại Kiếm Sĩ"
+      ],
+      "role": "protagonist",
+      "gender": "male",
+      "description": "Nhân vật chính, người sống lại sau thất bại.",
+      "core_features": "Tóc đen, mắt sắc bén, kiếm dài sau lưng.",
+      "current_outfit": "Chiến bào đen bạc",
+      "assigned_voice": "Nam An",
+      "voice_settings": {
+        "speed": 1.15
+      },
+      "first_appearance": "1",
+      "image_crops": [],
+      "notes": "Nhân vật chính mang chất giọng hào sảng, kịch tính."
+    },
+    "Narrator": {
+      "canonical_name": "Narrator",
+      "aliases": [
+        "Người kể chuyện"
+      ],
+      "role": "supporting",
+      "gender": "female",
+      "description": "Giọng dẫn truyện truyền cảm, linh hoạt cảm xúc.",
+      "core_features": "Vô hình",
+      "current_outfit": "N/A",
+      "assigned_voice": "Ngọc Huyền",
+      "voice_settings": {
+        "speed": 1.0
+      },
+      "first_appearance": "1",
+      "image_crops": [],
+      "notes": "Dẫn chuyện mặc định."
+    }
+  },
+  "updated_at": "2026-11-08T20:00:00Z",
+  "schema_version": "3.0.0"
+}

@@ -1,0 +1,14 @@
+{
+  "schema_version": "3.0.0",
+  "project_slug": "synthetic_fixture",
+  "voice_strategy": "single_narrator",
+  "primary_voice": "Ngọc Huyền",
+  "speed": 1.0,
+  "reviewer": "A0_Integration_Architect",
+  "approved_at": "2026-11-08T20:00:00Z",
+  "status": "approved",
+  "notes": "Approved for canonical synthetic test fixture with secondary character voice mapping.",
+  "character_voice_mapping": {
+    "Ghislain Perdium": "Nam An"
+  }
+}

@@ -20,7 +20,7 @@ from src.cli.compile_cmd import handle_compile
 from src.cli.render_cmd import handle_render
 from src.cli.tts_cmd import handle_tts
 from src.core.logger import logger
-from src.core.schemas import utc_iso_now
+from src.core.schemas import RecapScript, utc_iso_now
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
@@ -28,6 +28,7 @@ from src.core.storage import (
     get_chapter_dir,
     get_output_dir,
     get_project_dir,
+    read_json,
     stage_chapter_export,
 )
 from src.core.utils import get_project_data_dir
@@ -116,6 +117,56 @@ class SingleSessionProductionRunner:
         self.manifest.audit_secrets()
         self.manifest.save(self.job_file_path)
 
+    def _is_chapter_audio_complete(self, chapter_num: Union[str, int]) -> bool:
+        """Checks if all segments in script.json already have valid audio clips on disk."""
+        chap_dir = get_chapter_dir(self.manifest.project_slug, str(chapter_num))
+        if not chap_dir.exists():
+            fallback = self.project_dir / "chapters" / str(chapter_num)
+            if fallback.exists():
+                chap_dir = fallback
+            else:
+                return False
+        script_file = chap_dir / "script.json"
+        if not script_file.exists():
+            return False
+        try:
+            data = read_json(script_file)
+            script = RecapScript.model_validate(data)
+            if not script.segments:
+                return False
+            for seg in script.segments:
+                wav_p = None
+                if seg.audio_path:
+                    cand = Path(seg.audio_path)
+                    if not cand.is_absolute():
+                        cand = chap_dir / cand
+                    if cand.exists() and cand.stat().st_size > 44:
+                        wav_p = cand
+                if not wav_p:
+                    cand = chap_dir / "audio" / "clips" / f"audio_{chapter_num}_{seg.seq_id}.wav"
+                    if cand.exists() and cand.stat().st_size > 44:
+                        wav_p = cand
+                if not wav_p:
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _is_chapter_render_complete(self, chapter_num: Union[str, int]) -> bool:
+        """Checks if final MP4 video already exists on disk."""
+        chap_dir = get_chapter_dir(self.manifest.project_slug, str(chapter_num))
+        if not chap_dir.exists():
+            fallback = self.project_dir / "chapters" / str(chapter_num)
+            if fallback.exists():
+                chap_dir = fallback
+            else:
+                return False
+        final_mp4 = chap_dir / "video" / "final.mp4"
+        if final_mp4.exists() and final_mp4.stat().st_size > 1000:
+            return True
+        staged_mp4 = get_output_dir(self.manifest.project_slug) / format_chapter_filename(chapter_num)
+        return bool(staged_mp4.exists() and staged_mp4.stat().st_size > 1000)
+
     def run(self) -> ProductionJobManifest:
         """
         Executes the 4-stage cloud production pipeline:
@@ -144,6 +195,16 @@ class SingleSessionProductionRunner:
         self.manifest.telemetry.encoder_status_message = enc_msg
         logger.info(f"Resolved Video Encoder: {resolved_enc} ({enc_msg})")
         self._save_checkpoint()
+
+        # Check existing audio artifacts before triggering TTS stage
+        if not cfg.force:
+            for chap_num in cfg.target_chapters:
+                c_prog = self.manifest.chapters.get(str(chap_num))
+                if c_prog and c_prog.tts_status != ProductionStageStatus.COMPLETED:
+                    if self._is_chapter_audio_complete(chap_num):
+                        c_prog.tts_status = ProductionStageStatus.COMPLETED
+                        logger.info(f"[TTS] Chapter {chap_num} audio clips already exist on disk. Reusing audio cache.")
+            self._save_checkpoint()
 
         # =====================================================================
         # Stage 1: Batch TTS with Persistent Singleton Engine
@@ -212,6 +273,16 @@ class SingleSessionProductionRunner:
             self._save_checkpoint()
         else:
             logger.info("--- [Stage 1/4] Batch TTS already completed for all chapters. Skipping. ---")
+
+        # Check existing render artifacts before triggering Render stage
+        if not cfg.force:
+            for chap_num in cfg.target_chapters:
+                c_prog = self.manifest.chapters.get(str(chap_num))
+                if c_prog and c_prog.render_status != ProductionStageStatus.COMPLETED:
+                    if self._is_chapter_render_complete(chap_num):
+                        c_prog.render_status = ProductionStageStatus.COMPLETED
+                        logger.info(f"[Render] Chapter {chap_num} final video already exists on disk. Reusing render cache.")
+            self._save_checkpoint()
 
         # =====================================================================
         # Stage 2: Batch Render with Verified Encoder & Clip Cache

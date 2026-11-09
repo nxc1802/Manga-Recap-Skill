@@ -1,0 +1,33 @@
+{
+  "num_segments": 20,
+  "video_duration_seconds": 60.0,
+  "unoptimized_elapsed_seconds": 28.121,
+  "optimized_elapsed_seconds": 9.031,
+  "unoptimized_avg_clip_seconds": 1.406,
+  "optimized_avg_clip_seconds": 0.452,
+  "speedup_ratio": 3.11,
+  "time_reduction_percent": 67.9,
+  "validation": {
+    "valid": true,
+    "file_path": "/private/tmp/render_benchmark/optimized/clip_opt_000.mp4",
+    "format": "mov,mp4,m4a,3gp,3g2,mj2",
+    "duration_seconds": 3.0,
+    "total_duration_seconds": 3.0,
+    "duration_diff_seconds": 0.0,
+    "stream_duration_delta_seconds": 0.0,
+    "video": {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "fps": 30.0,
+      "duration": 3.0
+    },
+    "audio": {
+      "codec": "aac",
+      "sample_rate": 48000,
+      "channels": 1,
+      "duration": 3.0
+    },
+    "errors": []
+  }
+}

@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 from typing import Dict, List, Optional, Tuple
 
 from src.core.logger import logger
 
-SUPPORTED_ENCODERS: List[str] = ["auto", "libx264", "h264_nvenc", "h264_videotoolbox"]
+SUPPORTED_ENCODERS: List[str] = ["auto", "libx264", "h264_nvenc", "h264_videotoolbox", "nvenc", "videotoolbox"]
 
 
 def probe_available_encoders() -> List[str]:
@@ -79,19 +80,19 @@ def get_encoder_codec_args(encoder: str, preset: str = "medium", crf: str = "23"
     """
     Returns verified FFmpeg CLI flags for the resolved encoder.
     """
-    enc = encoder.strip().lower()
-    if enc == "h264_nvenc":
+    enc = (encoder or "libx264").strip().lower()
+    if enc in ("h264_nvenc", "nvenc"):
         return [
             "-c:v",
             "h264_nvenc",
             "-preset",
             "p4",
             "-cq",
-            "23",
+            str(crf),
             "-b:v",
             "4500k",
         ]
-    elif enc == "h264_videotoolbox":
+    elif enc in ("h264_videotoolbox", "videotoolbox"):
         return [
             "-c:v",
             "h264_videotoolbox",
@@ -108,7 +109,7 @@ def get_encoder_codec_args(encoder: str, preset: str = "medium", crf: str = "23"
             "-preset",
             preset,
             "-crf",
-            crf,
+            str(crf),
         ]
 
 
@@ -189,4 +190,24 @@ def resolve_encoder(
     Returns: (resolved_encoder_name, codec_args_list, status_message)
     """
     return resolve_video_encoder(requested=requested_encoder, preset=preset, crf=crf)
+
+
+_videotoolbox_lock = threading.Lock()
+
+
+def get_hardware_encoder_lock() -> threading.Lock:
+    """Returns the shared mutex for serializing Apple VideoToolbox encoding calls."""
+    return _videotoolbox_lock
+
+
+def is_hardware_encoder(encoder: Optional[str]) -> bool:
+    """Returns True if the specified encoder name refers to a hardware accelerator."""
+    if not encoder:
+        return False
+    return encoder.strip().lower() in ("h264_nvenc", "h264_videotoolbox", "nvenc", "videotoolbox")
+
+
+def get_fallback_encoder(encoder: Optional[str] = None) -> str:
+    """Returns safe fallback software encoder (libx264)."""
+    return "libx264"
 

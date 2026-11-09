@@ -1,0 +1,106 @@
+{
+  "project_slug": "synthetic_fixture",
+  "chapter_number": "1",
+  "title": "Synthetic Fixture Chapter 1",
+  "voice_strategy": "single_narrator",
+  "default_voice": "Ngọc Huyền",
+  "segments": [
+    {
+      "seq_id": "001",
+      "panel_ids": [
+        "panel_001.jpg"
+      ],
+      "narrator_text": "Trong bóng đêm mịt mùng, tiếng sấm rền vang khắp sơn cốc Tấn Dương.",
+      "character": null,
+      "emotion": "neutral",
+      "emotion_cue": null,
+      "voice_id": "Ngọc Huyền",
+      "synthesized_voice": "Ngọc Huyền",
+      "voice_source": "manual",
+      "camera_motion": "static",
+      "focus_box": {
+        "x_min": 0.1,
+        "y_min": 0.1,
+        "x_max": 0.9,
+        "y_max": 0.9
+      },
+      "duration": 3.5,
+      "audio_path": "audio/clips/audio_1_001.wav",
+      "checksum": "4c7195411edf2b0bb60819b1be53eac9f091bef45cc3b7b99031bbb41ca83b92",
+      "fingerprint": "fp_synth_001",
+      "status": "synthesized"
+    },
+    {
+      "seq_id": "002_1",
+      "panel_ids": [
+        "panel_002.jpg",
+        "panel_003.jpg",
+        "panel_004.jpg"
+      ],
+      "narrator_text": "Ghislain Perdium nắm chặt thanh kiếm, ánh mắt rực lửa sát khí: Ta tuyệt đối không lùi bước!",
+      "character": "Ghislain Perdium",
+      "emotion": "dramatic",
+      "emotion_cue": "[hắng giọng]",
+      "voice_id": "Nam An",
+      "synthesized_voice": "Nam An",
+      "voice_source": "manual",
+      "camera_motion": "zoom_in",
+      "focus_box": {
+        "x_min": 0.15,
+        "y_min": 0.15,
+        "x_max": 0.85,
+        "y_max": 0.85
+      },
+      "duration": 5.2,
+      "audio_path": "audio/clips/audio_1_002_1.wav",
+      "checksum": "550c2df52d7f5cafc600843cdbd3ab85152988b98e4a49b26a7f47f19132e705",
+      "fingerprint": "fp_synth_002_1",
+      "status": "synthesized"
+    },
+    {
+      "seq_id": "003",
+      "panel_ids": [
+        "panel_001.jpg"
+      ],
+      "narrator_text": "Hắn thở dài nhìn về phía chân trời xa xăm, nơi bóng tối đang dần nuốt chửng ánh sáng cuối cùng.",
+      "character": null,
+      "emotion": "sad",
+      "emotion_cue": "[thở dài]",
+      "voice_id": "Ngọc Huyền",
+      "synthesized_voice": "Ngọc Huyền",
+      "voice_source": "manual",
+      "camera_motion": "static_focus",
+      "focus_box": {
+        "x_min": 0.1,
+        "y_min": 0.1,
+        "x_max": 0.9,
+        "y_max": 0.9
+      },
+      "duration": 4.0,
+      "audio_path": "audio/clips/audio_1_003.wav",
+      "checksum": "c2424e3bb66a317bafc94495d753cee05014dc06bb6f14b2a62a8aebf1a5892f",
+      "fingerprint": "fp_synth_003",
+      "status": "synthesized"
+    },
+    {
+      "seq_id": "004_missing_test",
+      "panel_ids": [
+        "panel_missing_999.jpg"
+      ],
+      "narrator_text": "Khung cảnh này tham chiếu một panel hoàn toàn không tồn tại trên đĩa để kiểm thử fail-fast.",
+      "character": null,
+      "emotion": "neutral",
+      "emotion_cue": null,
+      "voice_id": "Ngọc Huyền",
+      "camera_motion": "static",
+      "duration": 3.0,
+      "audio_path": "audio/clips/audio_1_004.wav",
+      "status": "pending"
+    }
+  ],
+  "total_duration_seconds": 12.7,
+  "metadata": {
+    "test_notes": "Adversarial fixture: contains missing panel_missing_999.jpg for fail-fast validation"
+  },
+  "schema_version": "3.0.0"
+}

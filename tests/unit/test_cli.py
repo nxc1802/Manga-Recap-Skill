@@ -816,3 +816,121 @@ class TestSubcommandImplementations:
         captured = capsys.readouterr()
         assert "not recognized in official catalog" in captured.out
 
+
+class TestContractAlignment:
+    """Verifies Phase 2 contract alignment: N:M mapping, render/TTS decoupling, and review gate semantics."""
+
+    def test_validate_allows_nm_mapping_and_omissions(self, tmp_path, capsys, monkeypatch):
+        """Verifies that validate allows panel reuse across segments and omitted panels in manifest."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        slug = "nm_proj"
+        init_project_layout(slug, "NM Project")
+        chap_dir = init_chapter_layout(slug, "1")
+
+        # Create panels on disk
+        panels_dir = chap_dir / "panels"
+        (panels_dir / "p1.jpg").write_bytes(b"img1")
+        (panels_dir / "p2.jpg").write_bytes(b"img2")
+        (panels_dir / "p_omitted.jpg").write_bytes(b"img3")
+
+        # Manifest with 3 panels
+        manifest_data = {
+            "project_slug": slug,
+            "chapter_number": "1",
+            "panels": [
+                {"panel_id": "p1", "sequence_number": 1, "filename": "p1.jpg", "relative_path": "panels/p1.jpg", "source_image": "page_001.jpg", "crop_box": [0, 0, 10, 10], "width": 10, "height": 10, "aspect_ratio": 1.0, "sha256": "h1"},
+                {"panel_id": "p2", "sequence_number": 2, "filename": "p2.jpg", "relative_path": "panels/p2.jpg", "source_image": "page_001.jpg", "crop_box": [0, 0, 10, 10], "width": 10, "height": 10, "aspect_ratio": 1.0, "sha256": "h2"},
+                {"panel_id": "p_omitted", "sequence_number": 3, "filename": "p_omitted.jpg", "relative_path": "panels/p_omitted.jpg", "source_image": "page_001.jpg", "crop_box": [0, 0, 10, 10], "width": 10, "height": 10, "aspect_ratio": 1.0, "sha256": "h3"},
+            ]
+        }
+        (chap_dir / "manifest.json").write_text(json.dumps(manifest_data), encoding="utf-8")
+
+        # Script reuses p1 in both s1 and s2, uses p2 in s2, and omits p_omitted completely
+        script_data = {
+            "project_slug": slug,
+            "chapter_number": "1",
+            "title": "NM Chapter",
+            "segments": [
+                {"seq_id": "001_1", "panel_ids": ["p1"], "narrator_text": "Phân cảnh đầu."},
+                {"seq_id": "001_2", "panel_ids": ["p1", "p2"], "narrator_text": "Phân cảnh tiếp nối tái sử dụng p1."},
+            ]
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        code = main(["validate", "-p", slug, "-c", "1", "--json"])
+        assert code == ExitCode.SUCCESS
+
+    def test_render_prioritizes_existing_audio_without_tts(self, tmp_path, capsys, monkeypatch):
+        """Verifies that render uses existing audio clips in audio/clips/ without invoking TTS."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        slug = "audio_reuse_proj"
+        init_project_layout(slug, "Audio Reuse Proj")
+        chap_dir = init_chapter_layout(slug, "1")
+
+        # Script with 1 segment
+        script_data = {
+            "project_slug": slug,
+            "chapter_number": "1",
+            "title": "Audio Reuse Chapter",
+            "segments": [
+                {"seq_id": "seg_01", "panel_ids": ["p1.jpg"], "narrator_text": "Lời kể có sẵn audio."}
+            ]
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        # Pre-create valid WAV audio clip (> 44 bytes)
+        clips_dir = chap_dir / "audio" / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        wav_file = clips_dir / "audio_1_seg_01.wav"
+        wav_file.write_bytes(b"RIFF" + b"\x00" * 100)
+
+        with patch("src.cli.tts_cmd.handle_tts") as mock_tts, \
+             patch("src.cli.render_cmd.VideoEngine") as mock_engine:
+            mock_inst = mock_engine.return_value
+            mock_inst.render_chapter.return_value = {
+                "video_path": str(chap_dir / "video" / "test.mp4"),
+                "subtitle_path": str(chap_dir / "subtitles" / "test.srt"),
+            }
+            code = main(["render", "-p", slug, "-c", "1", "--skip-preview", "--approved", "--json"])
+            assert code == ExitCode.SUCCESS
+            # Verify TTS was NOT called because audio clip already existed
+            mock_tts.assert_not_called()
+
+    def test_render_skip_preview_sets_unreviewed_status(self, tmp_path, capsys, monkeypatch):
+        """Verifies that render with --skip-preview records human_review_status as unreviewed."""
+        from src.core.schemas import HumanReviewStatus, CheckpointStatus
+        from src.core.storage import load_chapter_metadata
+
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
+        slug = "review_gate_proj"
+        init_project_layout(slug, "Review Gate Proj")
+        chap_dir = init_chapter_layout(slug, "1")
+
+        script_data = {
+            "project_slug": slug,
+            "chapter_number": "1",
+            "title": "Gate Test Chapter",
+            "segments": [
+                {"seq_id": "01", "panel_ids": ["p1.jpg"], "narrator_text": "Review gate check."}
+            ]
+        }
+        (chap_dir / "script.json").write_text(json.dumps(script_data), encoding="utf-8")
+
+        clips_dir = chap_dir / "audio" / "clips"
+        clips_dir.mkdir(parents=True, exist_ok=True)
+        (clips_dir / "audio_1_01.wav").write_bytes(b"RIFF" + b"\x00" * 100)
+
+        with patch("src.cli.render_cmd.VideoEngine") as mock_engine:
+            mock_inst = mock_engine.return_value
+            mock_inst.render_chapter.return_value = {
+                "video_path": str(chap_dir / "video" / "preview.mp4"),
+                "subtitle_path": str(chap_dir / "subtitles" / "preview.srt"),
+            }
+            code = main(["render", "-p", slug, "-c", "1", "--skip-preview", "--approved", "--json"])
+            assert code == ExitCode.SUCCESS
+
+        meta = load_chapter_metadata(chap_dir)
+        assert meta.technical_status == CheckpointStatus.COMPLETED
+        assert meta.human_review_status == HumanReviewStatus.UNREVIEWED
+
+

@@ -15,6 +15,7 @@ from src.core.schemas import (
     CharacterProfile,
     CharacterRole,
     FocusBox,
+    HumanReviewStatus,
     PanelItem,
     PanelManifest,
     PanelStatus,
@@ -102,6 +103,28 @@ class TestChapterMetadata:
         assert meta.stats.total_panels == 0
         assert meta.stats.total_audio_duration_seconds == 0.0
 
+    def test_independent_review_statuses_and_defaults(self):
+        meta = ChapterMetadata(
+            chapter_id="c_01",
+            chapter_number="1",
+            project_slug="test_slug",
+            title="Chapter 1",
+            overall_status=CheckpointStatus.COMPLETED,
+        )
+        assert meta.technical_status == CheckpointStatus.COMPLETED
+        assert meta.human_review_status == HumanReviewStatus.UNREVIEWED
+
+        meta_reviewed = ChapterMetadata(
+            chapter_id="c_02",
+            chapter_number="2",
+            project_slug="test_slug",
+            title="Chapter 2",
+            technical_status=CheckpointStatus.COMPLETED,
+            human_review_status=HumanReviewStatus.APPROVED,
+        )
+        assert meta_reviewed.technical_status == CheckpointStatus.COMPLETED
+        assert meta_reviewed.human_review_status == HumanReviewStatus.APPROVED
+
 
 class TestRecapScript:
     def test_script_segment_validation(self):
@@ -114,6 +137,18 @@ class TestRecapScript:
         )
         assert seg.seq_id == "001"
         assert seg.camera_motion == CameraMotionType.PAN_LEFT
+
+    def test_opaque_string_seq_id_support(self):
+        seg1 = ScriptSegment(seq_id="002_1", panel_ids=["panel_001.jpg"], narrator_text="Phần 1")
+        seg2 = ScriptSegment(seq_id="scene_climax", panel_ids=["panel_001.jpg"], narrator_text="Cao trào")
+        script = RecapScript(
+            project_slug="test_slug",
+            chapter_number="1",
+            title="Opaque Seq ID Test",
+            segments=[seg1, seg2]
+        )
+        assert script.segments[0].seq_id == "002_1"
+        assert script.segments[1].seq_id == "scene_climax"
 
     def test_legacy_dict_conversion(self):
         legacy = {

@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from src.core.schemas import (
     ChapterMetadata,
     CheckpointStatus,
+    HumanReviewStatus,
     Manifest,
     OPERATIONAL_STAGES,
     PanelManifest,
@@ -519,7 +520,8 @@ def update_checkpoint(
     status: Union[str, CheckpointStatus],
     error: Optional[str] = None,
     artifacts: Optional[List[str]] = None,
-    checksums: Optional[Dict[str, str]] = None
+    checksums: Optional[Dict[str, str]] = None,
+    human_review_status: Optional[Union[str, HumanReviewStatus]] = None,
 ) -> ChapterMetadata:
     """
     Thread- and process-safe atomic update to chapter.json checkpoints.
@@ -582,6 +584,13 @@ def update_checkpoint(
             stage_cp.error_message = error
             meta.overall_status = CheckpointStatus.NEEDS_REVIEW
 
+        meta.technical_status = meta.overall_status
+        if human_review_status is not None:
+            meta.human_review_status = (
+                HumanReviewStatus(human_review_status)
+                if isinstance(human_review_status, str)
+                else human_review_status
+            )
         meta.updated_at = now_str
 
         # Commit update

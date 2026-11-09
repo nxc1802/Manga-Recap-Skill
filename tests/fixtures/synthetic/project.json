@@ -1,0 +1,47 @@
+{
+  "project_id": "synthetic_fixture_proj",
+  "slug": "synthetic_fixture",
+  "title": "Synthetic Contract Fixture Series",
+  "description": "Enterprise canonical synthetic test fixture for Phase 0 contract freeze",
+  "source_url": "https://example.com/synthetic",
+  "language": "vi",
+  "created_at": "2026-11-08T20:00:00Z",
+  "updated_at": "2026-11-08T20:00:00Z",
+  "render_settings": {
+    "target_width": 1920,
+    "target_height": 1080,
+    "fps": 30,
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "crf": 20,
+    "preset": "medium",
+    "burn_subtitles": true,
+    "video_mode": "auto",
+    "render_pan_mode": "static",
+    "subtitle": {
+      "max_lines": 2,
+      "font_size": 26,
+      "chunking": "sentence-aware",
+      "max_chars_per_line": 42
+    }
+  },
+  "audio_settings": {
+    "default_voice": "Ngọc Huyền",
+    "default_speed": 1.0,
+    "sample_rate": 48000,
+    "bgm_path": null,
+    "bgm_volume": 0.15,
+    "voice_volume": 1.0,
+    "ducking_factor": 0.3
+  },
+  "script_pacing": {
+    "mode": "balanced",
+    "tolerance": 0.2,
+    "preserve_important_dialogue": true,
+    "adaptive_scene_density": true
+  },
+  "chapters": [
+    "1"
+  ],
+  "schema_version": "3.0.0"
+}

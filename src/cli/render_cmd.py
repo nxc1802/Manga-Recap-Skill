@@ -13,7 +13,7 @@ from typing import Any, Dict
 
 from src.cli.exit_codes import CliValidationError
 from src.core.logger import logger
-from src.core.schemas import CheckpointStatus, StageType, utc_iso_now
+from src.core.schemas import CheckpointStatus, HumanReviewStatus, StageType, utc_iso_now
 from src.core.storage import (
     StorageFileNotFoundError,
     acquire_lock,
@@ -84,12 +84,12 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
     keep_temp_arg = getattr(args, "keep_temp", None)
     keep_temp = (not cleanup) if keep_temp_arg is None else bool(keep_temp_arg)
     bgm_path = getattr(args, "bgm", None)
-    burn_subs = getattr(args, "burn_subtitles", True)
-    allow_animation = getattr(args, "animation", True)
+    burn_subs = getattr(args, "burn_subtitles", None)
+    allow_animation = getattr(args, "animation", None)
     force = getattr(args, "force", False)
     skip_preview = getattr(args, "skip_preview", False) or getattr(args, "skip_review", False)
     approved = getattr(args, "approved", False)
-    video_mode = getattr(args, "video_mode", "auto")
+    video_mode = getattr(args, "video_mode", None)
     allow_placeholders = getattr(args, "allow_placeholders", False)
     workers = getattr(args, "workers", None)
     hw_accel = getattr(args, "hw_accel", None)
@@ -123,11 +123,11 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                 a_set = p_data.get("audio_settings", {})
                 if bgm_path is None:
                     bgm_path = r_set.get("bgm_path") or a_set.get("bgm_path")
-                if video_mode == "auto" and r_set.get("video_mode"):
-                    video_mode = r_set.get("video_mode")
-                if getattr(args, "burn_subtitles", None) is None and "burn_subtitles" in r_set:
+                if video_mode is None or video_mode == "auto":
+                    video_mode = r_set.get("video_mode") or video_mode or "auto"
+                if burn_subs is None and "burn_subtitles" in r_set:
                     burn_subs = r_set["burn_subtitles"]
-                if getattr(args, "animation", None) is None and "animation" in r_set:
+                if allow_animation is None and "animation" in r_set:
                     allow_animation = r_set["animation"]
                 if workers is None and "workers" in r_set:
                     workers = r_set["workers"]
@@ -142,6 +142,20 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                     subtitle_font_size = sub_set["font_size"]
                 if subtitle_chunking is None and "chunking" in sub_set:
                     subtitle_chunking = sub_set["chunking"]
+
+    # Fallback to defaults if neither CLI nor project.json specified them
+    if video_mode is None:
+        video_mode = "auto"
+    if burn_subs is None:
+        burn_subs = True
+    if allow_animation is None:
+        allow_animation = True
+    if subtitle_lines is None:
+        subtitle_lines = 1
+    if subtitle_font_size is None:
+        subtitle_font_size = 26
+    if subtitle_chunking is None:
+        subtitle_chunking = "sentence-aware"
 
     # Resolve encoder with runtime probing & smoke test
     from src.production.hardware import resolve_video_encoder
@@ -275,6 +289,51 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                         f"but current render target is '{project_slug}'."
                     )
 
+    # Prioritize existing valid audio clips; only invoke TTS if audio is missing
+    from src.core.schemas import RecapScript
+    script_raw = read_json(script_path)
+    if isinstance(script_raw, dict):
+        if not script_raw.get("project_slug"):
+            script_raw["project_slug"] = project_slug
+        if not script_raw.get("chapter_number"):
+            script_raw["chapter_number"] = str(chapter_num)
+    script_obj = RecapScript.model_validate(script_raw)
+
+    audio_missing = False
+    for seg in script_obj.segments:
+        wav_p = None
+        if seg.audio_path:
+            cand = Path(seg.audio_path)
+            if not cand.is_absolute():
+                cand = chap_dir / cand
+            if cand.exists() and cand.stat().st_size > 44:
+                wav_p = cand
+        if not wav_p:
+            cand = chap_dir / "audio" / "clips" / f"audio_{chapter_num}_{seg.seq_id}.wav"
+            if cand.exists() and cand.stat().st_size > 44:
+                wav_p = cand
+        if not wav_p:
+            audio_missing = True
+            break
+
+    if audio_missing:
+        logger.info(f"Audio clips missing for chapter {chapter_num}; invoking TTS synthesis...")
+        from src.cli.tts_cmd import handle_tts
+        tts_args = argparse.Namespace(
+            project=project_slug,
+            chapter=chapter_num,
+            voice=getattr(args, "voice", None),
+            speed=getattr(args, "speed", None),
+            force=force,
+            engine=getattr(args, "tts_engine", "neural"),
+            mock=getattr(args, "mock", False),
+            workers=workers,
+            kaggle=getattr(args, "kaggle", False),
+        )
+        handle_tts(tts_args)
+    else:
+        logger.info(f"Existing valid audio clips found for chapter {chapter_num}; reusing audio without invoking TTS.")
+
     # Execute full Video Engine V2 render pipeline
     try:
         engine = VideoEngine(max_workers=workers or 2, hw_accel=hw_accel)
@@ -307,6 +366,11 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
             with acquire_lock(chap_dir / "chapter.json"):
                 chap_meta = load_chapter_metadata(chap_dir)
                 chap_meta.overall_status = CheckpointStatus.COMPLETED
+                chap_meta.technical_status = CheckpointStatus.COMPLETED
+                if skip_preview:
+                    chap_meta.human_review_status = HumanReviewStatus.UNREVIEWED
+                elif approved:
+                    chap_meta.human_review_status = HumanReviewStatus.APPROVED
                 chap_meta.updated_at = utc_iso_now()
                 atomic_write_json(chap_dir / "chapter.json", chap_meta)
 

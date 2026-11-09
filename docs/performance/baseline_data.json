@@ -1,0 +1,308 @@
+{
+  "meta": {
+    "generated_at": "2026-11-08T22:34:35.250500+00:00",
+    "hardware": {
+      "os": "macOS-26.6-arm64-arm-64bit",
+      "system": "Darwin",
+      "release": "25.6.0",
+      "machine": "arm64",
+      "processor": "arm",
+      "python_version": "3.12.13",
+      "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+      "available_encoders": [
+        "libx264",
+        "libx264rgb",
+        "h264_videotoolbox"
+      ],
+      "videotoolbox_functional": true,
+      "libx264_functional": true,
+      "nvenc_functional": false,
+      "cpu_brand": "Apple M4",
+      "cpu_cores": 10,
+      "ram_gb": 16.0,
+      "onnxruntime_version": "1.31.1",
+      "onnxruntime_providers": [
+        "CoreMLExecutionProvider",
+        "AzureExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "vieneu_version": "3.8.3",
+      "torch_version": "Not installed (pure ONNX Runtime engine)",
+      "kaggle_authenticated": true,
+      "kaggle_username": "cuongnguyen1802",
+      "kaggle_cloud_spec": {
+        "status": "Verified via Kaggle API",
+        "platform": "Linux-6.18.55+-x86_64-with-glibc2.39",
+        "python": "3.13.16",
+        "cpu_count": 4,
+        "cuda_available": true,
+        "gpu_name": "Tesla T4 (2x GPUs)",
+        "has_nvenc": true,
+        "has_libx264": true,
+        "nvenc_speedup_factor_vs_cpu": 0.51,
+        "vieneu_cold_boot_hf_download_sec": 52.34
+      }
+    },
+    "total_profiling_duration_seconds": 933.88
+  },
+  "workloads": {
+    "small": {
+      "workload_type": "small",
+      "segments_count": 35,
+      "panels_count": 20,
+      "video_duration_seconds": 231.36,
+      "stage_1_validation": {
+        "elapsed_seconds": 0.0019,
+        "valid": true,
+        "error_count": 0
+      },
+      "stage_2_tts": {
+        "cold": {
+          "elapsed_seconds": 44.7374,
+          "audio_duration_seconds": 231.36,
+          "segments_synthesized": 35,
+          "segments_cached": 0,
+          "real_time_factor": 0.193,
+          "speedup_vs_realtime": 5.17,
+          "mode": "neural"
+        },
+        "warm": {
+          "elapsed_seconds": 45.1735,
+          "audio_duration_seconds": 231.36,
+          "segments_synthesized": 35,
+          "segments_cached": 0,
+          "real_time_factor": 0.195,
+          "speedup_vs_realtime": 5.12,
+          "mode": "neural"
+        },
+        "cache_hit": {
+          "elapsed_seconds": 0.0232,
+          "audio_duration_seconds": 0.0,
+          "segments_synthesized": 0,
+          "segments_cached": 35,
+          "real_time_factor": 0.0,
+          "speedup_vs_realtime": 0.0,
+          "mode": "neural"
+        }
+      },
+      "stage_3_render": {
+        "videotoolbox_hw": {
+          "elapsed_seconds": 164.5356,
+          "encoder_used": "libx264 (VideoToolbox fallback)",
+          "rendered_clips": 40,
+          "cached_clips": 0,
+          "video_size_mb": 10.89,
+          "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_small_35/chapters/1/video/chapter_1_final_v1.mp4"
+        },
+        "libx264_cpu": {
+          "elapsed_seconds": 83.9207,
+          "encoder_used": "libx264",
+          "rendered_clips": 40,
+          "cached_clips": 0,
+          "video_size_mb": 10.88,
+          "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_small_35/chapters/1/video/chapter_1_final_v1.mp4"
+        },
+        "cached": {
+          "elapsed_seconds": 60.3871,
+          "encoder_used": "libx264 (VideoToolbox fallback)",
+          "rendered_clips": 6,
+          "cached_clips": 34,
+          "video_size_mb": 10.88,
+          "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_small_35/chapters/1/video/chapter_1_final_v2.mp4"
+        }
+      },
+      "stage_4_export": {
+        "elapsed_seconds": 0.0,
+        "has_srt": true,
+        "has_mp4": true
+      },
+      "e2e_wall_clock_seconds": 209.27,
+      "throughput_video_minutes_per_hour": 66.33,
+      "peak_rss_mb": 2139.45
+    },
+    "large": {
+      "workload_type": "large",
+      "segments_count": 120,
+      "panels_count": 40,
+      "video_duration_seconds": 803.92,
+      "stage_1_validation": {
+        "elapsed_seconds": 0.0062,
+        "valid": true,
+        "error_count": 0
+      },
+      "stage_2_tts": {
+        "elapsed_seconds": 151.5466,
+        "audio_duration_seconds": 803.92,
+        "segments_synthesized": 120,
+        "segments_cached": 0,
+        "real_time_factor": 0.189,
+        "speedup_vs_realtime": 5.3,
+        "mode": "neural"
+      },
+      "stage_3_render": {
+        "elapsed_seconds": 300.5681,
+        "encoder_used": "libx264 (VideoToolbox fallback)",
+        "rendered_clips": 137,
+        "cached_clips": 0,
+        "video_size_mb": 38.47,
+        "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_large_120/chapters/1/video/chapter_1_final_v1.mp4"
+      },
+      "stage_4_export": {
+        "elapsed_seconds": 0.0,
+        "has_srt": true,
+        "has_mp4": true
+      },
+      "e2e_wall_clock_seconds": 452.12,
+      "throughput_video_minutes_per_hour": 106.69,
+      "peak_rss_mb": 2139.45
+    },
+    "batch": {
+      "workload_type": "batch",
+      "chapters_count": 5,
+      "total_segments_count": 100,
+      "total_video_duration_seconds": 651.12,
+      "chapters": [
+        {
+          "chapter": "1",
+          "elapsed_seconds": 56.38,
+          "tts": {
+            "elapsed_seconds": 26.6559,
+            "audio_duration_seconds": 130.48,
+            "segments_synthesized": 20,
+            "segments_cached": 0,
+            "real_time_factor": 0.204,
+            "speedup_vs_realtime": 4.89,
+            "mode": "neural"
+          },
+          "render": {
+            "elapsed_seconds": 29.7199,
+            "encoder_used": "h264_videotoolbox",
+            "rendered_clips": 22,
+            "cached_clips": 0,
+            "video_size_mb": 16.85,
+            "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/chapters/1/video/chapter_1_final_v1.mp4"
+          }
+        },
+        {
+          "chapter": "2",
+          "elapsed_seconds": 54.08,
+          "tts": {
+            "elapsed_seconds": 23.9274,
+            "audio_duration_seconds": 130.0,
+            "segments_synthesized": 20,
+            "segments_cached": 0,
+            "real_time_factor": 0.184,
+            "speedup_vs_realtime": 5.43,
+            "mode": "neural"
+          },
+          "render": {
+            "elapsed_seconds": 30.1527,
+            "encoder_used": "h264_videotoolbox",
+            "rendered_clips": 22,
+            "cached_clips": 0,
+            "video_size_mb": 16.77,
+            "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/chapters/2/video/chapter_2_final_v1.mp4"
+          }
+        },
+        {
+          "chapter": "3",
+          "elapsed_seconds": 53.82,
+          "tts": {
+            "elapsed_seconds": 23.7745,
+            "audio_duration_seconds": 131.36,
+            "segments_synthesized": 20,
+            "segments_cached": 0,
+            "real_time_factor": 0.181,
+            "speedup_vs_realtime": 5.53,
+            "mode": "neural"
+          },
+          "render": {
+            "elapsed_seconds": 30.0429,
+            "encoder_used": "h264_videotoolbox",
+            "rendered_clips": 22,
+            "cached_clips": 0,
+            "video_size_mb": 17.19,
+            "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/chapters/3/video/chapter_3_final_v1.mp4"
+          }
+        },
+        {
+          "chapter": "4",
+          "elapsed_seconds": 53.55,
+          "tts": {
+            "elapsed_seconds": 23.4949,
+            "audio_duration_seconds": 129.92,
+            "segments_synthesized": 20,
+            "segments_cached": 0,
+            "real_time_factor": 0.181,
+            "speedup_vs_realtime": 5.53,
+            "mode": "neural"
+          },
+          "render": {
+            "elapsed_seconds": 30.0568,
+            "encoder_used": "h264_videotoolbox",
+            "rendered_clips": 22,
+            "cached_clips": 0,
+            "video_size_mb": 16.81,
+            "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/chapters/4/video/chapter_4_final_v1.mp4"
+          }
+        },
+        {
+          "chapter": "5",
+          "elapsed_seconds": 53.71,
+          "tts": {
+            "elapsed_seconds": 23.4987,
+            "audio_duration_seconds": 129.36,
+            "segments_synthesized": 20,
+            "segments_cached": 0,
+            "real_time_factor": 0.182,
+            "speedup_vs_realtime": 5.5,
+            "mode": "neural"
+          },
+          "render": {
+            "elapsed_seconds": 30.2092,
+            "encoder_used": "h264_videotoolbox",
+            "rendered_clips": 22,
+            "cached_clips": 0,
+            "video_size_mb": 16.79,
+            "video_path": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/chapters/5/video/chapter_5_final_v1.mp4"
+          }
+        }
+      ],
+      "compilation": {
+        "elapsed_seconds": 0.95,
+        "output_video": "/Volumes/WorkSpace/Factory/Manga Review/data/projects/benchmark_batch_5ch/output/feature_compilation.mp4",
+        "output_size_mb": 84.41
+      },
+      "e2e_wall_clock_seconds": 272.49,
+      "throughput_video_minutes_per_hour": 143.37,
+      "peak_rss_mb": 2111.89
+    }
+  },
+  "comparisons": {},
+  "bottlenecks": [
+    {
+      "rank": 1,
+      "stage": "Video Rendering & Filterchain Compositing",
+      "percentage_of_e2e": 66.5,
+      "measured_duration_seconds": 300.5681,
+      "description": "Single-clip FFmpeg invocation per panel with Ken Burns motion, text rendering, and background wing blur dominates runtime. Per-clip process spawning incurs overhead despite ThreadPool.",
+      "target_optimization": "Phase 5 A8: Parallel batch ffmpeg concat / Single-pass canvas pipeline"
+    },
+    {
+      "rank": 2,
+      "stage": "VieNeu-TTS Neural Audio Inference",
+      "percentage_of_e2e": 33.5,
+      "measured_duration_seconds": 151.5466,
+      "description": "Sequential neural inference locked under single-threaded _infer_lock. Even with Real-Time Factor ~0.20x, synthesizing 120 utterances requires substantial CPU/CoreML execution time.",
+      "target_optimization": "Phase 5 A7: Batch array inference and audio cache reuse"
+    },
+    {
+      "rank": 3,
+      "stage": "Validation, Subtitle Packaging, and Container Muxing",
+      "percentage_of_e2e": 0.0,
+      "measured_duration_seconds": 0.01,
+      "description": "ffprobe stream validation and disk IO operations for integrity checks and metadata serialization.",
+      "target_optimization": "In-memory ffprobe probing and deferred validation"
+    }
+  ]
+}

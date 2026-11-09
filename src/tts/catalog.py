@@ -7,6 +7,7 @@ Directly aligned with official VieNeu v3 Turbo preset voices.
 from __future__ import annotations
 
 from enum import Enum
+import functools
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
@@ -361,6 +362,7 @@ VOICE_ALIASES: Dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=512)
 def is_valid_voice_id(name: Optional[str]) -> bool:
     """Checks whether the given voice name directly matches an official catalog voice or recognized alias."""
     if not name or not isinstance(name, str):
@@ -377,6 +379,7 @@ def is_valid_voice_id(name: Optional[str]) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=512)
 def resolve_voice_id(name: Optional[str]) -> str:
     """Resolves arbitrary voice string, alias, or legacy name to valid VieNeu voice_id."""
     if not name:
@@ -399,6 +402,7 @@ def resolve_voice_id(name: Optional[str]) -> str:
     return "Trúc Ly"
 
 
+@functools.lru_cache(maxsize=512)
 def get_voice_profile(voice_id: str) -> VoiceProfile:
     """Returns VoiceProfile for given voice_id or alias."""
     resolved = resolve_voice_id(voice_id)

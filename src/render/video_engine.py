@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import textwrap
+import threading
 import wave
 from enum import Enum
 from pathlib import Path
@@ -100,6 +101,13 @@ class VideoEngine:
         self.subtitle_generator = SubtitleGenerator(max_chars_per_line=42, max_lines=2)
         self.audio_mixer = AudioMixer(target_sample_rate=48000, target_channels=2)
         self.validator = StreamValidator()
+        self._canvas_cache: Dict[str, Image.Image] = {}
+        self._canvas_lock = threading.Lock()
+
+    def clear_canvas_cache(self) -> None:
+        """Clears in-memory composited canvas frame cache."""
+        with self._canvas_lock:
+            self._canvas_cache.clear()
 
     def _get_font(self, font_size: int = 26) -> ImageFont.FreeTypeFont:
         """Finds an appropriate system font or falls back to Pillow default."""
@@ -346,6 +354,172 @@ class VideoEngine:
 
         return output_path
 
+    def create_static_canvas(
+        self,
+        img_path: Union[str, Path, Image.Image],
+        video_mode: Union[VideoMode, str] = VideoMode.PORTRAIT_PADDED,
+        focus_box: Optional[Union[FocusBox, Dict[str, Any]]] = None,
+        motion_type: Union[CameraMotionType, str] = CameraMotionType.STATIC,
+    ) -> Image.Image:
+        """
+        Creates a single 16:9 composited canvas image frame (RGB) for static camera hold segments.
+        Eliminates redundant multi-frame rasterization and FFmpeg filtergraph overhead.
+        Utilizes an in-memory thread-safe cache for repeated panels.
+        """
+        # Resolve cache key if path provided
+        cache_key: Optional[str] = None
+        if isinstance(img_path, (str, Path)):
+            p = Path(img_path).resolve()
+            mtime = p.stat().st_mtime_ns if p.exists() else 0
+            cache_key = f"{p}_{mtime}_{self.width}x{self.height}_{video_mode}_{motion_type}_{str(focus_box)}"
+            with self._canvas_lock:
+                if cache_key in self._canvas_cache:
+                    return self._canvas_cache[cache_key].copy()
+
+        # Open image
+        if isinstance(img_path, Image.Image):
+            img = img_path.copy()
+        else:
+            p = Path(img_path).resolve()
+            if not p.exists():
+                raise StorageFileNotFoundError(f"Panel image not found: {img_path}")
+            img = Image.open(p)
+
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        elif img.mode == "RGBA":
+            img = img.convert("RGB")
+
+        img_w, img_h = img.size
+        ar_in = img_w / float(img_h) if img_h > 0 else 1.0
+        target_ar = self.width / float(self.height)
+
+        norm_motion = self.camera_generator.normalize_motion_type(motion_type)
+
+        # 1. Static focus / focus crop
+        if norm_motion in (CameraMotionType.STATIC_FOCUS, CameraMotionType.FOCUS_CROP):
+            fx, fy, scale_ratio = self.camera_generator.calculate_focus_center(
+                focus_box=focus_box if isinstance(focus_box, FocusBox) else None
+            )
+            if isinstance(focus_box, dict):
+                fx, fy, scale_ratio = self.camera_generator.resolve_focus_coordinates(img_w, img_h, focus_box)
+
+            clamped_scale = max(self.camera_generator.min_crop_scale, min(1.0, scale_ratio))
+            if ar_in > target_ar:
+                crop_h = self.camera_generator._ensure_even(round(img_h * clamped_scale))
+                crop_w = self.camera_generator._ensure_even(round(crop_h * target_ar))
+            else:
+                crop_w = self.camera_generator._ensure_even(round(img_w * clamped_scale))
+                crop_h = self.camera_generator._ensure_even(round(crop_w / target_ar))
+
+            crop_w = min(crop_w, self.camera_generator._ensure_even(img_w))
+            crop_h = min(crop_h, self.camera_generator._ensure_even(img_h))
+            cx = round(fx * img_w)
+            cy = round(fy * img_h)
+            x_pos = self.camera_generator._ensure_even(max(0, min(img_w - crop_w, cx - crop_w // 2)))
+            y_pos = self.camera_generator._ensure_even(max(0, min(img_h - crop_h, cy - crop_h // 2)))
+
+            cropped = img.crop((x_pos, y_pos, x_pos + crop_w, y_pos + crop_h))
+            canvas = cropped.resize((self.width, self.height), Image.Resampling.LANCZOS)
+            if cache_key:
+                with self._canvas_lock:
+                    self._canvas_cache[cache_key] = canvas.copy()
+            return canvas
+
+        # 2. Aspect match (if input is practically 16:9 and mode is auto)
+        resolved_vmode = video_mode
+        if isinstance(resolved_vmode, str):
+            try:
+                resolved_vmode = VideoMode(resolved_vmode.lower())
+            except ValueError:
+                resolved_vmode = VideoMode.AUTO
+
+        if (resolved_vmode is None or resolved_vmode == VideoMode.AUTO) and abs(ar_in - target_ar) < 0.05:
+            canvas = img.resize((self.width, self.height), Image.Resampling.LANCZOS)
+            if cache_key:
+                with self._canvas_lock:
+                    self._canvas_cache[cache_key] = canvas.copy()
+            return canvas
+
+        # 3. LANDSCAPE_FIT: Fit inside canvas with black padding
+        if resolved_vmode == VideoMode.LANDSCAPE_FIT:
+            scale = min(self.width / float(img_w), self.height / float(img_h))
+            new_w = max(1, int(round(img_w * scale)))
+            new_h = max(1, int(round(img_h * scale)))
+            fg = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGB", (self.width, self.height), (0, 0, 0))
+            canvas.paste(fg, ((self.width - new_w) // 2, ((self.height - new_h) // 2)))
+            if cache_key:
+                with self._canvas_lock:
+                    self._canvas_cache[cache_key] = canvas.copy()
+            return canvas
+
+        # 4. PORTRAIT_VERTICAL: Fit vertically with black wings
+        if resolved_vmode == VideoMode.PORTRAIT_VERTICAL:
+            scale = self.height / float(img_h)
+            new_w = max(1, int(round(img_w * scale)))
+            new_h = self.height
+            fg = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            canvas = Image.new("RGB", (self.width, self.height), (0, 0, 0))
+            canvas.paste(fg, ((self.width - new_w) // 2, 0))
+            if cache_key:
+                with self._canvas_lock:
+                    self._canvas_cache[cache_key] = canvas.copy()
+            return canvas
+
+        # 5. Default: PORTRAIT_PADDED (Dual-layer blurred background wings)
+        scale_bg = max(self.width / float(img_w), self.height / float(img_h))
+        bg_w = max(self.width, int(round(img_w * scale_bg)))
+        bg_h = max(self.height, int(round(img_h * scale_bg)))
+        bg = img.resize((bg_w, bg_h), Image.Resampling.BILINEAR)
+        left = (bg_w - self.width) // 2
+        top = (bg_h - self.height) // 2
+        bg = bg.crop((left, top, left + self.width, top + self.height)).filter(ImageFilter.BoxBlur(25))
+
+        scale_fg = min(self.width / float(img_w), self.height / float(img_h))
+        fg_w = max(1, int(round(img_w * scale_fg)))
+        fg_h = max(1, int(round(img_h * scale_fg)))
+        fg = img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+        bg.paste(fg, ((self.width - fg_w) // 2, ((self.height - fg_h) // 2)))
+
+        canvas = bg.convert("RGB")
+        if cache_key:
+            with self._canvas_lock:
+                self._canvas_cache[cache_key] = canvas.copy()
+        return canvas
+
+    @staticmethod
+    def _build_clip_ffmpeg_cmd(
+        input_args: List[str],
+        filter_complex: Optional[str],
+        map_args: List[str],
+        duration_sec: float,
+        codec_args: List[str],
+        fps: int,
+        output_path: Path,
+    ) -> List[str]:
+        """Constructs canonical FFmpeg CLI command for panel clip rendering."""
+        cmd = [
+            "ffmpeg",
+            "-y",
+            *input_args,
+        ]
+        if filter_complex:
+            cmd.extend(["-filter_complex", filter_complex])
+        cmd.extend(map_args)
+        cmd.extend(["-t", f"{duration_sec:.4f}"])
+        cmd.extend(codec_args)
+        cmd.extend([
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-r",
+            str(fps),
+            str(output_path),
+        ])
+        return cmd
+
     def split_text_into_chunks(self, text: str, max_chars: int = 50) -> List[str]:
         """Splits text into readable subtitle chunks."""
         if not text:
@@ -427,6 +601,7 @@ class VideoEngine:
             audio_input_args = ["-ss", f"{audio_offset_sec:.3f}", "-i", str(audio_path)]
 
         # Determine camera motion mode
+        # Determine camera motion mode
         motion_mode = camera_motion
         if motion_mode is None and pan_direction:
             pan_map = {
@@ -442,14 +617,29 @@ class VideoEngine:
         if motion_mode is None or not allow_animation:
             motion_mode = CameraMotionType.STATIC
 
-        cam_filter, is_zoompan = self.camera_generator.build_filterchain(
-            img_w=img_w,
-            img_h=img_h,
-            duration_sec=duration_sec,
-            motion_type=motion_mode,
-            video_mode=video_mode,
-            focus_box=focus_box,
-            allow_animation=allow_animation,
+        normalized_motion = self.camera_generator.normalize_motion_type(motion_mode)
+        has_focus = (focus_box is not None)
+
+        # Guard against excessive crop on tall continuous webtoon panels (H > 2W)
+        if img_h > 2 * img_w and normalized_motion in (
+            CameraMotionType.ZOOM_IN,
+            CameraMotionType.ZOOM_OUT,
+            CameraMotionType.PAN_LEFT,
+            CameraMotionType.PAN_RIGHT,
+            CameraMotionType.SUBJECT_PAN,
+        ):
+            normalized_motion = CameraMotionType.STATIC
+
+        if not allow_animation:
+            if normalized_motion in (CameraMotionType.FOCUS_CROP, CameraMotionType.STATIC_FOCUS) or has_focus:
+                normalized_motion = CameraMotionType.STATIC_FOCUS
+            else:
+                normalized_motion = CameraMotionType.STATIC
+
+        is_static_motion = normalized_motion in (
+            CameraMotionType.STATIC,
+            CameraMotionType.STATIC_FOCUS,
+            CameraMotionType.FOCUS_CROP,
         )
 
         active_cues: List[Tuple[SubtitleCue, float, float]] = []
@@ -477,78 +667,130 @@ class VideoEngine:
                     temp_overlay_files.append(temp_overlay_png)
                     subtitle_input_args.extend(["-loop", "1", "-i", str(temp_overlay_png)])
 
-            img_input_args = ["-i", str(img_p)] if is_zoompan else ["-loop", "1", "-i", str(img_p)]
+            if is_static_motion:
+                # Single-Frame Static Motion Hold optimization:
+                # Avoid generating thousands of redundant raster frames and expensive boxblur on every frame.
+                # Render single composited 16:9 canvas frame once, then loop with FFmpeg -loop 1.
+                canvas_img = self.create_static_canvas(
+                    img_path=img_p,
+                    video_mode=video_mode,
+                    focus_box=focus_box,
+                    motion_type=normalized_motion,
+                )
+                temp_canvas_png = out_p.parent / f"{out_p.stem}_static_canvas.png"
+                canvas_img.save(temp_canvas_png, "PNG")
+                temp_overlay_files.append(temp_canvas_png)
+                img_input_args = ["-loop", "1", "-i", str(temp_canvas_png)]
 
-            if active_cues:
-                filter_parts = [f"[0:v]{cam_filter}[v_0]"]
-                for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
-                    in_label = f"v_{idx_c}"
-                    out_label = f"v_{idx_c+1}" if idx_c < len(active_cues) - 1 else "outv"
-                    sub_idx = 2 + idx_c
-                    filter_parts.append(
-                        f"[{in_label}][{sub_idx}:v]overlay=0:0:enable='between(t,{t_s:.3f},{t_e:.3f})'[{out_label}]"
-                    )
-                filter_complex = ";".join(filter_parts)
+                if active_cues:
+                    filter_parts = []
+                    for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
+                        in_label = "[0:v]" if idx_c == 0 else f"[v_{idx_c-1}]"
+                        out_label = "[outv]" if idx_c == len(active_cues) - 1 else f"[v_{idx_c}]"
+                        sub_idx = 2 + idx_c
+                        filter_parts.append(
+                            f"{in_label}[{sub_idx}:v]overlay=0:0:enable='between(t,{t_s:.3f},{t_e:.3f})'{out_label}"
+                        )
+                    filter_complex = ";".join(filter_parts)
+                    map_args = ["-map", "[outv]", "-map", "1:a"]
+                else:
+                    filter_complex = None
+                    map_args = ["-map", "0:v", "-map", "1:a"]
             else:
-                filter_complex = f"[0:v]{cam_filter}[outv]"
+                cam_filter, is_zoompan = self.camera_generator.build_filterchain(
+                    img_w=img_w,
+                    img_h=img_h,
+                    duration_sec=duration_sec,
+                    motion_type=normalized_motion,
+                    video_mode=video_mode,
+                    focus_box=focus_box,
+                    allow_animation=allow_animation,
+                )
+                img_input_args = ["-i", str(img_p)] if is_zoompan else ["-loop", "1", "-i", str(img_p)]
+
+                if active_cues:
+                    filter_parts = [f"[0:v]{cam_filter}[v_0]"]
+                    for idx_c, (cue, t_s, t_e) in enumerate(active_cues):
+                        in_label = f"v_{idx_c}"
+                        out_label = f"v_{idx_c+1}" if idx_c < len(active_cues) - 1 else "outv"
+                        sub_idx = 2 + idx_c
+                        filter_parts.append(
+                            f"[{in_label}][{sub_idx}:v]overlay=0:0:enable='between(t,{t_s:.3f},{t_e:.3f})'[{out_label}]"
+                        )
+                    filter_complex = ";".join(filter_parts)
+                else:
+                    filter_complex = f"[0:v]{cam_filter}[outv]"
+                map_args = ["-map", "[outv]", "-map", "1:a"]
 
             active_hw = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
             active_encoder = encoder if encoder is not None else getattr(self, "encoder", None)
-            if active_encoder == "h264_nvenc" or active_hw == "nvenc":
-                codec_args = [
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p4",
-                    "-cq",
-                    "23",
-                    "-b:v",
-                    "4500k",
-                ]
-            elif active_encoder == "h264_videotoolbox" or active_hw == "videotoolbox":
-                codec_args = [
-                    "-c:v",
-                    "h264_videotoolbox",
-                    "-b:v",
-                    "4500k",
-                    "-prio_speed",
-                    "1",
-                ]
+            if not active_encoder:
+                if active_hw in ("nvenc", "h264_nvenc"):
+                    active_encoder = "h264_nvenc"
+                elif active_hw in ("videotoolbox", "h264_videotoolbox"):
+                    active_encoder = "h264_videotoolbox"
+                else:
+                    active_encoder = "libx264"
+
+            from src.production.hardware import get_encoder_codec_args, get_hardware_encoder_lock
+
+            codec_args = get_encoder_codec_args(active_encoder, preset=preset, crf=crf)
+
+            all_input_args = [*img_input_args, *audio_input_args, *subtitle_input_args]
+            cmd = self._build_clip_ffmpeg_cmd(
+                input_args=all_input_args,
+                filter_complex=filter_complex,
+                map_args=map_args,
+                duration_sec=duration_sec,
+                codec_args=codec_args,
+                fps=self.fps,
+                output_path=out_p,
+            )
+
+            # Standardized Hardware Acceleration Execution with Robust Software Fallback
+            vt_lock = get_hardware_encoder_lock()
+            if active_encoder == "h264_videotoolbox":
+                with vt_lock:
+                    try:
+                        run_ffmpeg(cmd, description=f"Render panel clip {seq} ({active_encoder})")
+                    except Exception as err:
+                        logger.warning(
+                            f"VideoToolbox encoding failed for clip {seq} ({err}). "
+                            "Falling back to libx264 software encoder."
+                        )
+                        fallback_codec_args = get_encoder_codec_args("libx264", preset=preset, crf=crf)
+                        cmd_fallback = self._build_clip_ffmpeg_cmd(
+                            input_args=all_input_args,
+                            filter_complex=filter_complex,
+                            map_args=map_args,
+                            duration_sec=duration_sec,
+                            codec_args=fallback_codec_args,
+                            fps=self.fps,
+                            output_path=out_p,
+                        )
+                        run_ffmpeg(cmd_fallback, description=f"Render panel clip {seq} (libx264 fallback)")
+            elif active_encoder == "h264_nvenc":
+                try:
+                    run_ffmpeg(cmd, description=f"Render panel clip {seq} ({active_encoder})")
+                except Exception as err:
+                    logger.warning(
+                        f"NVENC encoding failed for clip {seq} ({err}). "
+                        "Falling back to libx264 software encoder."
+                    )
+                    fallback_codec_args = get_encoder_codec_args("libx264", preset=preset, crf=crf)
+                    cmd_fallback = self._build_clip_ffmpeg_cmd(
+                        input_args=all_input_args,
+                        filter_complex=filter_complex,
+                        map_args=map_args,
+                        duration_sec=duration_sec,
+                        codec_args=fallback_codec_args,
+                        fps=self.fps,
+                        output_path=out_p,
+                    )
+                    run_ffmpeg(cmd_fallback, description=f"Render panel clip {seq} (libx264 fallback)")
             else:
-                codec_args = [
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    preset,
-                    "-crf",
-                    crf,
-                ]
+                run_ffmpeg(cmd, description=f"Render panel clip {seq} ({active_encoder})")
 
-            cmd = [
-                "ffmpeg",
-                "-y",
-                *img_input_args,
-                *audio_input_args,
-                *subtitle_input_args,
-                "-filter_complex",
-                filter_complex,
-                "-map",
-                "[outv]",
-                "-map",
-                "1:a",
-                "-t",
-                f"{duration_sec:.4f}",
-                *codec_args,
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-r",
-                str(self.fps),
-                str(out_p),
-            ]
-
-            run_ffmpeg(cmd, description=f"Render panel clip {seq}")
             return out_p.exists() and out_p.stat().st_size > 0
         except Exception as e:
             logger.error(f"Error rendering clip {output_path}: {e}")
@@ -708,21 +950,24 @@ class VideoEngine:
         active_encoder = encoder if encoder is not None else getattr(self, "encoder", None)
         active_hw_accel = hw_accel if hw_accel is not None else getattr(self, "hw_accel", None)
 
+        if active_encoder is None or active_encoder == "auto":
+            if active_hw_accel in ("videotoolbox", "h264_videotoolbox"):
+                active_encoder = "h264_videotoolbox"
+            elif active_hw_accel in ("nvenc", "h264_nvenc"):
+                active_encoder = "h264_nvenc"
+            else:
+                from src.production.hardware import resolve_video_encoder
+
+                active_encoder, _, _ = resolve_video_encoder("auto")
+
         if active_encoder == "h264_nvenc":
             active_hw_accel = "nvenc"
         elif active_encoder == "h264_videotoolbox":
             active_hw_accel = "videotoolbox"
-        elif active_encoder == "libx264":
-            active_hw_accel = "none"
-        elif active_encoder is None and active_hw_accel:
-            if active_hw_accel == "videotoolbox":
-                active_encoder = "h264_videotoolbox"
-            elif active_hw_accel == "nvenc":
-                active_encoder = "h264_nvenc"
-            else:
-                active_encoder = "libx264"
         else:
-            active_encoder = active_encoder or "libx264"
+            active_hw_accel = "none"
+
+        self.clear_canvas_cache()
 
         try:
             script = load_recap_script(chap_dir)
@@ -1430,6 +1675,13 @@ class VideoEngine:
                             cleaned_count += 1
                         except Exception:
                             pass
+                for pattern in ("*static_canvas*.png", "*_sub_*.png"):
+                    for tmp_f in clips_dir.glob(pattern):
+                        try:
+                            tmp_f.unlink()
+                            cleaned_count += 1
+                        except Exception:
+                            pass
                 if raw_video_path.exists():
                     try:
                         raw_video_path.unlink()
@@ -1442,6 +1694,8 @@ class VideoEngine:
                         cleaned_count += 1
                     except Exception:
                         pass
+
+            self.clear_canvas_cache()
 
             # 10. Update Chapter Stage Checkpoint to COMPLETED
             artifacts = [
