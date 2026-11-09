@@ -39,9 +39,18 @@ Quy tắc này tổng hợp và chắt lọc các nguyên lý đóng gói (Packa
 
 Chuẩn mực tạo Thumbnail Manga Recap tối ưu tỷ lệ nhấp (High-CTR) được thực hiện thông qua **Quy trình Lồng ghép Đa phương thức (Multimodal Image Fusion)** với định dạng bố cục 3 ảnh đặc trưng:
 
-### 2.1 Cổng Lựa Chọn Của Con Người (Human Selection Gate)
-- **Vai trò của Agent:** Quét toàn bộ các panel nổi bật trong chapter/series, lập danh sách và **đề xuất 5 đến 10 hình ứng viên đặc sắc nhất** (phân loại theo nhân vật, cảm xúc, biểu cảm, tư thế chiến đấu, hoặc thời kỳ biến đổi).
-- **Quyền quyết định tối cao của Human:** Người dùng trực tiếp xem và **lựa chọn đúng 3 bức ảnh** (có thể là 3 nhân vật khác nhau, hoặc 1 nhân vật qua 3 thời kỳ biến chuyển quá khứ - hiện tại - đỉnh cao).
+### 2.1 Cổng Lựa Chọn & Tương Tác Bắt Buộc (Mandatory Thumbnail Interactive Gate)
+⚠️ **QUY TẮC BẮT BUỘC DÀNH CHO AGENT:**
+Trước khi tiến hành tạo Thumbnail, Agent **BẮT BUỘC PHẢI HỎI NGƯỜI DÙNG 2 ĐIỀU**:
+1. **Lựa chọn 3 bức ảnh:**
+   - Agent quét các panel nổi bật trong chapter/series, lập danh sách và **đề xuất 5 đến 10 hình ứng viên đặc sắc nhất** (gợi ý rõ vai trò Trái / Giữa / Phải).
+   - Agent hỏi người dùng: *"Bạn muốn chọn 3 bức ảnh nào (Bên Trái - Ở Giữa - Bên Phải)?"*
+   - Người dùng có toàn quyền chọn 3 ảnh từ danh sách đề xuất (hoặc chỉ định bất kỳ khung tranh nào họ muốn).
+2. **Dòng chữ tiêu đề ngắn (Short Title / Hook):**
+   - Agent gợi ý 2-3 câu tiêu đề ngắn giật tít (3 đến 5 từ).
+   - Agent hỏi người dùng: *"Bạn muốn hiển thị dòng chữ tiêu đề ngắn (Short Title) nào ở phía dưới ảnh bìa?"*
+   - Người dùng chọn hoặc nhập tiêu đề mong muốn (hoặc yêu cầu không để chữ).
+3. Chỉ sau khi người dùng xác nhận 2 thông tin trên, Agent mới tiến hành lồng ghép đa phương thức và lưu vào `output/<slug>/chapter_<num>_thumbnail.jpg`.
 
 ### 2.2 Quy Chuẩn Bố Cục 3 Ảnh Chuẩn YouTube (Split-Screen Duo + Center Hero Overlay)
 Tác phẩm Thumbnail 16:9 hoàn thiện bắt buộc tuân thủ cấu trúc bố cục 3 phần:
