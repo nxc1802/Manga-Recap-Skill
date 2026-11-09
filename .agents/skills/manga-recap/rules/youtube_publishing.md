@@ -37,22 +37,28 @@ Quy tắc này tổng hợp và chắt lọc các nguyên lý đóng gói (Packa
 ⚠️ **QUY TẮC CỐT LÕI (BẮT BUỘC):**
 > *Khán giả xem Manga Recap nhận diện video qua chính nét vẽ gốc của tác giả. Tuyệt đối KHÔNG sử dụng Text-to-Image thuần túy chỉ qua mô tả chữ sơ sài vì sẽ vẽ lại một nhân vật hoàn toàn khác, làm mất đi tính nguyên bản của bộ truyện.*
 
-Chuẩn mực tạo Thumbnail Manga Recap tối ưu tỷ lệ nhấp (High-CTR) được thực hiện thông qua **Quy trình Lồng ghép Đa phương thức (Multimodal Image Fusion)**:
+Chuẩn mực tạo Thumbnail Manga Recap tối ưu tỷ lệ nhấp (High-CTR) được thực hiện thông qua **Quy trình Lồng ghép Đa phương thức (Multimodal Image Fusion)** với định dạng bố cục 3 ảnh đặc trưng:
 
-### 2.1 Bốn Bước Thực Hiện Chuẩn Mực
-1. **Trích xuất Khung tranh Gốc (Extract Original Character Panels)**:
-   - Chọn từ 1 đến 3 ảnh khung tranh sắc nét nhất của nhân vật chính, đối thủ hoặc tư thế xuất chiêu trong chapter (ví dụ: `panel_029.jpg`, `panel_252.jpg`).
-   - Giữ nguyên vẹn 100% nét vẽ, tỷ lệ và khuôn mặt do họa sĩ gốc của bộ truyện phác họa.
-2. **Tách Nền Thông Minh (Smart Background Removal)**:
-   - Loại bỏ bối cảnh cũ, bong bóng thoại hoặc các chi tiết thừa xung quanh nhân vật.
-3. **Lồng Ghép Bố Cục & Thêm Hiệu Ứng (Composition & Visual FX)**:
-   - Bố cục 16:9 điện ảnh: Nhân vật cận cảnh/tương phản mạnh ở tiền cảnh (Foreground), nhân vật hành động/xuất chiêu ở trung cảnh (Midground).
-   - Thêm hiệu ứng năng lượng: Hào quang chân khí, lôi điện rực sáng, vệt tốc độ (speed lines), ngọn lửa chân hỏa tương phản với bối cảnh bão tuyết hoặc sấm chớp.
-4. **Typography 3D Nổi Khối (Impactful 3D Text Overlay)**:
-   - Thêm 3 đến 5 từ giật tít màu vàng/cam có viền đen dày và đổ bóng 3D nổi bật (ví dụ: *"HUYỀN THOẠI TRỞ LẠI"*, *"AI CHO PHÉP?!"*, *"THỨC TỈNH"*).
-   - **Vùng an toàn (Safe Zone):** Nửa dưới bên phải (25% chiều rộng × 20% chiều cao) phải để trống, không để chữ hay mặt nhân vật bị nhãn thời lượng video của YouTube (`12:45`) che khuất.
+### 2.1 Cổng Lựa Chọn Của Con Người (Human Selection Gate)
+- **Vai trò của Agent:** Quét toàn bộ các panel nổi bật trong chapter/series, lập danh sách và **đề xuất 5 đến 10 hình ứng viên đặc sắc nhất** (phân loại theo nhân vật, cảm xúc, biểu cảm, tư thế chiến đấu, hoặc thời kỳ biến đổi).
+- **Quyền quyết định tối cao của Human:** Người dùng trực tiếp xem và **lựa chọn đúng 3 bức ảnh** (có thể là 3 nhân vật khác nhau, hoặc 1 nhân vật qua 3 thời kỳ biến chuyển quá khứ - hiện tại - đỉnh cao).
 
-### 2.2 Vị Trí Lưu Trữ Thành Phẩm
+### 2.2 Quy Chuẩn Bố Cục 3 Ảnh Chuẩn YouTube (Split-Screen Duo + Center Hero Overlay)
+Tác phẩm Thumbnail 16:9 hoàn thiện bắt buộc tuân thủ cấu trúc bố cục 3 phần:
+1. **Hai Cánh 2 Bên (Split-Screen Background — 2 Bên Giữ Nguyên Cảnh):**
+   - **Bên Trái (~40-45% chiều rộng):** Chứa nhân vật 1, **giữ nguyên cả người và bối cảnh gốc** (thường là thời kỳ khởi đầu, quá khứ bi kịch hoặc đồng minh).
+   - **Bên Phải (~40-45% chiều rộng):** Chứa nhân vật 2, **giữ nguyên cả người và bối cảnh gốc** (thường là kẻ địch hung tợn, thế lực đối đầu hoặc trạng thái biến đổi).
+   - Ở giữa hai bên có thể có đường cắt năng lượng, tia sét hoặc ranh giới chuyển cảnh mượt mà.
+2. **Nhân Vật Trung Tâm (Center Foreground — Tách Nền Nổi Bật):**
+   - **Ở chính giữa:** Chứa bức ảnh thứ 3 — thường là **thời kỳ/trạng thái chiến đấu đỉnh cao nhất của nhân vật chính**.
+   - Nhân vật này bắt buộc phải được **TÁCH NỀN HOÀN TOÀN (Background Removed)**, phóng to đặt đè lên ngay trên đường phân cách giữa 2 bức ảnh nền.
+   - Thêm viền sáng (rim light), hào quang chân khí rực rỡ, lôi điện hoặc tàn lửa bao quanh để nhân vật chính "bật hẳn lên khỏi màn hình" với hiệu ứng 3D thị giác choáng ngợp.
+3. **Typography 3D Nổi Khối (Impactful 3D Text Overlay):**
+   - Thêm 3 đến 5 từ giật tít màu vàng/cam có viền đen dày và đổ bóng 3D nổi bật ở dưới chân (ví dụ: *"HUYỀN THOẠI TRỞ LẠI"*, *"QUYẾT CHIẾN MA THÚ"*).
+4. **Vùng an toàn (Safe Zone):**
+   - Nửa dưới bên phải (25% chiều rộng × 20% chiều cao) phải để thoáng, không để chữ hay mặt nhân vật bị nhãn thời lượng video của YouTube (`12:45`) che khuất.
+
+### 2.3 Vị Trí Lưu Trữ Thành Phẩm
 Ảnh Thumbnail sau khi ghép hoàn thiện sẽ được lưu trực tiếp vào:
 - **Ảnh cho từng tập:** `output/<slug>/chapter_<num>_thumbnail.jpg`
 - **Ảnh cho trọn bộ (Feature):** `output/<slug>/feature_thumbnail.jpg`
