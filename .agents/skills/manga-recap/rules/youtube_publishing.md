@@ -32,27 +32,31 @@ Quy tắc này tổng hợp và chắt lọc các nguyên lý đóng gói (Packa
 
 ---
 
-## 2. Quy Trình Tạo Thumbnail AI Đỉnh Cao Bằng Antigravity (AI-Generated Thumbnail Protocol)
+## 2. Quy Trình Tạo Thumbnail Bằng Multimodal Character-Grounded Composition (Ghép Nhân Vật Gốc + Tách Nền + Hiệu Ứng + Chữ 3D)
 
-Toàn bộ logic cắt ghép heuristic (crop khung tranh thô bằng Pillow) đã được gỡ bỏ hoàn toàn. Thay vào đó, **Antigravity (Coding Agent) trực tiếp đóng vai trò Giám Đốc Sáng Tạo Visual & Họa Sĩ AI**, tạo ra ảnh bìa 16:9 sắc nét, điện ảnh và tối ưu CTR bằng năng lực AI tạo ảnh bản địa:
+⚠️ **QUY TẮC CỐT LÕI (BẮT BUỘC):**
+> *Khán giả xem Manga Recap nhận diện video qua chính nét vẽ gốc của tác giả. Tuyệt đối KHÔNG sử dụng Text-to-Image thuần túy chỉ qua mô tả chữ sơ sài vì sẽ vẽ lại một nhân vật hoàn toàn khác, làm mất đi tính nguyên bản của bộ truyện.*
 
-### 2.1 Ba Nguồn Dữ Liệu Tham Chiếu Bắt Buộc
-1. **Nhận diện & Trang phục Nhân vật (`characters.json`)**:
-   - Trích xuất ngoại hình, tuổi tác, kiểu tóc (búi tóc, tóc bạc...), vũ khí đặc trưng, thần thái khuôn mặt, trang phục (màu sắc, hoa văn) của nhân vật chính và phản diện.
-2. **Cốt truyện & Cao trào Cảm xúc (`story_summary.md` & `script.json`)**:
-   - Xác định mâu thuẫn cốt lõi, thế trận đối đầu, hoặc dị tượng võ học long trời lở đất trong tập để đưa vào bối cảnh.
-3. **Công Thức Visual Hook YouTube Tỷ Lệ Nhấp Cao (High-CTR)**:
-   - **Tương phản cảm xúc (Emotional Contrast):** Ví dụ: Lão cao thủ uy dũng lạnh lùng bảo vệ cháu gái nhỏ ngây thơ đáng yêu; hoặc nhân vật chính nhỏ bé áp đảo quái thú khổng lồ.
-   - **Ánh sáng kịch tính (Dramatic Cinematic Lighting):** Chân khí rực lửa/hoàng kim rực sáng tương phản với bầu trời giông bão/đêm tối u ám.
-   - **Góc máy điện ảnh:** Góc thấp (low-angle) tôn vinh khí phách người hùng, bố cục 16:9 (1376x768 hoặc 1920x1080).
-   - **Quy tắc Safe Zone:** Giữ góc dưới bên phải trống và đơn giản, không để mặt nhân vật hay chi tiết quan trọng rơi vào vùng `12:45` timestamp của YouTube.
+Chuẩn mực tạo Thumbnail Manga Recap tối ưu tỷ lệ nhấp (High-CTR) được thực hiện thông qua **Quy trình Lồng ghép Đa phương thức (Multimodal Image Fusion)**:
 
-### 2.2 Quy Trình Thực Hiện & Vị Trí Lưu Trữ
-1. Agent gọi subagent `image-generator` với bản mô tả prompt chi tiết (bao gồm art style Webtoon/Manhwa cao cấp, 16:9, chi tiết nhân vật từ `characters.json`).
-2. Lưu file ảnh chất lượng cao vào đúng đường dẫn chuẩn hóa:
-   - Ảnh tập: `output/<slug>/chapter_<num>_thumbnail.jpg`
-   - Ảnh trọn bộ: `output/<slug>/feature_thumbnail.jpg`
-3. Lệnh `manga-recap youtube upload` sẽ tự động phát hiện và đính kèm ảnh thumbnail này lên YouTube khi tải video.
+### 2.1 Bốn Bước Thực Hiện Chuẩn Mực
+1. **Trích xuất Khung tranh Gốc (Extract Original Character Panels)**:
+   - Chọn từ 1 đến 3 ảnh khung tranh sắc nét nhất của nhân vật chính, đối thủ hoặc tư thế xuất chiêu trong chapter (ví dụ: `panel_029.jpg`, `panel_252.jpg`).
+   - Giữ nguyên vẹn 100% nét vẽ, tỷ lệ và khuôn mặt do họa sĩ gốc của bộ truyện phác họa.
+2. **Tách Nền Thông Minh (Smart Background Removal)**:
+   - Loại bỏ bối cảnh cũ, bong bóng thoại hoặc các chi tiết thừa xung quanh nhân vật.
+3. **Lồng Ghép Bố Cục & Thêm Hiệu Ứng (Composition & Visual FX)**:
+   - Bố cục 16:9 điện ảnh: Nhân vật cận cảnh/tương phản mạnh ở tiền cảnh (Foreground), nhân vật hành động/xuất chiêu ở trung cảnh (Midground).
+   - Thêm hiệu ứng năng lượng: Hào quang chân khí, lôi điện rực sáng, vệt tốc độ (speed lines), ngọn lửa chân hỏa tương phản với bối cảnh bão tuyết hoặc sấm chớp.
+4. **Typography 3D Nổi Khối (Impactful 3D Text Overlay)**:
+   - Thêm 3 đến 5 từ giật tít màu vàng/cam có viền đen dày và đổ bóng 3D nổi bật (ví dụ: *"HUYỀN THOẠI TRỞ LẠI"*, *"AI CHO PHÉP?!"*, *"THỨC TỈNH"*).
+   - **Vùng an toàn (Safe Zone):** Nửa dưới bên phải (25% chiều rộng × 20% chiều cao) phải để trống, không để chữ hay mặt nhân vật bị nhãn thời lượng video của YouTube (`12:45`) che khuất.
+
+### 2.2 Vị Trí Lưu Trữ Thành Phẩm
+Ảnh Thumbnail sau khi ghép hoàn thiện sẽ được lưu trực tiếp vào:
+- **Ảnh cho từng tập:** `output/<slug>/chapter_<num>_thumbnail.jpg`
+- **Ảnh cho trọn bộ (Feature):** `output/<slug>/feature_thumbnail.jpg`
+Lệnh `manga-recap youtube upload` sẽ tự động phát hiện và đính kèm file ảnh này khi tải video lên YouTube.
 
 ---
 
