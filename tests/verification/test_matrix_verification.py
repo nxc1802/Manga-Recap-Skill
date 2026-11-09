@@ -323,6 +323,9 @@ class TestMinimumTestMatrixT01toT12:
         assert "portrait_padded" in worker_code
         assert "sanitize_sub_text" in worker_code
         assert "sidechaincompress" in worker_code
+        assert "split_text_into_cues" in worker_code
+        assert "compose_frame_canvas" in worker_code
+        assert "is_dynamic" in worker_code
 
     # --------------------------------------------------------------------------
     # T11: Skip chapter preview sets unreviewed status
@@ -359,6 +362,44 @@ class TestMinimumTestMatrixT01toT12:
         meta = load_chapter_metadata(chap_dir)
         assert meta.technical_status == CheckpointStatus.COMPLETED
         assert meta.human_review_status == HumanReviewStatus.UNREVIEWED
+
+        # Verify true editorial approval path sets APPROVED
+        proj_dir = chap_dir.parent.parent
+        v_sel = {
+            "project_slug": slug,
+            "status": "approved",
+            "reviewer": "Alice Editorial QA",
+            "reviewed_at": "2026-11-09T08:00:00Z",
+            "primary_voice": "Ngọc Huyền",
+            "strategy": "single_narrator",
+            "sample_audios_reviewed": ["sample.wav"],
+        }
+        p_sel = {
+            "project_slug": slug,
+            "chapter_number": "1",
+            "status": "approved",
+            "reviewer": "Alice Editorial QA",
+            "reviewed_at": "2026-11-09T08:00:00Z",
+            "preview_video_path": "video/preview.mp4",
+        }
+        atomic_write_json(proj_dir / "voice_selection.json", v_sel)
+        atomic_write_json(chap_dir / "preview_approval.json", p_sel)
+        vid_dir = chap_dir / "video"
+        vid_dir.mkdir(parents=True, exist_ok=True)
+        (vid_dir / "preview.mp4").write_bytes(b"\x00" * 100)
+
+        with patch("src.cli.render_cmd.VideoEngine") as mock_engine:
+            mock_inst = mock_engine.return_value
+            mock_inst.render_chapter.return_value = {
+                "video_path": str(chap_dir / "video" / "test.mp4"),
+                "subtitle_path": str(chap_dir / "subtitles" / "test.srt"),
+            }
+            code = main(["render", "-p", slug, "-c", "1", "--json"])
+            assert code == ExitCode.SUCCESS
+
+        meta_after = load_chapter_metadata(chap_dir)
+        assert meta_after.technical_status == CheckpointStatus.COMPLETED
+        assert meta_after.human_review_status == HumanReviewStatus.APPROVED
 
     # --------------------------------------------------------------------------
     # T12: Audio, Video, Subtitle artifact validation

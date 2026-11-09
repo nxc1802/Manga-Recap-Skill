@@ -682,6 +682,24 @@ elif found_script:
     else:
         project_json_path = workspace / "project.json"
     panels_dir = found_panels_dir
+
+    # Fix Critical 1: Discover and copy uncompressed audio clips from Kaggle dataset input
+    found_audio_clips = None
+    cand_audio = found_chap_parent / "audio" / "clips"
+    if cand_audio.exists() and any(cand_audio.glob("*.wav")):
+        found_audio_clips = cand_audio
+    else:
+        for a_dir in Path("/kaggle/input").rglob("clips"):
+            if any(a_dir.glob("*.wav")):
+                found_audio_clips = a_dir
+                break
+    if found_audio_clips:
+        print(f"🎵 Found uncompressed audio clips directory: {{found_audio_clips}}")
+        audio_clips_target = chapter_dir / "audio" / "clips"
+        audio_clips_target.mkdir(parents=True, exist_ok=True)
+        for wav_file in found_audio_clips.glob("*.wav"):
+            shutil.copy2(wav_file, audio_clips_target / wav_file.name)
+        print(f"Copied {{len(list(audio_clips_target.glob('*.wav')))}} audio clips to workspace.")
 else:
     raise FileNotFoundError("Could not find payload archive or chapter files in /kaggle/input")
 
@@ -710,6 +728,16 @@ import wave
 for seg in segments:
     seq_id = seg["seq_id"]
     out_wav = audio_clips_dir / f"audio_{chapter_number}_{{seq_id}}.wav"
+    if not out_wav.exists() or out_wav.stat().st_size == 0:
+        for search_root in [Path("/kaggle/input"), workspace]:
+            if not search_root.exists():
+                continue
+            for cand_wav in search_root.rglob(f"audio_{chapter_number}_{{seq_id}}.wav"):
+                if cand_wav.stat().st_size > 0:
+                    shutil.copy2(cand_wav, out_wav)
+                    break
+            if out_wav.exists() and out_wav.stat().st_size > 0:
+                break
     if not out_wav.exists() or out_wav.stat().st_size == 0:
         raise FileNotFoundError(
             f"[Stage: render] Missing or empty audio clip for chapter {chapter_number}, "
@@ -849,79 +877,141 @@ def wrap_sub_lines(text, max_chars, max_lines_allowed):
         lines.append(" ".join(curr))
     if len(lines) > max_lines_allowed:
         lines = lines[:max_lines_allowed]
-        lines[-1] = lines[-1] + "..."
     return "\\n".join(lines)
 
-def compose_single_frame(panel_file, text, out_frame_path, seq_id, motion_type="static", focus_box=None):
+def split_text_into_cues(text, duration_sec, max_chars=40, max_lines=2):
+    clean = sanitize_sub_text(text)
+    if not clean:
+        return []
+    words = clean.split()
+    if not words:
+        return []
+
+    chunks = []
+    curr_lines = []
+    curr_words = []
+    curr_len = 0
+    line_count = 1
+
+    for w in words:
+        if curr_len + len(w) + 1 > max_chars and curr_words:
+            curr_lines.append(" ".join(curr_words))
+            curr_words = [w]
+            curr_len = len(w)
+            line_count += 1
+            if line_count > max_lines:
+                chunks.append("\\n".join(curr_lines))
+                curr_lines = []
+                line_count = 1
+        else:
+            curr_words.append(w)
+            curr_len += len(w) + 1
+
+    if curr_words:
+        curr_lines.append(" ".join(curr_words))
+    if curr_lines:
+        chunks.append("\\n".join(curr_lines))
+
+    if not chunks:
+        return []
+
+    total_words = sum(len(c.split()) for c in chunks)
+    cues = []
+    cum_t = 0.0
+    for c in chunks:
+        ratio = float(len(c.split())) / float(max(1, total_words))
+        c_dur = duration_sec * ratio
+        cues.append(dict(text=c, duration=c_dur, start=cum_t, end=cum_t + c_dur))
+        cum_t += c_dur
+    return cues
+
+def compose_frame_canvas(p_img, out_frame_path, text=None, motion_type="static", focus_box=None, progress=0.0):
     w, h = cfg_w, cfg_h
     canvas = Image.new("RGB", (w, h), (20, 20, 20))
+    pw, ph = p_img.size
 
-    try:
-        with Image.open(panel_file) as orig_p:
-            p_img = orig_p.convert("RGB")
-            pw, ph = p_img.size
+    fx = 0.5
+    fy = 0.5
+    scale_ratio = 1.0
 
-            # Subject-centric focus crop if focus_box provided
-            if focus_box and isinstance(focus_box, dict) and motion_type in ("focus_crop", "static_focus", "static"):
-                fx = (focus_box.get("x_min", 0.0) + focus_box.get("x_max", 1.0)) / 2.0
-                fy = (focus_box.get("y_min", 0.0) + focus_box.get("y_max", 1.0)) / 2.0
-                scale_ratio = max(0.45, min(1.0, focus_box.get("x_max", 1.0) - focus_box.get("x_min", 0.0)))
-                crop_w = max(int(pw * scale_ratio), 10)
-                crop_h = max(int(ph * scale_ratio), 10)
-                cx, cy = int(fx * pw), int(fy * ph)
-                x1 = max(0, min(pw - crop_w, cx - crop_w // 2))
-                y1 = max(0, min(ph - crop_h, cy - crop_h // 2))
-                p_img = p_img.crop((x1, y1, x1 + crop_w, y1 + crop_h))
-                pw, ph = p_img.size
+    if focus_box and isinstance(focus_box, dict):
+        fx = (focus_box.get("x_min", 0.0) + focus_box.get("x_max", 1.0)) / 2.0
+        fy = (focus_box.get("y_min", 0.0) + focus_box.get("y_max", 1.0)) / 2.0
+        scale_ratio = max(0.45, min(1.0, focus_box.get("x_max", 1.0) - focus_box.get("x_min", 0.0)))
 
-            v_mode = detect_video_mode(pw, ph, cfg_video_mode)
+    # Temporal Ken Burns motion calculation
+    m_lower = str(motion_type).lower().strip()
+    if m_lower in ("zoom_in", "zoom"):
+        scale_ratio = max(0.45, scale_ratio * (1.0 - 0.12 * progress))
+    elif m_lower in ("zoom_out",):
+        scale_ratio = max(0.45, scale_ratio * (0.88 + 0.12 * progress))
+    elif m_lower in ("pan_left", "left"):
+        fx = max(0.2, min(0.8, fx + 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_right", "right"):
+        fx = max(0.2, min(0.8, fx - 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_up", "up"):
+        fy = max(0.2, min(0.8, fy + 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_down", "down", "vertical", "vertical_scroll"):
+        fy = max(0.2, min(0.8, fy - 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
 
-            # Background blur
-            bg = p_img.resize((w, h), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=25))
-            canvas.paste(bg, (0, 0))
+    crop_w = max(int(pw * scale_ratio), 10)
+    crop_h = max(int(ph * scale_ratio), 10)
+    cx, cy = int(fx * pw), int(fy * ph)
+    x1 = max(0, min(pw - crop_w, cx - crop_w // 2))
+    y1 = max(0, min(ph - crop_h, cy - crop_h // 2))
+    active_crop = p_img.crop((x1, y1, x1 + crop_w, y1 + crop_h))
+    ac_w, ac_h = active_crop.size
 
-            # Foreground layout according to video_mode
-            if v_mode == "landscape_fit":
-                scale = min(w / float(pw), h / float(ph))
-                fg_w = int(pw * scale)
-                fg_h = int(ph * scale)
-            elif v_mode == "portrait_vertical":
-                scale = min(float(w) * 0.65 / float(pw), float(h) / float(ph))
-                fg_w = int(pw * scale)
-                fg_h = int(ph * scale)
-            else: # portrait_padded
-                scale = h / float(ph)
-                fg_w = int(pw * scale)
-                if fg_w > w:
-                    scale = w / float(pw)
-                    fg_w = w
-                    fg_h = int(ph * scale)
-                else:
-                    fg_h = h
+    v_mode = detect_video_mode(ac_w, ac_h, cfg_video_mode)
 
-            fg = p_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
-            canvas.paste(fg, ((w - fg_w) // 2, (h - fg_h) // 2))
-    except Exception as e:
-        raise RuntimeError(
-            f"[Stage: render] Corrupted panel asset for chapter {chapter_number}, "
-            f"seq_id '{{seq_id}}': '{{panel_file}}' failed to load: {{e}}"
-        )
+    # Background blur
+    bg = active_crop.resize((w, h), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=25))
+    canvas.paste(bg, (0, 0))
+
+    # Foreground layout according to video_mode
+    if v_mode == "landscape_fit":
+        scale = min(w / float(ac_w), h / float(ac_h))
+        fg_w = int(ac_w * scale)
+        fg_h = int(ac_h * scale)
+    elif v_mode == "portrait_vertical":
+        scale = min(float(w) * 0.65 / float(ac_w), float(h) / float(ac_h))
+        fg_w = int(ac_w * scale)
+        fg_h = int(ac_h * scale)
+    else: # portrait_padded
+        scale = h / float(ac_h)
+        fg_w = int(ac_w * scale)
+        if fg_w > w:
+            scale = w / float(ac_w)
+            fg_w = w
+            fg_h = int(ac_h * scale)
+        else:
+            fg_h = h
+
+    fg = active_crop.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+    canvas.paste(fg, ((w - fg_w) // 2, (h - fg_h) // 2))
 
     # Subtitles overlay (if burned)
-    if cfg_burn_subs:
+    if cfg_burn_subs and text:
         draw = ImageDraw.Draw(canvas)
-        display_sub = wrap_sub_lines(text, cfg_max_chars, cfg_max_lines)
-        if display_sub:
-            lines = display_sub.split("\\n")
-            tx = w // 2
-            ty = h - (65 + (len(lines) - 1) * int(effective_font_pt * 1.25))
-            draw.text(
-                (tx, ty), display_sub, font=font, anchor="ma", align="center",
-                fill="#FFFFFF", stroke_width=4, stroke_fill="#000000"
-            )
+        lines = text.split("\\n")
+        tx = w // 2
+        ty = h - (65 + (len(lines) - 1) * int(effective_font_pt * 1.25))
+        draw.text(
+            (tx, ty), text, font=font, anchor="ma", align="center",
+            fill="#FFFFFF", stroke_width=4, stroke_fill="#000000"
+        )
 
     canvas.save(out_frame_path, quality=92)
     return out_frame_path
+
+def compose_single_frame(panel_file, text, out_frame_path, seq_id, motion_type="static", focus_box=None):
+    with Image.open(panel_file) as orig_p:
+        p_img = orig_p.convert("RGB")
+        return compose_frame_canvas(p_img, out_frame_path, text=text, motion_type=motion_type, focus_box=focus_box, progress=0.0)
 
 def process_segment_render(seg):
     seq_id = seg["seq_id"]
@@ -938,6 +1028,13 @@ def process_segment_render(seg):
     motion_type = seg.get("camera_motion", "static")
     focus_box = seg.get("focus_box")
 
+    is_dynamic = str(motion_type).lower().strip() in (
+        "zoom_in", "zoom", "zoom_out", "pan_left", "left", "pan_right", "right",
+        "pan_up", "up", "pan_down", "down", "vertical", "vertical_scroll"
+    )
+
+    cues = split_text_into_cues(text, dur, max_chars=cfg_max_chars, max_lines=cfg_max_lines)
+
     seg_frame_results = []
     for p_idx, p_id in enumerate(p_ids):
         candidate = panels_dir / p_id
@@ -953,13 +1050,53 @@ def process_segment_render(seg):
                 f"Substitution is strictly prohibited."
             )
 
-        if m == 1:
-            frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
-        else:
-            frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+        try:
+            with Image.open(candidate) as orig_p:
+                p_img = orig_p.convert("RGB")
+        except Exception as e:
+            raise RuntimeError(
+                f"[Stage: render] Corrupted panel asset for chapter {chapter_number}, "
+                f"seq_id '{{seq_id}}': '{{candidate}}' failed to load: {{e}}"
+            )
 
-        compose_single_frame(candidate, text, frame_file, seq_id, motion_type, focus_box)
-        seg_frame_results.append((frame_file, p_dur))
+        p_start_time = p_idx * p_dur
+        p_end_time = (p_idx + 1) * p_dur
+
+        if is_dynamic:
+            num_steps = max(2, min(8, int(p_dur * 2)))
+        else:
+            active_cues = [c for c in cues if not (c["end"] <= p_start_time or c["start"] >= p_end_time)]
+            num_steps = max(1, len(active_cues))
+
+        step_dur = p_dur / float(num_steps)
+
+        for step in range(num_steps):
+            step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
+            step_time = p_start_time + (step + 0.5) * step_dur
+
+            cue_text = ""
+            for c in cues:
+                if c["start"] <= step_time <= c["end"]:
+                    cue_text = c["text"]
+                    break
+            if not cue_text and cues:
+                cue_text = cues[-1]["text"]
+
+            if m == 1 and num_steps == 1:
+                frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
+            elif num_steps == 1:
+                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+            else:
+                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_step_{{step}}.jpg"
+            compose_frame_canvas(
+                p_img=p_img,
+                out_frame_path=frame_file,
+                text=cue_text,
+                motion_type=motion_type if is_dynamic else "static",
+                focus_box=focus_box,
+                progress=step_progress if is_dynamic else 0.0
+            )
+            seg_frame_results.append((frame_file, step_dur))
 
     return seg_frame_results
 
@@ -1287,6 +1424,24 @@ elif found_script:
     else:
         project_json_path = workspace / "project.json"
     panels_dir = found_panels_dir
+
+    # Fix Critical 1: Discover and copy uncompressed audio clips from Kaggle dataset input
+    found_audio_clips = None
+    cand_audio = found_chap_parent / "audio" / "clips"
+    if cand_audio.exists() and any(cand_audio.glob("*.wav")):
+        found_audio_clips = cand_audio
+    else:
+        for a_dir in Path("/kaggle/input").rglob("clips"):
+            if any(a_dir.glob("*.wav")):
+                found_audio_clips = a_dir
+                break
+    if found_audio_clips:
+        print(f"🎵 Found uncompressed audio clips directory: {{found_audio_clips}}")
+        audio_clips_target = chapter_dir / "audio" / "clips"
+        audio_clips_target.mkdir(parents=True, exist_ok=True)
+        for wav_file in found_audio_clips.glob("*.wav"):
+            shutil.copy2(wav_file, audio_clips_target / wav_file.name)
+        print(f"Copied {{len(list(audio_clips_target.glob('*.wav')))}} audio clips to workspace.")
 else:
     raise FileNotFoundError("Could not find payload archive or chapter files in /kaggle/input")
 
@@ -1308,6 +1463,20 @@ audio_clips_dir = chapter_dir / "audio" / "clips"
 audio_clips_dir.mkdir(parents=True, exist_ok=True)
 
 # 3. Check for Pre-Existing Audio (Render-Only Independence)
+for seg in segments:
+    seq_id = seg["seq_id"]
+    out_wav = audio_clips_dir / f"audio_{chapter_number}_{{seq_id}}.wav"
+    if not out_wav.exists() or out_wav.stat().st_size == 0:
+        for search_root in [Path("/kaggle/input"), workspace]:
+            if not search_root.exists():
+                continue
+            for cand_wav in search_root.rglob(f"audio_{chapter_number}_{{seq_id}}.wav"):
+                if cand_wav.stat().st_size > 0:
+                    shutil.copy2(cand_wav, out_wav)
+                    break
+            if out_wav.exists() and out_wav.stat().st_size > 0:
+                break
+
 pre_existing_audio = len(segments) > 0 and all(
     (audio_clips_dir / f"audio_{chapter_number}_{{seg['seq_id']}}.wav").exists()
     and (audio_clips_dir / f"audio_{chapter_number}_{{seg['seq_id']}}.wav").stat().st_size > 0
@@ -1569,79 +1738,141 @@ def wrap_sub_lines(text, max_chars, max_lines_allowed):
         lines.append(" ".join(curr))
     if len(lines) > max_lines_allowed:
         lines = lines[:max_lines_allowed]
-        lines[-1] = lines[-1] + "..."
     return "\\n".join(lines)
 
-def compose_single_frame(panel_file, text, out_frame_path, seq_id, motion_type="static", focus_box=None):
+def split_text_into_cues(text, duration_sec, max_chars=40, max_lines=2):
+    clean = sanitize_sub_text(text)
+    if not clean:
+        return []
+    words = clean.split()
+    if not words:
+        return []
+
+    chunks = []
+    curr_lines = []
+    curr_words = []
+    curr_len = 0
+    line_count = 1
+
+    for w in words:
+        if curr_len + len(w) + 1 > max_chars and curr_words:
+            curr_lines.append(" ".join(curr_words))
+            curr_words = [w]
+            curr_len = len(w)
+            line_count += 1
+            if line_count > max_lines:
+                chunks.append("\\n".join(curr_lines))
+                curr_lines = []
+                line_count = 1
+        else:
+            curr_words.append(w)
+            curr_len += len(w) + 1
+
+    if curr_words:
+        curr_lines.append(" ".join(curr_words))
+    if curr_lines:
+        chunks.append("\\n".join(curr_lines))
+
+    if not chunks:
+        return []
+
+    total_words = sum(len(c.split()) for c in chunks)
+    cues = []
+    cum_t = 0.0
+    for c in chunks:
+        ratio = float(len(c.split())) / float(max(1, total_words))
+        c_dur = duration_sec * ratio
+        cues.append(dict(text=c, duration=c_dur, start=cum_t, end=cum_t + c_dur))
+        cum_t += c_dur
+    return cues
+
+def compose_frame_canvas(p_img, out_frame_path, text=None, motion_type="static", focus_box=None, progress=0.0):
     w, h = cfg_w, cfg_h
     canvas = Image.new("RGB", (w, h), (20, 20, 20))
+    pw, ph = p_img.size
 
-    try:
-        with Image.open(panel_file) as orig_p:
-            p_img = orig_p.convert("RGB")
-            pw, ph = p_img.size
+    fx = 0.5
+    fy = 0.5
+    scale_ratio = 1.0
 
-            # Subject-centric focus crop if focus_box provided
-            if focus_box and isinstance(focus_box, dict) and motion_type in ("focus_crop", "static_focus", "static"):
-                fx = (focus_box.get("x_min", 0.0) + focus_box.get("x_max", 1.0)) / 2.0
-                fy = (focus_box.get("y_min", 0.0) + focus_box.get("y_max", 1.0)) / 2.0
-                scale_ratio = max(0.45, min(1.0, focus_box.get("x_max", 1.0) - focus_box.get("x_min", 0.0)))
-                crop_w = max(int(pw * scale_ratio), 10)
-                crop_h = max(int(ph * scale_ratio), 10)
-                cx, cy = int(fx * pw), int(fy * ph)
-                x1 = max(0, min(pw - crop_w, cx - crop_w // 2))
-                y1 = max(0, min(ph - crop_h, cy - crop_h // 2))
-                p_img = p_img.crop((x1, y1, x1 + crop_w, y1 + crop_h))
-                pw, ph = p_img.size
+    if focus_box and isinstance(focus_box, dict):
+        fx = (focus_box.get("x_min", 0.0) + focus_box.get("x_max", 1.0)) / 2.0
+        fy = (focus_box.get("y_min", 0.0) + focus_box.get("y_max", 1.0)) / 2.0
+        scale_ratio = max(0.45, min(1.0, focus_box.get("x_max", 1.0) - focus_box.get("x_min", 0.0)))
 
-            v_mode = detect_video_mode(pw, ph, cfg_video_mode)
+    # Temporal Ken Burns motion calculation
+    m_lower = str(motion_type).lower().strip()
+    if m_lower in ("zoom_in", "zoom"):
+        scale_ratio = max(0.45, scale_ratio * (1.0 - 0.12 * progress))
+    elif m_lower in ("zoom_out",):
+        scale_ratio = max(0.45, scale_ratio * (0.88 + 0.12 * progress))
+    elif m_lower in ("pan_left", "left"):
+        fx = max(0.2, min(0.8, fx + 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_right", "right"):
+        fx = max(0.2, min(0.8, fx - 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_up", "up"):
+        fy = max(0.2, min(0.8, fy + 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
+    elif m_lower in ("pan_down", "down", "vertical", "vertical_scroll"):
+        fy = max(0.2, min(0.8, fy - 0.06 * (0.5 - progress)))
+        scale_ratio = max(0.45, min(0.95, scale_ratio))
 
-            # Background blur
-            bg = p_img.resize((w, h), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=25))
-            canvas.paste(bg, (0, 0))
+    crop_w = max(int(pw * scale_ratio), 10)
+    crop_h = max(int(ph * scale_ratio), 10)
+    cx, cy = int(fx * pw), int(fy * ph)
+    x1 = max(0, min(pw - crop_w, cx - crop_w // 2))
+    y1 = max(0, min(ph - crop_h, cy - crop_h // 2))
+    active_crop = p_img.crop((x1, y1, x1 + crop_w, y1 + crop_h))
+    ac_w, ac_h = active_crop.size
 
-            # Foreground layout according to video_mode
-            if v_mode == "landscape_fit":
-                scale = min(w / float(pw), h / float(ph))
-                fg_w = int(pw * scale)
-                fg_h = int(ph * scale)
-            elif v_mode == "portrait_vertical":
-                scale = min(float(w) * 0.65 / float(pw), float(h) / float(ph))
-                fg_w = int(pw * scale)
-                fg_h = int(ph * scale)
-            else: # portrait_padded
-                scale = h / float(ph)
-                fg_w = int(pw * scale)
-                if fg_w > w:
-                    scale = w / float(pw)
-                    fg_w = w
-                    fg_h = int(ph * scale)
-                else:
-                    fg_h = h
+    v_mode = detect_video_mode(ac_w, ac_h, cfg_video_mode)
 
-            fg = p_img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
-            canvas.paste(fg, ((w - fg_w) // 2, (h - fg_h) // 2))
-    except Exception as e:
-        raise RuntimeError(
-            f"[Stage: render] Corrupted panel asset for chapter {chapter_number}, "
-            f"seq_id '{{seq_id}}': '{{panel_file}}' failed to load: {{e}}"
-        )
+    # Background blur
+    bg = active_crop.resize((w, h), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=25))
+    canvas.paste(bg, (0, 0))
+
+    # Foreground layout according to video_mode
+    if v_mode == "landscape_fit":
+        scale = min(w / float(ac_w), h / float(ac_h))
+        fg_w = int(ac_w * scale)
+        fg_h = int(ac_h * scale)
+    elif v_mode == "portrait_vertical":
+        scale = min(float(w) * 0.65 / float(ac_w), float(h) / float(ac_h))
+        fg_w = int(ac_w * scale)
+        fg_h = int(ac_h * scale)
+    else: # portrait_padded
+        scale = h / float(ac_h)
+        fg_w = int(ac_w * scale)
+        if fg_w > w:
+            scale = w / float(ac_w)
+            fg_w = w
+            fg_h = int(ac_h * scale)
+        else:
+            fg_h = h
+
+    fg = active_crop.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
+    canvas.paste(fg, ((w - fg_w) // 2, (h - fg_h) // 2))
 
     # Subtitles overlay (if burned)
-    if cfg_burn_subs:
+    if cfg_burn_subs and text:
         draw = ImageDraw.Draw(canvas)
-        display_sub = wrap_sub_lines(text, cfg_max_chars, cfg_max_lines)
-        if display_sub:
-            lines = display_sub.split("\\n")
-            tx = w // 2
-            ty = h - (65 + (len(lines) - 1) * int(effective_font_pt * 1.25))
-            draw.text(
-                (tx, ty), display_sub, font=font, anchor="ma", align="center",
-                fill="#FFFFFF", stroke_width=4, stroke_fill="#000000"
-            )
+        lines = text.split("\\n")
+        tx = w // 2
+        ty = h - (65 + (len(lines) - 1) * int(effective_font_pt * 1.25))
+        draw.text(
+            (tx, ty), text, font=font, anchor="ma", align="center",
+            fill="#FFFFFF", stroke_width=4, stroke_fill="#000000"
+        )
 
     canvas.save(out_frame_path, quality=92)
     return out_frame_path
+
+def compose_single_frame(panel_file, text, out_frame_path, seq_id, motion_type="static", focus_box=None):
+    with Image.open(panel_file) as orig_p:
+        p_img = orig_p.convert("RGB")
+        return compose_frame_canvas(p_img, out_frame_path, text=text, motion_type=motion_type, focus_box=focus_box, progress=0.0)
 
 def process_segment_render(seg):
     seq_id = seg["seq_id"]
@@ -1658,6 +1889,13 @@ def process_segment_render(seg):
     motion_type = seg.get("camera_motion", "static")
     focus_box = seg.get("focus_box")
 
+    is_dynamic = str(motion_type).lower().strip() in (
+        "zoom_in", "zoom", "zoom_out", "pan_left", "left", "pan_right", "right",
+        "pan_up", "up", "pan_down", "down", "vertical", "vertical_scroll"
+    )
+
+    cues = split_text_into_cues(text, dur, max_chars=cfg_max_chars, max_lines=cfg_max_lines)
+
     seg_frame_results = []
     for p_idx, p_id in enumerate(p_ids):
         candidate = panels_dir / p_id
@@ -1673,13 +1911,53 @@ def process_segment_render(seg):
                 f"Substitution is strictly prohibited."
             )
 
-        if m == 1:
-            frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
-        else:
-            frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+        try:
+            with Image.open(candidate) as orig_p:
+                p_img = orig_p.convert("RGB")
+        except Exception as e:
+            raise RuntimeError(
+                f"[Stage: render] Corrupted panel asset for chapter {chapter_number}, "
+                f"seq_id '{{seq_id}}': '{{candidate}}' failed to load: {{e}}"
+            )
 
-        compose_single_frame(candidate, text, frame_file, seq_id, motion_type, focus_box)
-        seg_frame_results.append((frame_file, p_dur))
+        p_start_time = p_idx * p_dur
+        p_end_time = (p_idx + 1) * p_dur
+
+        if is_dynamic:
+            num_steps = max(2, min(8, int(p_dur * 2)))
+        else:
+            active_cues = [c for c in cues if not (c["end"] <= p_start_time or c["start"] >= p_end_time)]
+            num_steps = max(1, len(active_cues))
+
+        step_dur = p_dur / float(num_steps)
+
+        for step in range(num_steps):
+            step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
+            step_time = p_start_time + (step + 0.5) * step_dur
+
+            cue_text = ""
+            for c in cues:
+                if c["start"] <= step_time <= c["end"]:
+                    cue_text = c["text"]
+                    break
+            if not cue_text and cues:
+                cue_text = cues[-1]["text"]
+
+            if m == 1 and num_steps == 1:
+                frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
+            elif num_steps == 1:
+                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+            else:
+                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_step_{{step}}.jpg"
+            compose_frame_canvas(
+                p_img=p_img,
+                out_frame_path=frame_file,
+                text=cue_text,
+                motion_type=motion_type if is_dynamic else "static",
+                focus_box=focus_box,
+                progress=step_progress if is_dynamic else 0.0
+            )
+            seg_frame_results.append((frame_file, step_dur))
 
     return seg_frame_results
 

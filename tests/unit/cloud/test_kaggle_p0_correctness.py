@@ -443,3 +443,27 @@ class TestSecurityInvariants:
                 assert lic.get("name") != "CC0-1.0", (
                     "Security / Copyright violation: Manga chapter dataset unconditionally claimed CC0-1.0!"
                 )
+
+    def test_worker_script_copies_uncompressed_audio_clips(self, cloud_service, synthetic_workspace):
+        """Fix Critical 1: Worker script must scan and copy uncompressed audio clips from /kaggle/input."""
+        script_content = cloud_service.generate_worker_script(
+            synthetic_workspace["project_slug"],
+            synthetic_workspace["chapter_number"],
+            job_type="render",
+        )
+        assert "audio_clips_target = chapter_dir / \"audio\" / \"clips\"" in script_content
+        assert "Found uncompressed audio clips directory" in script_content
+        assert "for cand_wav in search_root.rglob" in script_content
+
+    def test_worker_script_generates_dynamic_camera_motion_and_timed_cues(self, cloud_service, synthetic_workspace):
+        """Fix Critical 2: Worker script must support timed subtitle cues and temporal Ken Burns camera motion."""
+        script_content = cloud_service.generate_worker_script(
+            synthetic_workspace["project_slug"],
+            synthetic_workspace["chapter_number"],
+            job_type="render",
+            burn_subtitles=True,
+        )
+        assert "def split_text_into_cues" in script_content
+        assert "def compose_frame_canvas" in script_content
+        assert "is_dynamic" in script_content
+        assert "num_steps = max(2, min(8, int(p_dur * 2)))" in script_content

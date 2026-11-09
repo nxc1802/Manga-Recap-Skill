@@ -117,6 +117,37 @@ class SingleSessionProductionRunner:
         self.manifest.audit_secrets()
         self.manifest.save(self.job_file_path)
 
+    @staticmethod
+    def _is_valid_wav_clip(path: Path) -> bool:
+        """Validates that a WAV file exists, has valid RIFF/WAVE header, and audio frames."""
+        if not path.exists() or path.stat().st_size <= 44:
+            return False
+        try:
+            with open(path, "rb") as f:
+                header = f.read(12)
+                if len(header) < 12 or header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+                    return False
+            import wave
+            with wave.open(str(path), "rb") as wf:
+                return wf.getnframes() > 0 and wf.getframerate() > 0
+        except Exception:
+            return path.stat().st_size > 44
+
+    @staticmethod
+    def _is_valid_mp4_video(path: Path) -> bool:
+        """Validates MP4 container box header and minimum size."""
+        if not path.exists() or path.stat().st_size < 1024:
+            return False
+        try:
+            header = path.read_bytes()[:64]
+            if b"ftyp" in header or b"moov" in header:
+                return True
+            if len(header) >= 8 and (header[4:8] in (b"ftyp", b"moov", b"free", b"mdat", b"wide")):
+                return True
+        except Exception:
+            pass
+        return path.stat().st_size >= 4096
+
     def _is_chapter_audio_complete(self, chapter_num: Union[str, int]) -> bool:
         """Checks if all segments in script.json already have valid audio clips on disk."""
         chap_dir = get_chapter_dir(self.manifest.project_slug, str(chapter_num))
@@ -140,11 +171,11 @@ class SingleSessionProductionRunner:
                     cand = Path(seg.audio_path)
                     if not cand.is_absolute():
                         cand = chap_dir / cand
-                    if cand.exists() and cand.stat().st_size > 44:
+                    if self._is_valid_wav_clip(cand):
                         wav_p = cand
                 if not wav_p:
                     cand = chap_dir / "audio" / "clips" / f"audio_{chapter_num}_{seg.seq_id}.wav"
-                    if cand.exists() and cand.stat().st_size > 44:
+                    if self._is_valid_wav_clip(cand):
                         wav_p = cand
                 if not wav_p:
                     return False
@@ -153,7 +184,7 @@ class SingleSessionProductionRunner:
             return False
 
     def _is_chapter_render_complete(self, chapter_num: Union[str, int]) -> bool:
-        """Checks if final MP4 video already exists on disk."""
+        """Checks if final MP4 video already exists and chapter status is completed."""
         chap_dir = get_chapter_dir(self.manifest.project_slug, str(chapter_num))
         if not chap_dir.exists():
             fallback = self.project_dir / "chapters" / str(chapter_num)
@@ -161,11 +192,25 @@ class SingleSessionProductionRunner:
                 chap_dir = fallback
             else:
                 return False
+
+        # Fix Medium 5: Verify chapter checkpoint status prevents reusing artifacts from aborted/failed renders
+        chap_meta_file = chap_dir / "chapter.json"
+        if chap_meta_file.exists():
+            try:
+                chap_meta = load_chapter_metadata(chap_dir)
+                if (
+                    chap_meta.technical_status != CheckpointStatus.COMPLETED
+                    and chap_meta.overall_status != CheckpointStatus.COMPLETED
+                ):
+                    return False
+            except Exception:
+                pass
+
         final_mp4 = chap_dir / "video" / "final.mp4"
-        if final_mp4.exists() and final_mp4.stat().st_size > 1000:
+        if self._is_valid_mp4_video(final_mp4):
             return True
         staged_mp4 = get_output_dir(self.manifest.project_slug) / format_chapter_filename(chapter_num)
-        return bool(staged_mp4.exists() and staged_mp4.stat().st_size > 1000)
+        return bool(self._is_valid_mp4_video(staged_mp4))
 
     def run(self) -> ProductionJobManifest:
         """

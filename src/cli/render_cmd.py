@@ -367,10 +367,33 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                 chap_meta = load_chapter_metadata(chap_dir)
                 chap_meta.overall_status = CheckpointStatus.COMPLETED
                 chap_meta.technical_status = CheckpointStatus.COMPLETED
-                if skip_preview:
-                    chap_meta.human_review_status = HumanReviewStatus.UNREVIEWED
-                elif approved:
+
+                # Fix High 4: Verify actual human review approval artifact with valid reviewer signature.
+                # Bypassing gates via --approved or --skip-preview allows technical completion,
+                # but human_review_status is ONLY marked APPROVED if valid editorial approvals exist.
+                has_editorial_approval = False
+                try:
+                    from src.core.schemas import PreviewApproval, VoiceSelectionApproval
+                    v_p = project_dir / "voice_selection.json"
+                    if not v_p.exists():
+                        v_p = chap_dir / "voice_selection.json"
+                    p_p = project_dir / "preview_approval.json"
+                    if not p_p.exists():
+                        p_p = chap_dir / "preview_approval.json"
+
+                    if v_p.exists() and p_p.exists():
+                        v_app = VoiceSelectionApproval.model_validate(json.loads(v_p.read_text(encoding="utf-8")))
+                        p_app = PreviewApproval.model_validate(json.loads(p_p.read_text(encoding="utf-8")))
+                        if v_app.is_approved() and p_app.is_approved():
+                            has_editorial_approval = True
+                except Exception:
+                    has_editorial_approval = False
+
+                if has_editorial_approval:
                     chap_meta.human_review_status = HumanReviewStatus.APPROVED
+                else:
+                    chap_meta.human_review_status = HumanReviewStatus.UNREVIEWED
+
                 chap_meta.updated_at = utc_iso_now()
                 atomic_write_json(chap_dir / "chapter.json", chap_meta)
 
