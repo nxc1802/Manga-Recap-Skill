@@ -704,6 +704,8 @@ class PreviewApproval(BaseModel):
     approved_at: str = Field(default_factory=utc_iso_now, description="ISO timestamp of approval")
     status: str = Field(default="approved", description="Approval status (must be 'approved')")
     notes: Optional[str] = Field(default=None, description="Review notes")
+    video_sha256: Optional[str] = Field(default=None, description="SHA-256 fingerprint of approved preview video")
+    script_sha256: Optional[str] = Field(default=None, description="SHA-256 fingerprint of approved script.json")
 
     @model_validator(mode="before")
     @classmethod
@@ -719,6 +721,14 @@ class PreviewApproval(BaseModel):
 
     def is_approved(self) -> bool:
         return bool(self.status.lower().strip() == "approved" and self.reviewer.strip())
+
+    def matches_content(self, current_script_hash: Optional[str] = None, current_video_hash: Optional[str] = None) -> bool:
+        """Verifies that approval matches current script and preview video content hashes."""
+        if self.script_sha256 and current_script_hash and self.script_sha256 != current_script_hash:
+            return False
+        if self.video_sha256 and current_video_hash and self.video_sha256 != current_video_hash:
+            return False
+        return True
 
 
 # ==============================================================================

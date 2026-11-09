@@ -289,6 +289,21 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                         f"but current render target is '{project_slug}'."
                     )
 
+                # Fix S1.5: Verify approval freshness against content fingerprints
+                import hashlib
+                curr_s_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()
+                curr_pv_path = chap_dir / "video" / "preview.mp4"
+                curr_v_hash = hashlib.sha256(curr_pv_path.read_bytes()).hexdigest() if curr_pv_path.exists() and curr_pv_path.stat().st_size > 0 else None
+
+                if prev_approval.script_sha256 and prev_approval.script_sha256 != curr_s_hash:
+                    raise CliValidationError(
+                        "Human Review Gate 2 approval is stale: script.json content hash has changed since editorial sign-off."
+                    )
+                if prev_approval.video_sha256 and curr_v_hash and prev_approval.video_sha256 != curr_v_hash:
+                    raise CliValidationError(
+                        "Human Review Gate 2 approval is stale: preview video content hash has changed since editorial sign-off."
+                    )
+
     # Prioritize existing valid audio clips; only invoke TTS if audio is missing
     from src.core.schemas import RecapScript
     script_raw = read_json(script_path)
@@ -385,7 +400,13 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
                         v_app = VoiceSelectionApproval.model_validate(json.loads(v_p.read_text(encoding="utf-8")))
                         p_app = PreviewApproval.model_validate(json.loads(p_p.read_text(encoding="utf-8")))
                         if v_app.is_approved() and p_app.is_approved():
-                            has_editorial_approval = True
+                            # Fix S1.5: Invalidate approval if content fingerprint has changed
+                            import hashlib
+                            curr_s_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()
+                            curr_pv_path = chap_dir / "video" / "preview.mp4"
+                            curr_v_hash = hashlib.sha256(curr_pv_path.read_bytes()).hexdigest() if curr_pv_path.exists() and curr_pv_path.stat().st_size > 0 else None
+                            if p_app.matches_content(curr_s_hash, curr_v_hash):
+                                has_editorial_approval = True
                 except Exception:
                     has_editorial_approval = False
 

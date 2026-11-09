@@ -683,16 +683,14 @@ elif found_script:
         project_json_path = workspace / "project.json"
     panels_dir = found_panels_dir
 
-    # Fix Critical 1: Discover and copy uncompressed audio clips from Kaggle dataset input
+    # S1.4: Strict Chapter Payload Isolation (No broad rglob across /kaggle/input)
     found_audio_clips = None
     cand_audio = found_chap_parent / "audio" / "clips"
     if cand_audio.exists() and any(cand_audio.glob("*.wav")):
         found_audio_clips = cand_audio
-    else:
-        for a_dir in Path("/kaggle/input").rglob("clips"):
-            if any(a_dir.glob("*.wav")):
-                found_audio_clips = a_dir
-                break
+    elif (found_chap_parent / "clips").exists() and any((found_chap_parent / "clips").glob("*.wav")):
+        found_audio_clips = found_chap_parent / "clips"
+
     if found_audio_clips:
         print(f"🎵 Found uncompressed audio clips directory: {{found_audio_clips}}")
         audio_clips_target = chapter_dir / "audio" / "clips"
@@ -729,19 +727,14 @@ for seg in segments:
     seq_id = seg["seq_id"]
     out_wav = audio_clips_dir / f"audio_{chapter_number}_{{seq_id}}.wav"
     if not out_wav.exists() or out_wav.stat().st_size == 0:
-        for search_root in [Path("/kaggle/input"), workspace]:
-            if not search_root.exists():
-                continue
-            for cand_wav in search_root.rglob(f"audio_{chapter_number}_{{seq_id}}.wav"):
-                if cand_wav.stat().st_size > 0:
-                    shutil.copy2(cand_wav, out_wav)
-                    break
-            if out_wav.exists() and out_wav.stat().st_size > 0:
-                break
+        if found_chap_parent:
+            cand_isolated = found_chap_parent / "audio" / "clips" / f"audio_{chapter_number}_{{seq_id}}.wav"
+            if cand_isolated.exists() and cand_isolated.stat().st_size > 0:
+                shutil.copy2(cand_isolated, out_wav)
     if not out_wav.exists() or out_wav.stat().st_size == 0:
         raise FileNotFoundError(
-            f"[Stage: render] Missing or empty audio clip for chapter {chapter_number}, "
-            f"seq_id '{{seq_id}}': '{{out_wav}}'. Reusing audio cache requires all clips present."
+            f"[Stage: render] Missing or empty audio clip in chapter payload for chapter {chapter_number}, "
+            f"seq_id '{{seq_id}}': '{{out_wav}}'. Reusing audio cache requires all clips present in chapter."
         )
     with wave.open(str(out_wav), "rb") as wf:
         dur_sec = wf.getnframes() / float(wf.getframerate())
@@ -749,7 +742,13 @@ for seg in segments:
     seg["audio_path"] = f"audio/clips/audio_{chapter_number}_{{seq_id}}.wav"
     seg["status"] = "synthesized"
     with open(out_wav, "rb") as af:
-        seg["checksum"] = hashlib.sha256(af.read()).hexdigest()
+        actual_hash = hashlib.sha256(af.read()).hexdigest()
+    if seg.get("checksum") and seg["checksum"] != actual_hash:
+        raise ValueError(
+            f"[Stage: render] Audio clip checksum mismatch for chapter {chapter_number}, seq_id '{{seq_id}}': "
+            f"expected '{{seg['checksum']}}', got '{{actual_hash}}'."
+        )
+    seg["checksum"] = actual_hash
 
 with open(script_path, "w", encoding="utf-8") as f:
     json.dump(script, f, ensure_ascii=False, indent=2)
@@ -1063,40 +1062,72 @@ def process_segment_render(seg):
         p_end_time = (p_idx + 1) * p_dur
 
         if is_dynamic:
-            num_steps = max(2, min(8, int(p_dur * 2)))
-        else:
-            active_cues = [c for c in cues if not (c["end"] <= p_start_time or c["start"] >= p_end_time)]
-            num_steps = max(1, len(active_cues))
+            # Continuous interpolation at output FPS (30 FPS)
+            num_steps = max(1, int(round(p_dur * cfg_fps)))
+            step_dur = p_dur / float(num_steps)
+            for step in range(num_steps):
+                step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
+                step_time = p_start_time + (step + 0.5) * step_dur
 
-        step_dur = p_dur / float(num_steps)
+                cue_text = ""
+                for c in cues:
+                    if c["start"] <= step_time <= c["end"]:
+                        cue_text = c["text"]
+                        break
 
-        for step in range(num_steps):
-            step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
-            step_time = p_start_time + (step + 0.5) * step_dur
-
-            cue_text = ""
-            for c in cues:
-                if c["start"] <= step_time <= c["end"]:
-                    cue_text = c["text"]
-                    break
-            if not cue_text and cues:
-                cue_text = cues[-1]["text"]
-
-            if m == 1 and num_steps == 1:
-                frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
-            elif num_steps == 1:
-                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
-            else:
                 frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_step_{{step}}.jpg"
-            compose_frame_canvas(
-                p_img=p_img,
-                out_frame_path=frame_file,
-                text=cue_text,
-                motion_type=motion_type if is_dynamic else "static",
-                focus_box=focus_box,
-                progress=step_progress if is_dynamic else 0.0
-            )
-            seg_frame_results.append((frame_file, step_dur))
+                compose_frame_canvas(
+                    p_img=p_img,
+                    out_frame_path=frame_file,
+                    text=cue_text,
+                    motion_type=motion_type,
+                    focus_box=focus_box,
+                    progress=step_progress
+                )
+                seg_frame_results.append((frame_file, step_dur))
+        else:
+            # Static path: canonical cue intervals with zero dropped cues
+            bounds = set([p_start_time, p_end_time])
+            for c in cues:
+                if p_start_time < c["start"] < p_end_time:
+                    bounds.add(c["start"])
+                if p_start_time < c["end"] < p_end_time:
+                    bounds.add(c["end"])
+            sorted_bounds = sorted(bounds)
+            intervals = []
+            for b_i in range(len(sorted_bounds) - 1):
+                t_a = sorted_bounds[b_i]
+                t_b = sorted_bounds[b_i + 1]
+                if t_b - t_a > 0.001:
+                    intervals.append((t_a, t_b))
+            if not intervals:
+                intervals = [(p_start_time, p_end_time)]
+
+            for step, (t_a, t_b) in enumerate(intervals):
+                sub_dur = t_b - t_a
+                t_mid = (t_a + t_b) / 2.0
+                cue_text = ""
+                for c in cues:
+                    if c["start"] <= t_mid <= c["end"]:
+                        cue_text = c["text"]
+                        break
+
+                if m == 1 and len(intervals) == 1:
+                    frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
+                elif len(intervals) == 1:
+                    frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+                else:
+                    frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_cue_{{step}}.jpg"
+
+                compose_frame_canvas(
+                    p_img=p_img,
+                    out_frame_path=frame_file,
+                    text=cue_text,
+                    motion_type="static",
+                    focus_box=focus_box,
+                    progress=0.0
+                )
+                seg_frame_results.append((frame_file, sub_dur))
 
     return seg_frame_results
 
@@ -1425,16 +1456,14 @@ elif found_script:
         project_json_path = workspace / "project.json"
     panels_dir = found_panels_dir
 
-    # Fix Critical 1: Discover and copy uncompressed audio clips from Kaggle dataset input
+    # S1.4: Strict Chapter Payload Isolation (No broad rglob across /kaggle/input)
     found_audio_clips = None
     cand_audio = found_chap_parent / "audio" / "clips"
     if cand_audio.exists() and any(cand_audio.glob("*.wav")):
         found_audio_clips = cand_audio
-    else:
-        for a_dir in Path("/kaggle/input").rglob("clips"):
-            if any(a_dir.glob("*.wav")):
-                found_audio_clips = a_dir
-                break
+    elif (found_chap_parent / "clips").exists() and any((found_chap_parent / "clips").glob("*.wav")):
+        found_audio_clips = found_chap_parent / "clips"
+
     if found_audio_clips:
         print(f"🎵 Found uncompressed audio clips directory: {{found_audio_clips}}")
         audio_clips_target = chapter_dir / "audio" / "clips"
@@ -1467,15 +1496,10 @@ for seg in segments:
     seq_id = seg["seq_id"]
     out_wav = audio_clips_dir / f"audio_{chapter_number}_{{seq_id}}.wav"
     if not out_wav.exists() or out_wav.stat().st_size == 0:
-        for search_root in [Path("/kaggle/input"), workspace]:
-            if not search_root.exists():
-                continue
-            for cand_wav in search_root.rglob(f"audio_{chapter_number}_{{seq_id}}.wav"):
-                if cand_wav.stat().st_size > 0:
-                    shutil.copy2(cand_wav, out_wav)
-                    break
-            if out_wav.exists() and out_wav.stat().st_size > 0:
-                break
+        if found_chap_parent:
+            cand_isolated = found_chap_parent / "audio" / "clips" / f"audio_{chapter_number}_{{seq_id}}.wav"
+            if cand_isolated.exists() and cand_isolated.stat().st_size > 0:
+                shutil.copy2(cand_isolated, out_wav)
 
 pre_existing_audio = len(segments) > 0 and all(
     (audio_clips_dir / f"audio_{chapter_number}_{{seg['seq_id']}}.wav").exists()
@@ -1924,40 +1948,72 @@ def process_segment_render(seg):
         p_end_time = (p_idx + 1) * p_dur
 
         if is_dynamic:
-            num_steps = max(2, min(8, int(p_dur * 2)))
-        else:
-            active_cues = [c for c in cues if not (c["end"] <= p_start_time or c["start"] >= p_end_time)]
-            num_steps = max(1, len(active_cues))
+            # Continuous interpolation at output FPS (30 FPS)
+            num_steps = max(1, int(round(p_dur * cfg_fps)))
+            step_dur = p_dur / float(num_steps)
+            for step in range(num_steps):
+                step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
+                step_time = p_start_time + (step + 0.5) * step_dur
 
-        step_dur = p_dur / float(num_steps)
+                cue_text = ""
+                for c in cues:
+                    if c["start"] <= step_time <= c["end"]:
+                        cue_text = c["text"]
+                        break
 
-        for step in range(num_steps):
-            step_progress = step / float(max(1, num_steps - 1)) if num_steps > 1 else 0.5
-            step_time = p_start_time + (step + 0.5) * step_dur
-
-            cue_text = ""
-            for c in cues:
-                if c["start"] <= step_time <= c["end"]:
-                    cue_text = c["text"]
-                    break
-            if not cue_text and cues:
-                cue_text = cues[-1]["text"]
-
-            if m == 1 and num_steps == 1:
-                frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
-            elif num_steps == 1:
-                frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
-            else:
                 frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_step_{{step}}.jpg"
-            compose_frame_canvas(
-                p_img=p_img,
-                out_frame_path=frame_file,
-                text=cue_text,
-                motion_type=motion_type if is_dynamic else "static",
-                focus_box=focus_box,
-                progress=step_progress if is_dynamic else 0.0
-            )
-            seg_frame_results.append((frame_file, step_dur))
+                compose_frame_canvas(
+                    p_img=p_img,
+                    out_frame_path=frame_file,
+                    text=cue_text,
+                    motion_type=motion_type,
+                    focus_box=focus_box,
+                    progress=step_progress
+                )
+                seg_frame_results.append((frame_file, step_dur))
+        else:
+            # Static path: canonical cue intervals with zero dropped cues
+            bounds = set([p_start_time, p_end_time])
+            for c in cues:
+                if p_start_time < c["start"] < p_end_time:
+                    bounds.add(c["start"])
+                if p_start_time < c["end"] < p_end_time:
+                    bounds.add(c["end"])
+            sorted_bounds = sorted(bounds)
+            intervals = []
+            for b_i in range(len(sorted_bounds) - 1):
+                t_a = sorted_bounds[b_i]
+                t_b = sorted_bounds[b_i + 1]
+                if t_b - t_a > 0.001:
+                    intervals.append((t_a, t_b))
+            if not intervals:
+                intervals = [(p_start_time, p_end_time)]
+
+            for step, (t_a, t_b) in enumerate(intervals):
+                sub_dur = t_b - t_a
+                t_mid = (t_a + t_b) / 2.0
+                cue_text = ""
+                for c in cues:
+                    if c["start"] <= t_mid <= c["end"]:
+                        cue_text = c["text"]
+                        break
+
+                if m == 1 and len(intervals) == 1:
+                    frame_file = frames_dir / f"frame_{{seq_id}}.jpg"
+                elif len(intervals) == 1:
+                    frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}.jpg"
+                else:
+                    frame_file = frames_dir / f"frame_{{seq_id}}_{{p_idx}}_cue_{{step}}.jpg"
+
+                compose_frame_canvas(
+                    p_img=p_img,
+                    out_frame_path=frame_file,
+                    text=cue_text,
+                    motion_type="static",
+                    focus_box=focus_box,
+                    progress=0.0
+                )
+                seg_frame_results.append((frame_file, sub_dur))
 
     return seg_frame_results
 

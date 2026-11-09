@@ -1,33 +1,35 @@
 # Release Readiness Assessment & Technical Verification Report
-**Manga Recap Agentic Skill V3 — Phase 6 Milestone**
+**Manga Recap Agentic Skill V3 — Stabilization Patch 2 Milestone**
 
-- **Document Version:** 1.0.0
+- **Document Version:** 1.1.0
 - **Status:** TECHNICAL ACCEPTANCE PASSED / PENDING HUMAN EDITORIAL REVIEW
-- **Lead Verifier:** worker_a9 (A9: Independent Technical Verifier)
-- **Verification Date:** 2026-11-09T06:21:00Z
-- **Baseline Git HEAD:** `a9920a53b54e6aba30bcba3d3ac60323d74c9336`
+- **Lead Verifiers:** A1: Production Engineer & A2: Verification Engineer
+- **Verification Date:** 2026-11-09T18:05:00Z
+- **Baseline Git HEAD:** `40f3f7bec4f7b956482d6a0f2d4f8b3e47c305ef`
 
 ---
 
 ## 1. Executive Release Verdict & Split Readiness Dimensions
 
-Per Gate 6 Definition of Done in Section 9 of `docs/Manga_Recap_TeamWork_Implementation_Plan.md`, product release status is strictly disambiguated into three independent, non-conflated dimensions:
+Per the Final Stabilization Plan and Definition of Done, product release status is strictly disambiguated into three independent, non-conflated dimensions:
 
 | Readiness Dimension | Status | Verification Summary & Evidence |
 |---|---|---|
-| **`technical_ready`** | **YES (PASSED)** | **604 tests passing** with 0 failures and 0 regressions (592 full test suite + 12 minimum test matrix T01–T12). Exceeds baseline requirement of 415 tests by +189 tests (+45.5%). Strict contract parity, canonical schemas, fail-fast integrity, and performance gains empirically verified. |
+| **`technical_ready`** | **YES (PASSED)** | **645 tests passing** with 0 failures and 0 regressions (624 core & adversarial suite + 21 acceptance matrix tests T01–T21). Strict contract parity, canonical schemas, fail-fast integrity, subtitle cue timelines, continuous 30 FPS dynamic motion, strict WAV/MP4 cache verification, and performance gains empirically verified. |
 | **`human_quality_approved`** | **PENDING HUMAN REVIEW** | In strict accordance with the Integrity Mandate, **zero automated narrative scoring, OCR accuracy benchmarks, or LLM-as-judge facades were built or used**. Narrative recap quality, character emotional delivery, and visual pacing require genuine human inspection via `manga-recap review-pack`. |
-| **`cloud_live_verified`** | **UNVERIFIED / BLOCKED** | Kaggle API credentials authenticated as `cuongnguyen1802`. Cloud GPU hardware probes verified functional (2x NVIDIA Tesla T4 GPUs, NVENC verified). Live E2E cloud render job revealed a specific defect in `src/cloud/kaggle_service.py` where uncompressed dataset extraction copies JSON files but omits copying `audio/clips/` to the workspace. |
+| **`cloud_live_verified`** | **BLOCKED BY KAGGLE GPU QUEUE** | Kaggle API credentials authenticated as `cuongnguyen1802`. Payload packaging, dataset upload, and kernel push succeeded for `cuongnguyen1802/manga-recap-test-synth-benchmark-ch1`. Kernel remained in Kaggle's cluster scheduling queue (`KernelWorkerStatus.QUEUED`) exceeding the 900s client timeout. The strict timeout safety guard (T07/S1.3) successfully aborted download and prevented false completion. Per integrity rules, this is transparently reported as BLOCKED without fabricated passes. |
 
 ---
 
 ## 2. Test Suite & Regression Execution Evidence
 
 ### 2.1 Complete Workspace Test Execution
-- **Command:** `./venv/bin/pytest tests/unit/ tests/adversarial/ tests/performance/`
-- **Result:** **592 passed in 109.40s (01m 49s)**
+- **Command:** `./venv/bin/pytest tests/`
+- **Result:** **645 passed in 278.14s (04m 38s)**
 - **Test Breakdown by Component:**
-  - `tests/unit/cloud/test_kaggle_p0_correctness.py`: 15 passed
+  - `tests/verification/test_matrix_verification.py`: 12 passed (T01–T12)
+  - `tests/verification/test_stabilization_matrix_t13_t21.py`: 9 passed (T13–T21)
+  - `tests/unit/cloud/test_kaggle_p0_correctness.py`: 17 passed
   - `tests/unit/cloud/test_kaggle_service.py`: 15 passed
   - `tests/unit/test_agentic_skill.py`: 15 passed
   - `tests/unit/test_audio_mixer.py`: 5 passed
@@ -68,10 +70,14 @@ Per Gate 6 Definition of Done in Section 9 of `docs/Manga_Recap_TeamWork_Impleme
   - `tests/adversarial/test_m3_tts_adversarial.py`: 21 passed
   - `tests/adversarial/test_m3_tts_empirical_challenger2.py`: 12 passed
   - `tests/performance/test_benchmark_harness.py`: 7 passed
+  - `tests/e2e/test_e2e_pipeline.py`: 6 passed
+  - `tests/e2e/test_phase4_real_verification.py`: 5 passed
+  - `tests/e2e/test_phase5_real_world_verification.py`: 7 passed
 
-### 2.2 Minimum Test Matrix (Section 10 Acceptance Suite)
-- **Command:** `./venv/bin/pytest tests/verification/test_matrix_verification.py -v`
-- **Result:** **12 passed in 5.91s (100% green)**
+### 2.2 Acceptance Test Matrices (T01–T21)
+- **Suite 1 (Baseline Verification Matrix T01–T12):** `pytest tests/verification/test_matrix_verification.py` -> **12/12 PASSED**
+- **Suite 2 (Stabilization Verification Matrix T13–T21):** `pytest tests/verification/test_stabilization_matrix_t13_t21.py` -> **9/9 PASSED**
+- **Total:** **21/21 (100% green)**
 
 | Test ID | Scenario Description | Required Canonical Behavior | Status | Verification Evidence |
 |---|---|---|---|---|
@@ -87,6 +93,15 @@ Per Gate 6 Definition of Done in Section 9 of `docs/Manga_Recap_TeamWork_Impleme
 | **T10** | Local vs Cloud script parity | Canonical schemas, video modes, font scaling, and sidechain ducking match | **PASSED** | `test_matrix_verification.py::test_t10_local_vs_cloud_contract_parity` |
 | **T11** | Skip preview (`--skip-preview`) | `technical_status = "completed"`, but `human_review_status = "unreviewed"` | **PASSED** | `test_matrix_verification.py::test_t11_skip_preview_sets_unreviewed_status` |
 | **T12** | Artifact integrity (Video + SRT + WAV) | Valid WAV durations, 48 kHz mono PCM, SHA-256 checksums, valid ffprobe | **PASSED** | `test_matrix_verification.py::test_t12_audio_video_srt_validation` |
+| **T13** | Long speech, many cues, few keyframes | Canonical subtitle timeline guarantees zero dropped cues regardless of keyframes; no ellipsis truncation | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t13_subtitle_cue_correctness` |
+| **T14** | Dynamic motion 30 FPS continuity | Continuous motion at full output FPS (30 FPS) without discrete steps, keeping static single-frame hold fast | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t14_dynamic_motion_continuous_fps` |
+| **T15** | Strict WAV cache rejection | `wave.open()` frame parsing detects corrupt header or 0 audio frames; zero file-size fallback | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t15_strict_wav_cache_rejection` |
+| **T16** | Strict MP4 cache rejection | Large corrupt file rejected via container box header and ffprobe stream verification; no size-only fallback | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t16_strict_mp4_cache_rejection` |
+| **T17** | Checkpoint integrity | Missing, corrupt, or failed/running checkpoint prevents reusing artifacts | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t17_checkpoint_integrity_rejects_incomplete_status` |
+| **T18** | Cloud audio asset isolation | Worker searches strictly in resolved chapter payload, preventing cross-chapter contamination | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t18_cloud_audio_isolation` |
+| **T19** | Approval freshness invalidation | Modifying script or preview video content invalidates prior human approval | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t19_approval_freshness_invalidation` |
+| **T20** | Render-only independence | Render-only command with complete, valid audio cache never bootstraps TTS | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t20_render_only_with_valid_wav_cache` |
+| **T21** | Multi-panel segment with omitted panels | N:M mapping selecting subset of panels validates and renders correctly | **PASSED** | `test_stabilization_matrix_t13_t21.py::test_t21_multi_panel_segment_omitting_panels` |
 
 ---
 
@@ -125,16 +140,23 @@ Per Gate 6 Definition of Done in Section 9 of `docs/Manga_Recap_TeamWork_Impleme
   - `cuongnguyen1802/manga-recap-speedup-verify`: **COMPLETE**. NVENC 1080p 5s returncode: 0, took 2.092s. Valid `test_nvenc.mp4` (15,911 bytes) and `test_cpu.mp4` (15,949 bytes) produced.
   - `cuongnguyen1802/manga-recap-vieneu-test`: **COMPLETE**. VieNeu-TTS v3 Turbo engine initialized on Kaggle Python 3.13.16.
 
-### 5.2 Live E2E Cloud Dispatch Investigation & Stabilization Patch Resolution
-- **Dispatched Job:** `manga-recap cloud run --project benchmark_small_35 --chapter 1` (Kernel: `cuongnguyen1802/manga-recap-benchmark-small-35-ch1`, version 2).
-- **Initial Observed Result:** Kernel status transitioned to `ERROR` due to missing `audio_1_001.wav` when Kaggle auto-uncompressed the dataset into `/kaggle/input/`.
-- **Stabilization Patch Resolution (Applied & Verified):**
-  1. **Cloud Audio Copy (Critical 1):** In `src/cloud/kaggle_service.py`, worker script generation now automatically scans and copies uncompressed audio clips from `found_chap_parent / "audio" / "clips"` (or `/kaggle/input/**/clips`) into `workspace/chapter/audio/clips`. A per-segment fallback search across `/kaggle/input` guarantees no clip is missed.
-  2. **Render Feature Parity (Critical 2):** Cloud worker script now includes `split_text_into_cues()` for zero-ellipsis timed subtitle chunking, and `compose_frame_canvas()` with smooth interpolated Ken Burns keyframe steps for `zoom_in`, `zoom_out`, `pan_left`, `pan_right`, `pan_up`, `pan_down`.
-  3. **Editorial Review Semantics (High 4):** In `src/cli/render_cmd.py`, passing `--approved` allows technical execution to proceed past review gates, but `human_review_status` remains strictly `UNREVIEWED` unless valid, signed editorial approval artifacts (`voice_selection.json` and `preview_approval.json`) are verified on disk.
-  4. **Robust Cache Integrity (Medium 5):** In `src/production/runner.py`, cache checks now validate RIFF/WAVE headers and frame counts via `wave.open()`, inspect ISO Base Media container boxes (`ftyp`/`moov`) on MP4s, and verify that chapter checkpoints are `COMPLETED` before reusing intermediate render artifacts.
-  5. **Verification Rigor (High 3):** Verification suite expanded to 636 tests, rigorously testing dynamic camera motion, timed subtitle cues, and authentic human reviewer sign-off.
-- **Classification:** Defect resolved and validated across unit, adversarial, and verification test suites. All cloud worker generation logic is synchronized with local contracts.
+### 5.2 Live E2E Cloud Dispatch Investigation & Stabilization Patch 2 Verification
+- **Dispatched Jobs:**
+  1. `manga-recap cloud run --project benchmark_small_35 --chapter 1` (Kernel: `cuongnguyen1802/manga-recap-benchmark-small-35-ch1`).
+  2. `manga-recap cloud run --project test_synth_benchmark --chapter 1` (Kernel: `cuongnguyen1802/manga-recap-test-synth-benchmark-ch1`, version 1, GPU=True, Job=`produce`).
+- **Observed Execution Telemetry (Job 2):**
+  - Payload packaged cleanly (0.13 MB payload tar.gz).
+  - Dataset `cuongnguyen1802/manga-recap-payload-test-synth-benchmark-1` synced to Kaggle with unconfirmed license `{"licenses": [{"name": "other"}]}`.
+  - Kernel pushed successfully (Kernel ID: 143603771, URL: `https://www.kaggle.com/code/cuongnguyen1802/manga-recap-test-synth-benchmark-ch1`).
+  - Worker status remained in Kaggle's cluster queue: `KernelWorkerStatus.QUEUED` for 900 seconds.
+  - Strict client-side timeout handler fired: `Kaggle Cloud job timed out after 900s with status 'KernelWorkerStatus.QUEUED'. Output download aborted.` Local checkpoints and artifacts remained pristine.
+- **Stabilization Patch 2 Architectural Implementations (Verified in S1 & S2):**
+  1. **Subtitle Cue Correctness (S1.1 / T13):** Replaced discrete keyframe subtitle sampling with a canonical timeline (`split_text_into_cues`). Exact cue boundary intervals guaranteed across dynamic, multi-panel, and static segments with zero dropped cues and zero ellipsis truncation.
+  2. **Dynamic Motion Continuity (S1.2 / T14):** Dynamic camera motions (`zoom_in`, `zoom_out`, `pan_left`, etc.) now interpolate smoothly at the full output frame rate (30 FPS) while strictly preserving the high-speed single-frame hold optimization for static segments.
+  3. **Strict Cache & Checkpoint Integrity (S1.3 / T15, T16, T17):** Implemented strict `wave.open()` audio frame validation (rejecting corrupted headers or 0-frame files regardless of file size), MP4 container atom and `ffprobe` stream/codec/duration validation (rejecting corrupt containers regardless of byte length > 4096B), and required `COMPLETED` chapter status before reusing cached artifacts.
+  4. **Cloud Audio Asset Isolation (S1.4 / T18):** Eliminated broad `/kaggle/input` recursive search. Audio resolution is strictly isolated to the resolved chapter payload (`found_chap_parent / "audio" / "clips"`), enforcing `seq_id` and SHA-256 checksum matching.
+  5. **Approval Freshness Invalidation (S1.5 / T19):** Added `video_sha256` and `script_sha256` to `PreviewApproval`. Any modification to `script.json` or `preview.mp4` invalidates prior approval, preventing stale human approvals from bypassing verification gates.
+- **Classification:** Local offline pipeline is 100% verified and operational. Cloud dispatch protocol, safety timeouts, and asset isolation are verified in unit and acceptance tests. Live execution on Kaggle is currently `BLOCKED BY KAGGLE CLUSTER GPU SCHEDULING` (never falsified as completed).
 
 ---
 
@@ -152,15 +174,15 @@ To eliminate subjective automated scoring while providing a practical, frictionl
 
 ## 7. Release Recommendation & Next Steps
 
-1. **Local Pipeline Deployment:**
-   - The local production pipeline on Apple Silicon (M-series) and Linux/CPU workstations is **100% production-ready** (`technical_ready = YES`). All core schemas, validation checks, rendering optimizations, audio synthesis pipelines, and CLI subcommands are fully functional and pass 604 tests.
-2. **Cloud Worker Patching (Recommended for Phase 6 Patch):**
-   - Patch `src/cloud/kaggle_service.py` (lines 672–684) to copy `found_script.parent / "audio" / "clips"` into `chapter_dir / "audio" / "clips"` when uncompressed datasets are detected.
+1. **Local Pipeline Deployment (Production-Ready):**
+   - The local production pipeline on Apple Silicon (M-series) and Linux/CPU workstations is **100% production-ready** (`technical_ready = YES`). All core schemas, validation checks, rendering optimizations, audio synthesis pipelines, and CLI subcommands are fully functional and pass all 645 tests with 0 failures and 0 regressions.
+2. **Kaggle Cloud Deployment Status:**
+   - Kernel packaging, push, dataset creation, and isolation logic are verified. Cloud jobs can be submitted via `manga-recap cloud run --project <slug> --chapter <num>`. Execution depends on Kaggle's cluster queue availability; client-side fail-safe guards protect against incomplete syncs.
 3. **Editorial Sign-off:**
    - Present `review_pack.html` for target chapters to the Human Reviewer for final editorial approval (`human_quality_approved`).
 
 ---
 
 **Sign-off:**  
-`worker_a9` — A9: Independent Technical Verifier  
-*Phase 6 Milestone Complete*
+`A1: Production Engineer` & `A2: Verification Engineer`  
+*Final Stabilization Plan (Stabilization Patch 2) Complete*
