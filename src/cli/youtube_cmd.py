@@ -330,21 +330,10 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
         script_data = read_json(script_path)
         timestamps = generate_timestamps_from_script(script_data)
 
-        # Check thumbnail candidate doc to upgrade thumbnail_concept
-        tc_path = chap_dir / "thumbnail_candidates.json"
-        if tc_path.exists():
-            try:
-                tc_data = read_json(tc_path)
-                candidates = tc_data.get("candidates", [])
-                sel_id = tc_data.get("selected_candidate_id") or "cand_01"
-                for cand in candidates:
-                    if cand.get("candidate_id") == sel_id:
-                        reason = cand.get("narrative_reason", "")
-                        reco = cand.get("text_overlay_recommendation", "")
-                        thumb_concept = f"{reason} — Chữ nổi bật: '{reco}'"
-                        break
-            except Exception:
-                pass
+        # Check if AI-generated thumbnail exists in output directory
+        chap_thumb = out_dir / f"chapter_{chapter_num}_thumbnail.jpg"
+        if chap_thumb.exists():
+            thumb_concept = f"AI Generated Thumbnail tại {chap_thumb.name}"
 
         user_title = getattr(args, "title", None)
         if user_title:
@@ -503,23 +492,29 @@ def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
     except TypeError:
         creds = get_youtube_oauth_credentials()
 
-    try:
-        acc_info = account_manager.get_account(account_name)
-        token_file = acc_info.token_file
-        acc_name = acc_info.account_name
-        c_title, c_id = acc_info.channel_title, acc_info.channel_id
-        if not c_title and creds and getattr(creds, "valid", False):
-            c_title, c_id = account_manager.fetch_channel_info(creds)
-            if c_title:
-                reg = account_manager.load_registry()
-                if acc_info.account_name in reg.accounts:
-                    reg.accounts[acc_info.account_name].channel_title = c_title
-                    reg.accounts[acc_info.account_name].channel_id = c_id
-                    account_manager.save_registry(reg)
-    except Exception:
-        token_file = os.getenv("YOUTUBE_CREDENTIALS_FILE", ".youtube_token.json")
-        acc_name = account_name or "default"
+    legacy_token_env = os.getenv("YOUTUBE_CREDENTIALS_FILE")
+    if legacy_token_env and not account_name:
+        token_file = str(Path(legacy_token_env).resolve())
+        acc_name = "default"
         c_title, c_id = "", ""
+    else:
+        try:
+            acc_info = account_manager.get_account(account_name)
+            token_file = str(Path(acc_info.token_file).resolve())
+            acc_name = acc_info.account_name
+            c_title, c_id = acc_info.channel_title, acc_info.channel_id
+            if not c_title and creds and getattr(creds, "valid", False):
+                c_title, c_id = account_manager.fetch_channel_info(creds)
+                if c_title:
+                    reg = account_manager.load_registry()
+                    if acc_info.account_name in reg.accounts:
+                        reg.accounts[acc_info.account_name].channel_title = c_title
+                        reg.accounts[acc_info.account_name].channel_id = c_id
+                        account_manager.save_registry(reg)
+        except Exception:
+            token_file = str(Path(legacy_token_env or ".youtube_token.json").resolve())
+            acc_name = account_name or "default"
+            c_title, c_id = "", ""
 
     return {
         "status": "success",
@@ -728,7 +723,7 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to upload closed captions: {e}")
 
-    # 7. Upload Custom Thumbnail (if provided or auto-detected)
+    # 7. Upload Custom Thumbnail (if provided or auto-detected from output/)
     thumbnail_path = getattr(args, "thumbnail", None)
     if not thumbnail_path:
         if str(chapter_num).lower() in ("feature", "all", "compilation", "full"):
@@ -739,10 +734,6 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
             chap_thumb = out_dir / f"chapter_{chapter_num}_thumbnail.jpg"
             if chap_thumb.exists():
                 thumbnail_path = str(chap_thumb)
-            else:
-                cand_clean = chap_dir / "thumbnails" / "cand_01_clean.jpg"
-                if cand_clean.exists():
-                    thumbnail_path = str(cand_clean)
 
     thumbnail_uploaded = False
     if thumbnail_path and Path(thumbnail_path).exists():
@@ -771,68 +762,6 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
-def handle_youtube_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
-    """Generates, scores, and selects YouTube thumbnail candidates."""
-    project_slug = getattr(args, "project", "")
-    chapter_num = getattr(args, "chapter", "1")
-    select_id = getattr(args, "select", None)
-
-    if not project_slug:
-        raise CliValidationError("Project slug (--project) is required.")
-
-    from src.render.thumbnail_director import thumbnail_director
-
-    is_feature = str(chapter_num).lower() in ("feature", "all", "compilation", "full")
-
-    # If feature, pick first chapter or available chapters
-    effective_ch = "1"
-    if is_feature:
-        proj_dir = get_project_dir(project_slug)
-        ch_dir = proj_dir / "chapters"
-        if ch_dir.exists():
-            subdirs = sorted([d.name for d in ch_dir.iterdir() if d.is_dir() and d.name.isdigit()], key=lambda x: int(x))
-            if subdirs:
-                effective_ch = subdirs[0]
-    else:
-        effective_ch = str(chapter_num)
-
-    doc = thumbnail_director.evaluate_chapter(project_slug, effective_ch)
-
-    out_dir = get_output_dir(project_slug)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    staged_thumb = out_dir / ("feature_thumbnail.jpg" if is_feature else f"chapter_{chapter_num}_thumbnail.jpg")
-
-    if select_id:
-        matched = False
-        chap_dir = get_chapter_dir(project_slug, effective_ch)
-        for cand in doc.candidates:
-            if cand.candidate_id == select_id:
-                cand.status = "selected"
-                doc.selected_candidate_id = select_id
-                matched = True
-                cand_file = chap_dir / "thumbnails" / f"{select_id}_clean.jpg"
-                if cand_file.exists():
-                    shutil.copy2(cand_file, staged_thumb)
-            else:
-                if cand.status == "selected":
-                    cand.status = "proposed"
-        if not matched:
-            raise CliValidationError(f"Candidate '{select_id}' not found. Available candidates: {[c.candidate_id for c in doc.candidates]}")
-
-        # Re-save document
-        atomic_write_json(chap_dir / "thumbnail_candidates.json", doc)
-
-    return {
-        "status": "success",
-        "project_slug": project_slug,
-        "chapter_number": str(chapter_num),
-        "candidates_count": len(doc.candidates),
-        "selected_candidate_id": doc.selected_candidate_id,
-        "staged_thumbnail": str(staged_thumb if staged_thumb.exists() else ""),
-        "candidates": [c.model_dump() for c in doc.candidates],
-    }
-
-
 def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
     """Top-level dispatch router for `manga-recap youtube` subcommands."""
     yt_action = getattr(args, "youtube_action", "metadata")
@@ -842,10 +771,8 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_upload(args)
     if yt_action == "auth":
         return handle_youtube_auth(args)
-    if yt_action == "thumbnail":
-        return handle_youtube_thumbnail(args)
     if yt_action in ("accounts", "account"):
         return handle_youtube_accounts(args)
 
-    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, thumbnail, accounts.")
+    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, accounts.")
 

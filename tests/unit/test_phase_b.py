@@ -22,19 +22,14 @@ from src.cli.youtube_cmd import (
     build_youtube_description,
     format_seconds_to_timestamp,
     handle_youtube_metadata,
-    handle_youtube_thumbnail,
 )
 from src.core.schemas import (
     ChapterMarker,
     ChapterTimelineItem,
-    CompositionFeatures,
     FeatureTimeline,
-    TextSafeZone,
-    ThumbnailCandidate,
-    ThumbnailCandidatesDocument,
     YouTubeMetadata,
 )
-from src.core.storage import atomic_write_json, get_project_dir, init_chapter_layout, init_project_layout, read_json
+from src.core.storage import atomic_write_json, get_output_dir, get_project_dir, init_chapter_layout, init_project_layout, read_json
 
 from src.crawler.errors import CrawlerError, CrawlerErrorCode
 from src.crawler.extractor import ChapterExtractor
@@ -47,7 +42,6 @@ from src.crawler.schemas import (
     URLClassification,
 )
 from src.crawler.verifier import ImageVerificationReport, ImageVerifier
-from src.render.thumbnail_director import ThumbnailCandidateDirector, ThumbnailComposer
 
 
 # ==============================================================================
@@ -392,126 +386,54 @@ class TestYouTubeChaptersTimeline:
 
 
 # ==============================================================================
-# 6. PR-06: Thumbnail Director Tests
+# 6. YouTube Thumbnail Integration Tests (AI Generated Thumbnails)
 # ==============================================================================
 
-class TestThumbnailDirector:
-    def test_thumbnail_composer_pillow_rendering(self, tmp_path):
-        source_panel = tmp_path / "panel_005.jpg"
-        # Portrait panel
-        img = Image.new("RGB", (600, 1000), (200, 120, 80))
-        img.save(source_panel)
-
-        clean_out = tmp_path / "cand_01_clean.jpg"
-        text_out = tmp_path / "cand_01_text.jpg"
-
-        ThumbnailComposer.compose_thumbnail(
-            source_image_path=source_panel,
-            output_clean_path=clean_out,
-            output_text_path=text_out,
-            focus_box=(0.1, 0.2, 0.8, 0.8),
-            overlay_text="AI CHO PHÉP?!",
-            text_safe_zone=TextSafeZone.TOP_LEFT,
-        )
-
-        assert clean_out.exists()
-        assert text_out.exists()
-
-        # Both must be 16:9 1280x720
-        with Image.open(clean_out) as c_img:
-            assert c_img.size == (1280, 720)
-        with Image.open(text_out) as t_img:
-            assert t_img.size == (1280, 720)
-
-    def test_director_candidate_ranking_and_safe_zone(self, tmp_path, monkeypatch):
+class TestYouTubeThumbnailIntegration:
+    def test_youtube_metadata_detects_ai_thumbnail(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        proj_slug = "test_thumb_proj"
-        init_project_layout(proj_slug, title=proj_slug)
-
+        proj_slug = "meta_thumb_proj"
+        init_project_layout(proj_slug, title="Meta Thumb Proj")
         chap_dir = init_chapter_layout(proj_slug, 1)
 
-        # Create 4 panels with diverse contents
-        panels_dir = chap_dir / "panels"
-        panels_dir.mkdir(parents=True, exist_ok=True)
+        # Stage an AI thumbnail in output directory
+        out_dir = get_output_dir(proj_slug)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        thumb_path = out_dir / "chapter_1_thumbnail.jpg"
+        thumb_path.write_bytes(b"mock_jpeg_bytes")
 
-        for i in range(1, 5):
-            img = Image.new("RGB", (800, 1000), (50 * i, 100, 150))
-            img.save(panels_dir / f"panel_{i:03d}.jpg")
-
-        # Create script.json with emotional cues & dialogue
+        # Create basic script
         script_data = {
             "schema_version": "3.0.0",
             "segments": [
-                {
-                    "segment_id": "001",
-                    "panel_ids": ["panel_001"],
-                    "narrator_text": "Bối cảnh yên bình ban đầu.",
-                    "focus_box": [0.1, 0.1, 0.9, 0.9],
-                },
-                {
-                    "segment_id": "002",
-                    "panel_ids": ["panel_002"],
-                    "narrator_text": "Lão gia sững sờ kinh hãi: 'Ngươi dám khiêu khích ta?!' [cười]",
-                    "focus_box": [0.2, 0.2, 0.7, 0.7],  # Good visibility + shock
-                },
-                {
-                    "segment_id": "003",
-                    "panel_ids": ["panel_003"],
-                    "narrator_text": "Toàn thân bộc phát chân khí thức tỉnh tuyệt kỹ!",
-                    "focus_box": [0.2, 0.2, 0.6, 0.6],  # Climax
-                },
-                {
-                    "segment_id": "004",
-                    "panel_ids": ["panel_004"],
-                    "narrator_text": "Chủ thể bị che khuất ở góc dưới phải.",
-                    "focus_box": [0.8, 0.85, 0.95, 0.95],  # Safe zone penalty!
-                },
+                {"seq_id": "001", "panel_ids": ["panel_001"], "narrator_text": "Mở đầu trận chiến kịch tính."}
             ]
         }
         atomic_write_json(chap_dir / "script.json", script_data)
 
-        director = ThumbnailCandidateDirector()
-        doc = director.evaluate_chapter(proj_slug, "1")
-
-        assert len(doc.candidates) == 3
-        # Candidate 1 should have high score
-        assert doc.candidates[0].ranking_score >= 0.7
-        # Check safe zone clearance: panel 4 should have safe_zone_clear == False
-        _, p4_features, _, _, _ = director._score_panel(
-            panels_dir / "panel_004.jpg",
-            {"narrator_text": "...", "focus_box": [0.8, 0.85, 0.95, 0.95]},
-            3,
-            4,
-        )
-        assert p4_features.safe_zone_clear is False
-
-        # Staged thumbnail exists
-        staged_thumb = tmp_path / "output" / proj_slug / "chapter_1_thumbnail.jpg"
-        assert staged_thumb.exists()
-
-    def test_cli_thumbnail_and_select(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        proj_slug = "cli_thumb_test"
-        init_project_layout(proj_slug, title=proj_slug)
-
-        chap_dir = init_chapter_layout(proj_slug, 1)
-
-        panels_dir = chap_dir / "panels"
-        panels_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(1, 4):
-            img = Image.new("RGB", (600, 800), (30 * i, 60, 90))
-            img.save(panels_dir / f"panel_{i:03d}.jpg")
-
-        args = MagicMock(project=proj_slug, chapter="1", select=None)
-        res = handle_youtube_thumbnail(args)
+        args = MagicMock(project=proj_slug, chapter="1", title=None, description=None, tags=None, privacy="private")
+        res = handle_youtube_metadata(args)
         assert res["status"] == "success"
-        assert res["candidates_count"] == 3
-        assert res["selected_candidate_id"] == "cand_01"
 
-        # Test selecting cand_02
-        args_sel = MagicMock(project=proj_slug, chapter="1", select="cand_02")
-        res_sel = handle_youtube_thumbnail(args_sel)
-        assert res_sel["selected_candidate_id"] == "cand_02"
+        meta = read_json(Path(res["metadata_path"]))
+        assert meta["thumbnail_concept"] == "AI Generated Thumbnail tại chapter_1_thumbnail.jpg"
+
+    def test_youtube_metadata_detects_feature_thumbnail(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        proj_slug = "feature_thumb_proj"
+        init_project_layout(proj_slug, title="Feature Thumb Proj")
+
+        out_dir = get_output_dir(proj_slug)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        feat_thumb = out_dir / "feature_thumbnail.jpg"
+        feat_thumb.write_bytes(b"mock_feature_jpeg_bytes")
+
+        args = MagicMock(project=proj_slug, chapter="feature", title=None, description=None, tags=None, privacy="private")
+        res = handle_youtube_metadata(args)
+        assert res["status"] == "success"
+
+        meta = read_json(Path(res["metadata_path"]))
+        assert "feature_thumbnail.jpg" in meta["thumbnail_concept"]
 
 
 # ==============================================================================

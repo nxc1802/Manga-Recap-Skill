@@ -192,7 +192,7 @@ def build_parser() -> JsonAwareArgumentParser:
 
     # 10. youtube
     p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
-    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "thumbnail", "accounts"], help="YouTube action: 'metadata', 'upload', 'auth', 'thumbnail', or 'accounts'")
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "accounts"], help="YouTube action: 'metadata', 'upload', 'auth', or 'accounts'")
     p_yt.add_argument("-p", "--project", default=None, help="Project slug")
     p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
     p_yt.add_argument("--account", default=None, help="Target YouTube account/channel name (default: active default account)")
@@ -207,17 +207,10 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("--description", default=None, help="Video description override")
     p_yt.add_argument("--tags", default=None, help="Comma-separated tags")
     p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default="private", help="Video privacy status (default: private)")
-    p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path")
-    p_yt.add_argument("--select", default=None, help="Candidate ID to select for thumbnail (e.g. cand_01)")
+    p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path (default: auto-detected from output/<slug>/chapter_<num>_thumbnail.jpg)")
     p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
 
-    # 11. thumbnail (top-level shortcut)
-    p_thumb = subparsers.add_parser("thumbnail", help="Generate or select YouTube thumbnail candidates", parents=[common_parent])
-    p_thumb.add_argument("-p", "--project", required=True, help="Project slug")
-    p_thumb.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
-    p_thumb.add_argument("--select", default=None, help="Candidate ID to select (e.g. cand_01)")
-
-    # 12. clean
+    # 11. clean
     p_cln = subparsers.add_parser("clean", help="Safely clean intermediate caches and temporary clips", parents=[common_parent])
     p_cln.add_argument("-p", "--project", required=True, help="Project slug")
     p_cln.add_argument("-c", "--chapter", default=None, help="Specific chapter number (default: all completed chapters)")
@@ -301,9 +294,6 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "youtube":
         from src.cli.youtube_cmd import handle_youtube
         return handle_youtube(args)
-    elif subcommand == "thumbnail":
-        from src.cli.youtube_cmd import handle_youtube_thumbnail
-        return handle_youtube_thumbnail(args)
     elif subcommand == "clean":
         from src.cli.clean_cmd import handle_clean
         return handle_clean(args)
@@ -335,7 +325,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "thumbnail", "clean", "produce", "cloud", "review-pack", "review_pack"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack"
         }:
             detected_subcommand = arg
             break

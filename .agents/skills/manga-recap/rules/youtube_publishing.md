@@ -27,12 +27,36 @@ Quy tắc này tổng hợp và chắt lọc các nguyên lý đóng gói (Packa
    - **Tuyệt đối KHÔNG lặp lại nguyên văn:** Chữ trên Thumbnail không được nhắc lại y hệt Tiêu đề video.
      - *Sai:* Tiêu đề là "Lão Tổ Trọng Sinh" - Thumbnail cũng ghi chữ to "Lão Tổ Trọng Sinh".
      - *Đúng:* Tiêu đề là "Tập 1: Bị Ép Uống Độc Dược, Lão Tổ Liền Làm Điều Này..." - Thumbnail để ảnh lão nhân mắt lóe sáng kèm chữ: **"AI CHO PHÉP?!"**
-   - **Giới hạn chữ trên Thumbnail:** Tối đa **3 đến 5 từ**, phông chữ to, viền dày (stroke/drop shadow) nổi bật trên nền tranh truyện.
+   - **Giới hạn chữ trên Thumbnail (nếu có):** Tối đa **3 đến 5 từ**, phông chữ to, viền dày (stroke/drop shadow) nổi bật trên nền tranh truyện.
    - **Vùng an toàn (Safe Zone):** Tuyệt đối không đặt chữ hoặc khuôn mặt ở **góc dưới bên phải** (nơi YouTube hiển thị nhãn thời lượng video như `12:45`).
 
 ---
 
-## 2. Mô Tả Video Chuẩn SEO & Timestamps (từ `yt-seo` & `yt-chapters`)
+## 2. Quy Trình Tạo Thumbnail AI Đỉnh Cao Bằng Antigravity (AI-Generated Thumbnail Protocol)
+
+Toàn bộ logic cắt ghép heuristic (crop khung tranh thô bằng Pillow) đã được gỡ bỏ hoàn toàn. Thay vào đó, **Antigravity (Coding Agent) trực tiếp đóng vai trò Giám Đốc Sáng Tạo Visual & Họa Sĩ AI**, tạo ra ảnh bìa 16:9 sắc nét, điện ảnh và tối ưu CTR bằng năng lực AI tạo ảnh bản địa:
+
+### 2.1 Ba Nguồn Dữ Liệu Tham Chiếu Bắt Buộc
+1. **Nhận diện & Trang phục Nhân vật (`characters.json`)**:
+   - Trích xuất ngoại hình, tuổi tác, kiểu tóc (búi tóc, tóc bạc...), vũ khí đặc trưng, thần thái khuôn mặt, trang phục (màu sắc, hoa văn) của nhân vật chính và phản diện.
+2. **Cốt truyện & Cao trào Cảm xúc (`story_summary.md` & `script.json`)**:
+   - Xác định mâu thuẫn cốt lõi, thế trận đối đầu, hoặc dị tượng võ học long trời lở đất trong tập để đưa vào bối cảnh.
+3. **Công Thức Visual Hook YouTube Tỷ Lệ Nhấp Cao (High-CTR)**:
+   - **Tương phản cảm xúc (Emotional Contrast):** Ví dụ: Lão cao thủ uy dũng lạnh lùng bảo vệ cháu gái nhỏ ngây thơ đáng yêu; hoặc nhân vật chính nhỏ bé áp đảo quái thú khổng lồ.
+   - **Ánh sáng kịch tính (Dramatic Cinematic Lighting):** Chân khí rực lửa/hoàng kim rực sáng tương phản với bầu trời giông bão/đêm tối u ám.
+   - **Góc máy điện ảnh:** Góc thấp (low-angle) tôn vinh khí phách người hùng, bố cục 16:9 (1376x768 hoặc 1920x1080).
+   - **Quy tắc Safe Zone:** Giữ góc dưới bên phải trống và đơn giản, không để mặt nhân vật hay chi tiết quan trọng rơi vào vùng `12:45` timestamp của YouTube.
+
+### 2.2 Quy Trình Thực Hiện & Vị Trí Lưu Trữ
+1. Agent gọi subagent `image-generator` với bản mô tả prompt chi tiết (bao gồm art style Webtoon/Manhwa cao cấp, 16:9, chi tiết nhân vật từ `characters.json`).
+2. Lưu file ảnh chất lượng cao vào đúng đường dẫn chuẩn hóa:
+   - Ảnh tập: `output/<slug>/chapter_<num>_thumbnail.jpg`
+   - Ảnh trọn bộ: `output/<slug>/feature_thumbnail.jpg`
+3. Lệnh `manga-recap youtube upload` sẽ tự động phát hiện và đính kèm ảnh thumbnail này lên YouTube khi tải video.
+
+---
+
+## 3. Mô Tả Video Chuẩn SEO & Timestamps (từ `yt-seo` & `yt-chapters`)
 
 Cấu trúc mô tả video chuẩn YouTube gồm 5 khối nội dung:
 
