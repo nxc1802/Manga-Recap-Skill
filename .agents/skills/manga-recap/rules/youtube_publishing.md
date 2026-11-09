@@ -78,9 +78,46 @@ Mỗi chapter video dài đều có thể trích xuất ra một đoạn **Short
 
 ---
 
-## 4. Quy Trình Xuất & Đăng Tải Tự Động Với CLI
+## 4. Quản Lý Đa Kênh YouTube (Multi-Account Management)
 
-Quy trình chuẩn gồm 2 bước:
+Hệ thống hỗ trợ quản lý đồng thời nhiều kênh YouTube độc lập (mỗi kênh có mã định danh alias, token OAuth và hồ sơ kênh riêng) thay vì chỉ sử dụng một file token duy nhất.
+
+### 4.1 Cấu Trúc Lưu Trữ Đa Tài Khoản
+Tất cả tài khoản được lưu trữ an toàn trong `data/youtube_accounts/` (hoặc cấu hình qua biến môi trường `YOUTUBE_ACCOUNTS_DIR`):
+```text
+data/youtube_accounts/
+├── accounts.json          # Sổ đăng ký danh sách kênh, channel_title, channel_id, kênh mặc định
+└── tokens/                # Các file token OAuth độc lập cho từng kênh
+    ├── default.json
+    ├── kenh_chinh.json
+    └── kenh_phu.json
+```
+
+### 4.2 Các Lệnh Quản Trị Tài Khoản CLI
+```bash
+# 1. Liệt kê tất cả các kênh YouTube đã liên kết
+manga-recap youtube accounts --json
+
+# 2. Thêm và xác thực một kênh mới (alias: review_truyen)
+python scripts/youtube_auth.py --account review_truyen
+# hoặc thông qua CLI:
+manga-recap youtube accounts --account-action add --account review_truyen --json
+
+# 3. Đặt kênh mặc định
+manga-recap youtube accounts --account-action default --account review_truyen --json
+
+# 4. Kiểm tra / làm mới token cho một kênh cụ thể
+manga-recap youtube auth --account review_truyen --json
+
+# 5. Xóa kênh khỏi danh sách quản lý
+manga-recap youtube accounts --account-action remove --account review_truyen --json
+```
+
+---
+
+## 5. Quy Trình Xuất & Đăng Tải Tự Động Với CLI
+
+Quy trình chuẩn gồm 3 bước:
 
 ### Bước 1: Tạo bộ đóng gói Metadata tự động
 ```bash
@@ -90,11 +127,26 @@ manga-recap youtube metadata --project <slug> --chapter <num> --json
 - Tính toán chính xác các mốc thời gian (Timestamps).
 - Tạo file `youtube_metadata.json` chứa Tiêu đề, Mô tả SEO, Tags và gợi ý Thumbnail.
 
-### Bước 2: Tải video lên kênh YouTube
+### Bước 2: Cổng Hỏi Người Dùng Kênh Upload (Mandatory Human Channel Selection Gate)
+⚠️ **QUY TẮC BẮT BUỘC DÀNH CHO AGENT:**
+1. Trước khi thực hiện upload, Agent **BẮT BUỘC** phải kiểm tra danh sách kênh hiện có bằng lệnh:
+   ```bash
+   manga-recap youtube accounts --json
+   ```
+2. Agent **PHẢI HỎI NGƯỜI DÙNG** (sử dụng công cụ `ask_question` hoặc tương tác trực tiếp):
+   > *"Bạn muốn upload video lên kênh YouTube nào?"*
+   - Cung cấp danh sách các kênh khả dụng (gồm: Tên hiển thị của kênh, Channel ID, Alias và đánh dấu kênh đang là mặc định).
+3. Chỉ sau khi người dùng xác nhận lựa chọn kênh, Agent mới được truyền cờ `--account <tên_kênh_đã_chọn>` vào lệnh upload.
+4. Trường hợp chưa có kênh nào được liên kết (`accounts_count == 0`), Agent hướng dẫn người dùng chạy script xác thực:
+   `python scripts/youtube_auth.py --account <tên_kênh>`.
+
+### Bước 3: Tải video lên kênh YouTube đã chọn
 ```bash
-manga-recap youtube upload --project <slug> --chapter <num> --privacy unlisted --json
+manga-recap youtube upload --project <slug> --chapter <num> --account <selected_account> --privacy unlisted --json
 ```
+- Sử dụng chính xác token OAuth của kênh đã được người dùng chỉ định.
 - Tự động lấy file `output/<slug>/chapter_001.mp4`.
 - Tự động tải phụ đề `output/<slug>/chapter_001.srt` lên làm Closed Captions tiếng Việt.
 - Tự động điền Title, Description, Tags, Category từ `youtube_metadata.json`.
 - Hỗ trợ cờ `--thumbnail <path>` để đặt ảnh bìa tùy chỉnh.
+- Kết quả JSON trả về bao gồm thông tin chi tiết: `video_id`, `video_url`, `account`, `channel_title`, `channel_id`.

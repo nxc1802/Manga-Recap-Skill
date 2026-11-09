@@ -112,42 +112,43 @@ class TestYouTubeMetadataSchema:
             )
 
 
+@pytest.fixture
+def mock_project(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    projects_dir = data_dir / "projects"
+    output_dir = tmp_path / "output"
+    projects_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("MANGA_RECAP_OUTPUT_DIR", str(output_dir))
+
+    slug = "test_yt_proj"
+    chap = "1"
+    p_dir = projects_dir / slug
+    c_dir = p_dir / "chapters" / chap
+    c_dir.mkdir(parents=True)
+
+    atomic_write_json(p_dir / "project.json", {"project_slug": slug, "title": "Đại Lão Trùng Sinh"})
+    (p_dir / "story_summary.md").write_text("# Đại Lão Trùng Sinh\n\nNội dung chương 1 diễn biến ly kỳ.", encoding="utf-8")
+
+    script_data = {
+        "schema_version": "3.0.0",
+        "project_slug": slug,
+        "chapter_number": chap,
+        "segments": [
+            {"segment_id": 1, "duration": 10.0, "narrator_text": "Trời xanh mây trắng"},
+            {"segment_id": 2, "duration": 20.0, "narrator_text": "Nhân vật xuất hiện"},
+            {"segment_id": 3, "duration": 15.0, "narrator_text": "Giao đấu nảy lửa"},
+        ],
+    }
+    atomic_write_json(c_dir / "script.json", script_data)
+
+    return {"slug": slug, "chapter": chap, "projects_dir": projects_dir, "output_dir": output_dir, "chap_dir": c_dir}
+
+
 class TestYouTubeCliCommands:
     """Tests CLI execution of youtube metadata and upload."""
-
-    @pytest.fixture
-    def mock_project(self, tmp_path, monkeypatch):
-        data_dir = tmp_path / "data"
-        projects_dir = data_dir / "projects"
-        output_dir = tmp_path / "output"
-        projects_dir.mkdir(parents=True)
-        output_dir.mkdir(parents=True)
-
-        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(data_dir))
-        monkeypatch.setenv("MANGA_RECAP_OUTPUT_DIR", str(output_dir))
-
-        slug = "test_yt_proj"
-        chap = "1"
-        p_dir = projects_dir / slug
-        c_dir = p_dir / "chapters" / chap
-        c_dir.mkdir(parents=True)
-
-        atomic_write_json(p_dir / "project.json", {"project_slug": slug, "title": "Đại Lão Trùng Sinh"})
-        (p_dir / "story_summary.md").write_text("# Đại Lão Trùng Sinh\n\nNội dung chương 1 diễn biến ly kỳ.", encoding="utf-8")
-
-        script_data = {
-            "schema_version": "3.0.0",
-            "project_slug": slug,
-            "chapter_number": chap,
-            "segments": [
-                {"segment_id": 1, "duration": 10.0, "narrator_text": "Trời xanh mây trắng"},
-                {"segment_id": 2, "duration": 20.0, "narrator_text": "Nhân vật xuất hiện"},
-                {"segment_id": 3, "duration": 15.0, "narrator_text": "Giao đấu nảy lửa"},
-            ],
-        }
-        atomic_write_json(c_dir / "script.json", script_data)
-
-        return {"slug": slug, "chapter": chap, "projects_dir": projects_dir, "output_dir": output_dir, "chap_dir": c_dir}
 
     def test_handle_youtube_metadata(self, mock_project):
         args = argparse.Namespace(
@@ -280,4 +281,197 @@ class TestYouTubeCliCommands:
         assert res["status"] == "success"
         assert res["valid"] is True
         assert res["token_file"] == str(token_path)
+
+
+class TestYouTubeMultiAccountManagement:
+    """Tests for multi-channel YouTube account registry, credential management, and CLI operations."""
+
+    @pytest.fixture
+    def account_setup(self, tmp_path, monkeypatch):
+        yt_dir = tmp_path / "yt_accounts"
+        yt_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("YOUTUBE_ACCOUNTS_DIR", str(yt_dir))
+
+        from src.youtube.account_manager import YouTubeAccountManager
+        mgr = YouTubeAccountManager(storage_dir=yt_dir)
+        return {"dir": yt_dir, "manager": mgr}
+
+    def test_account_manager_crud_and_default(self, account_setup, tmp_path, monkeypatch):
+        mgr = account_setup["manager"]
+        dummy_token_1 = tmp_path / "token1.json"
+        dummy_token_1.write_text('{"token": "t1", "refresh_token": "r1"}', encoding="utf-8")
+        dummy_token_2 = tmp_path / "token2.json"
+        dummy_token_2.write_text('{"token": "t2", "refresh_token": "r2"}', encoding="utf-8")
+
+        # Mock channel probing
+        monkeypatch.setattr(mgr, "fetch_channel_info", lambda creds: ("Kênh Võ Thuật", "UC_VO_THUAT"))
+
+        # Mock credentials resolution to avoid real network call
+        mock_creds = MagicMock()
+        mock_creds.valid = True
+        monkeypatch.setattr(mgr, "get_credentials", lambda account_name, force_reauth=False: (
+            mock_creds,
+            mgr.get_account(account_name)
+        ))
+
+        # 1. Add first account (auto-becomes default)
+        acc1 = mgr.add_or_update_account(
+            account_name="main_channel",
+            token_file=dummy_token_1,
+        )
+        assert acc1.account_name == "main_channel"
+        assert acc1.channel_title == "Kênh Võ Thuật"
+        assert acc1.channel_id == "UC_VO_THUAT"
+
+        reg = mgr.load_registry()
+        assert reg.default_account == "main_channel"
+
+        # 2. Add second account
+        monkeypatch.setattr(mgr, "fetch_channel_info", lambda creds: ("Kênh Review Truyện", "UC_REVIEW"))
+        acc2 = mgr.add_or_update_account(
+            account_name="review_channel",
+            token_file=dummy_token_2,
+        )
+        assert acc2.account_name == "review_channel"
+
+        # List accounts
+        acc_list = mgr.list_accounts()
+        assert len(acc_list) == 2
+        acc_names = [a["account_name"] for a in acc_list]
+        assert "main_channel" in acc_names
+        assert "review_channel" in acc_names
+
+        # 3. Switch default account
+        mgr.set_default_account("review_channel")
+        assert mgr.load_registry().default_account == "review_channel"
+        assert mgr.get_account().account_name == "review_channel"
+
+        # 4. Remove account
+        mgr.remove_account("main_channel")
+        remaining = mgr.list_accounts()
+        assert len(remaining) == 1
+        assert remaining[0]["account_name"] == "review_channel"
+        assert mgr.load_registry().default_account == "review_channel"
+
+    def test_cli_accounts_dispatch(self, account_setup, tmp_path, monkeypatch):
+        mgr = account_setup["manager"]
+        dummy_tok = tmp_path / "tok.json"
+        dummy_tok.write_text('{"token": "xyz"}', encoding="utf-8")
+
+        mock_creds = MagicMock()
+        mock_creds.valid = True
+
+        from src.youtube.account_manager import account_manager as global_account_mgr
+        monkeypatch.setattr("src.cli.youtube_cmd.account_manager", mgr)
+        monkeypatch.setattr(mgr, "get_credentials", lambda account_name=None, force_reauth=False: (
+            mock_creds,
+            mgr.get_account(account_name)
+        ))
+        monkeypatch.setattr(mgr, "fetch_channel_info", lambda creds: ("Channel Alpha", "UC_ALPHA"))
+
+        # Pre-seed one account
+        mgr.add_or_update_account("alpha", token_file=dummy_tok)
+
+        from src.cli.youtube_cmd import handle_youtube
+
+        # CLI: list
+        args_list = argparse.Namespace(
+            youtube_action="accounts",
+            account_action="list",
+            account=None,
+        )
+        res = handle_youtube(args_list)
+        assert res["status"] == "success"
+        assert res["accounts_count"] >= 1
+        assert res["accounts"][0]["account_name"] == "alpha"
+
+        # CLI: default switch
+        mgr.add_or_update_account("beta", token_file=dummy_tok)
+        args_def = argparse.Namespace(
+            youtube_action="accounts",
+            account_action="default",
+            account="beta",
+        )
+        res_def = handle_youtube(args_def)
+        assert res_def["status"] == "success"
+        assert res_def["default_account"] == "beta"
+
+    def test_upload_with_selected_account(self, mock_project, monkeypatch, tmp_path):
+        from src.cli.youtube_cmd import handle_youtube_upload
+        from src.cli.exit_codes import CliValidationError
+
+        slug = mock_project["slug"]
+        chap = mock_project["chapter"]
+        out_proj_dir = mock_project["output_dir"] / slug
+        out_proj_dir.mkdir(parents=True, exist_ok=True)
+
+        vid_path = out_proj_dir / "chapter_001.mp4"
+        vid_path.write_bytes(b"dummy mp4 video bytes")
+
+        # Mock OAuth credentials
+        mock_creds = MagicMock()
+        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda account_name=None: mock_creds)
+
+        # Mock Account Manager
+        mock_acc_info = MagicMock()
+        mock_acc_info.account_name = "kênh_review_vip"
+        mock_acc_info.channel_title = "Review Truyện VIP"
+        mock_acc_info.channel_id = "UC_VIP_999"
+
+        from src.youtube.account_manager import account_manager
+        monkeypatch.setattr(account_manager, "get_account", lambda name: mock_acc_info if name == "kênh_review_vip" else (_ for _ in ()).throw(CliValidationError(f"Account {name} not found")))
+
+        # Mock Google API client
+        mock_youtube_service = MagicMock()
+        mock_videos = MagicMock()
+        mock_insert = MagicMock()
+        mock_insert.next_chunk.return_value = (None, {"id": "yt_video_multi_99"})
+        mock_videos.insert.return_value = mock_insert
+        mock_youtube_service.videos.return_value = mock_videos
+
+        mock_discovery = MagicMock()
+        mock_discovery.build.return_value = mock_youtube_service
+        mock_http = MagicMock()
+
+        import sys
+        sys.modules["googleapiclient.discovery"] = mock_discovery
+        sys.modules["googleapiclient.http"] = mock_http
+
+        # 1. Upload with valid target account
+        args = argparse.Namespace(
+            youtube_action="upload",
+            project=slug,
+            chapter=chap,
+            account="kênh_review_vip",
+            title="Upload Multi Account Test",
+            description="Test Desc",
+            tags="Test",
+            privacy="unlisted",
+            thumbnail=None,
+            no_captions=True,
+        )
+
+        res = handle_youtube_upload(args)
+        assert res["status"] == "success"
+        assert res["account"] == "kênh_review_vip"
+        assert res["channel_title"] == "Review Truyện VIP"
+        assert res["channel_id"] == "UC_VIP_999"
+        assert res["video_id"] == "yt_video_multi_99"
+
+        # 2. Upload with non-existent account raises CliValidationError
+        args_bad = argparse.Namespace(
+            youtube_action="upload",
+            project=slug,
+            chapter=chap,
+            account="kenh_khong_ton_tai",
+            title=None,
+            description=None,
+            tags=None,
+            privacy="unlisted",
+            thumbnail=None,
+            no_captions=True,
+        )
+        with pytest.raises(CliValidationError) as exc:
+            handle_youtube_upload(args_bad)
+        assert "not found" in str(exc.value)
 

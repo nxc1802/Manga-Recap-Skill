@@ -107,8 +107,9 @@ manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 
 # 11. YouTube SEO metadata packaging and video publishing
+manga-recap youtube accounts [--account-action list|add|remove|default] [--account <name>] --json
 manga-recap youtube metadata --project <slug> --chapter <num> --json
-manga-recap youtube upload --project <slug> --chapter <num> [--privacy private|unlisted|public] [--thumbnail <path>] --json
+manga-recap youtube upload --project <slug> --chapter <num> [--account <name>] [--privacy private|unlisted|public] [--thumbnail <path>] --json
 
 # 12. Clean intermediate clips, temp files, and caches safely after final output verification
 manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json

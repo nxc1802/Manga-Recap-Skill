@@ -756,6 +756,28 @@ class YouTubeMetadata(BaseModel):
     shorts_highlight: Optional[Dict[str, Any]] = Field(default=None, description="Recommended 30-60s highlight snippet for YouTube Shorts")
 
 
+class YouTubeAccountInfo(BaseModel):
+    """Configuration, channel metadata, and token path for an authorized YouTube channel account."""
+    model_config = ConfigDict(extra="ignore")
+
+    account_name: str = Field(..., description="Unique account alias or slug (e.g. 'main', 'ch2')")
+    channel_title: str = Field(default="", description="YouTube Channel display name")
+    channel_id: str = Field(default="", description="YouTube Channel ID (e.g. UCxxxx)")
+    token_file: str = Field(..., description="Path to authorized user OAuth token JSON")
+    client_secrets_file: str = Field(default="client_secrets.json", description="Path to OAuth client_secrets.json")
+    created_at: str = Field(default_factory=utc_iso_now)
+    last_used_at: Optional[str] = None
+    is_active: bool = True
+
+
+class YouTubeAccountsRegistry(BaseModel):
+    """Registry schema for multi-channel YouTube account management."""
+    model_config = ConfigDict(extra="ignore")
+
+    default_account: Optional[str] = None
+    accounts: Dict[str, YouTubeAccountInfo] = Field(default_factory=dict)
+
+
 # ==============================================================================
 # 10. Feature Timeline & YouTube Chapter Models (PR-05)
 # ==============================================================================

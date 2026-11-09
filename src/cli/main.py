@@ -192,9 +192,15 @@ def build_parser() -> JsonAwareArgumentParser:
 
     # 10. youtube
     p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
-    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "thumbnail"], help="YouTube action: 'metadata', 'upload', 'auth', or 'thumbnail'")
-    p_yt.add_argument("-p", "--project", required=True, help="Project slug")
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "thumbnail", "accounts"], help="YouTube action: 'metadata', 'upload', 'auth', 'thumbnail', or 'accounts'")
+    p_yt.add_argument("-p", "--project", default=None, help="Project slug")
     p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
+    p_yt.add_argument("--account", default=None, help="Target YouTube account/channel name (default: active default account)")
+    p_yt.add_argument("--account-action", choices=["list", "add", "remove", "default"], default="list", help="Account management action (default: list)")
+    p_yt.add_argument("--secrets", default=None, help="Path to client_secrets.json")
+    p_yt.add_argument("--set-default", action="store_true", help="Set this account as the default account")
+    p_yt.add_argument("--delete-token", action=argparse.BooleanOptionalAction, default=True, help="Delete stored token file on account removal")
+    p_yt.add_argument("--force", action="store_true", help="Force re-authentication")
     p_yt.add_argument("--video", default=None, help="Custom video file path override")
     p_yt.add_argument("--subtitles", default=None, help="Custom subtitles SRT file path override")
     p_yt.add_argument("--title", default=None, help="Video title override")

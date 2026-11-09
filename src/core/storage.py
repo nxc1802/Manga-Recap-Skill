@@ -113,6 +113,17 @@ def get_output_dir(project_slug: str) -> Path:
     return Path("output") / project_slug
 
 
+def get_youtube_accounts_dir() -> Path:
+    """Returns the base storage directory for YouTube accounts registry and tokens."""
+    env_dir = os.getenv("YOUTUBE_ACCOUNTS_DIR")
+    if env_dir:
+        return Path(env_dir)
+    data_dir = os.getenv("MANGA_RECAP_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "youtube_accounts"
+    return Path("data") / "youtube_accounts"
+
+
 def get_workspace_dir(project_slug: str, chapter_num: Optional[Union[str, int]] = None) -> Path:
     """
     Returns standardized workspace directory:

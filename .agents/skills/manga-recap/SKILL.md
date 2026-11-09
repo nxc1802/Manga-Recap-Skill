@@ -225,14 +225,17 @@ manga-recap cloud run --project <project_slug> --chapter <chapter_num> --json
 4. **Auto-Packaging & Local Sync**: CLI packages local assets into a lightweight tarball, uploads to Kaggle Dataset `cuongnguyen1802/manga-recap-payload`, polls execution, and downloads results directly into local paths (`video/final.mp4`, `subtitles/*.srt`, `audio/clips/`, `cloud_telemetry.json`). Checkpoint status in `chapter.json` is updated atomically to `completed`.
 5. **Zero Cloud API / Zero Database Rule Compliance**: Reasoning, scriptwriting, and OCR remain 100% native to the Agent. VieNeu-TTS runs offline within the Kaggle container. State persistence is strictly local JSON.
 
-### Stage 11: YouTube SEO Packaging & Publishing
-Generate metadata (SEO description, click-worthy titles, timestamps, hashtags) and publish directly:
+### Stage 11: YouTube SEO Packaging & Multi-Account Publishing
+Generate metadata (SEO description, click-worthy titles, timestamps, hashtags) and publish directly to the selected YouTube channel:
 ```bash
-# 1. Generate SEO packaging and timestamps metadata
+# 1. Manage and inspect linked YouTube channels
+manga-recap youtube accounts --json
+
+# 2. Generate SEO packaging and timestamps metadata
 manga-recap youtube metadata --project <slug> --chapter <num> --json
 
-# 2. Upload video with Vietnamese closed captions and thumbnail to YouTube
-manga-recap youtube upload --project <slug> --chapter <num> --privacy [private|unlisted|public] [--thumbnail <path>] --json
+# 3. Mandatory Channel Selection: Query available accounts, ask the user which channel to upload to, then upload:
+manga-recap youtube upload --project <slug> --chapter <num> [--account <channel_alias>] --privacy [private|unlisted|public] [--thumbnail <path>] --json
 ```
 
 ## Narrative & Cinematic Guidelines

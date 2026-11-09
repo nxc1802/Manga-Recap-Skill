@@ -24,12 +24,7 @@ from src.core.storage import (
     read_json,
 )
 from src.core.utils import DependencyNotFoundError
-
-# Scopes required for YouTube Data API v3 upload & caption management
-YOUTUBE_SCOPES = [
-    "https://www.googleapis.com/auth/youtube.upload",
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-]
+from src.youtube.account_manager import YOUTUBE_SCOPES, YouTubeAccountManager, account_manager
 
 
 def format_seconds_to_timestamp(seconds: float) -> str:
@@ -416,83 +411,122 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
 
 
 
-def get_youtube_oauth_credentials():
+def get_youtube_oauth_credentials(account_name: Optional[str] = None, force_reauth: bool = False):
     """
-    Retrieves and refreshes YouTube OAuth2 credentials.
-    Raises DependencyNotFoundError if Google API libraries are missing.
-    Raises StorageFileNotFoundError if client_secrets.json is missing.
+    Retrieves and refreshes YouTube OAuth2 credentials for the specified or default account.
+    Maintains 100% backward compatibility with legacy 0-argument callers.
     """
-    import importlib
-    try:
-        req_mod = importlib.import_module("google.auth.transport.requests")
-        creds_mod = importlib.import_module("google.oauth2.credentials")
-        flow_mod = importlib.import_module("google_auth_oauthlib.flow")
-        Request = req_mod.Request
-        Credentials = creds_mod.Credentials
-        InstalledAppFlow = flow_mod.InstalledAppFlow
-    except ImportError as e:
-        raise DependencyNotFoundError(
-            "Missing Google API client dependencies for YouTube upload.\n"
-            "Please install with: pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
-        ) from e
-
-    secrets_file = os.getenv("YOUTUBE_CLIENT_SECRETS_FILE", "client_secrets.json")
-    token_file = os.getenv("YOUTUBE_CREDENTIALS_FILE", ".youtube_token.json")
-
-    creds = None
-    if os.path.exists(token_file):
-        try:
-            logger.info(f"Loading existing YouTube credentials from {token_file}")
-            creds = Credentials.from_authorized_user_file(token_file, YOUTUBE_SCOPES)
-        except Exception as e:
-            logger.warning(f"Failed to load token file: {e}")
-            creds = None
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            logger.info("Credentials expired. Refreshing token...")
-            try:
-                creds.refresh(Request())
-            except Exception as e:
-                logger.error(f"Failed to refresh YouTube credentials: {e}")
-                creds = None
-
-        if not creds:
-            if not os.path.exists(secrets_file):
-                raise StorageFileNotFoundError(
-                    f"OAuth client secrets file not found at: {secrets_file}\n"
-                    "Please download your OAuth 2.0 Client credentials (client_secrets.json) "
-                    "from Google Cloud Console (YouTube Data API v3 enabled) and place it in the project root."
-                )
-
-            logger.info("Launching local browser authentication flow for YouTube...")
-            flow = InstalledAppFlow.from_client_secrets_file(secrets_file, YOUTUBE_SCOPES)
-            creds = flow.run_local_server(port=0)
-
-        # Save authorized credentials
-        try:
-            with open(token_file, "w", encoding="utf-8") as f:
-                f.write(creds.to_json())
-            logger.info(f"YouTube credentials saved to {token_file}")
-        except Exception as e:
-            logger.warning(f"Could not persist credentials to {token_file}: {e}")
-
+    creds, _ = account_manager.get_credentials(account_name=account_name, force_reauth=force_reauth)
     return creds
 
 
+def handle_youtube_accounts(args: argparse.Namespace) -> Dict[str, Any]:
+    """Manages multi-channel YouTube accounts (list, add, remove, default)."""
+    action = getattr(args, "account_action", None) or "list"
+    account_name = getattr(args, "account", None)
+
+    if action == "list":
+        accounts = account_manager.list_accounts()
+        reg = account_manager.load_registry()
+        return {
+            "status": "success",
+            "command": "youtube",
+            "action": "accounts",
+            "subaction": "list",
+            "default_account": reg.default_account,
+            "accounts_count": len(accounts),
+            "accounts": accounts,
+        }
+
+    if action == "add":
+        if not account_name:
+            raise CliValidationError("--account is required to add an account (e.g. --account review_truyen).")
+        secrets = getattr(args, "secrets", None)
+        set_default = getattr(args, "set_default", False)
+        acc = account_manager.add_or_update_account(
+            account_name=account_name,
+            client_secrets_file=secrets,
+            set_default=set_default,
+        )
+        reg = account_manager.load_registry()
+        return {
+            "status": "success",
+            "command": "youtube",
+            "action": "accounts",
+            "subaction": "add",
+            "account": {
+                "account_name": acc.account_name,
+                "channel_title": acc.channel_title,
+                "channel_id": acc.channel_id,
+                "token_file": acc.token_file,
+                "is_default": (acc.account_name == reg.default_account),
+            },
+        }
+
+    if action == "remove":
+        if not account_name:
+            raise CliValidationError("--account is required to remove an account.")
+        delete_token = getattr(args, "delete_token", True)
+        reg = account_manager.remove_account(account_name, delete_token=delete_token)
+        return {
+            "status": "success",
+            "command": "youtube",
+            "action": "accounts",
+            "subaction": "remove",
+            "removed_account": account_name,
+            "default_account": reg.default_account,
+            "remaining_accounts_count": len(reg.accounts),
+        }
+
+    if action == "default":
+        if not account_name:
+            raise CliValidationError("--account is required to set default account.")
+        reg = account_manager.set_default_account(account_name)
+        return {
+            "status": "success",
+            "command": "youtube",
+            "action": "accounts",
+            "subaction": "default",
+            "default_account": reg.default_account,
+        }
+
+    raise CliValidationError(f"Unknown account action '{action}'. Available: list, add, remove, default.")
+
+
 def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
-    """Tests and verifies YouTube OAuth credentials."""
-    token_file = os.getenv("YOUTUBE_CREDENTIALS_FILE", ".youtube_token.json")
+    """Tests and verifies YouTube OAuth credentials for specified or default account."""
+    account_name = getattr(args, "account", None)
     force = getattr(args, "force", False)
-    if force and os.path.exists(token_file):
-        try:
-            os.remove(token_file)
-        except OSError:
-            pass
-    creds = get_youtube_oauth_credentials()
+
+    try:
+        creds = get_youtube_oauth_credentials(account_name=account_name, force_reauth=force)
+    except TypeError:
+        creds = get_youtube_oauth_credentials()
+
+    try:
+        acc_info = account_manager.get_account(account_name)
+        token_file = acc_info.token_file
+        acc_name = acc_info.account_name
+        c_title, c_id = acc_info.channel_title, acc_info.channel_id
+        if not c_title and creds and getattr(creds, "valid", False):
+            c_title, c_id = account_manager.fetch_channel_info(creds)
+            if c_title:
+                reg = account_manager.load_registry()
+                if acc_info.account_name in reg.accounts:
+                    reg.accounts[acc_info.account_name].channel_title = c_title
+                    reg.accounts[acc_info.account_name].channel_id = c_id
+                    account_manager.save_registry(reg)
+    except Exception:
+        token_file = os.getenv("YOUTUBE_CREDENTIALS_FILE", ".youtube_token.json")
+        acc_name = account_name or "default"
+        c_title, c_id = "", ""
+
     return {
         "status": "success",
-        "valid": bool(creds and creds.valid),
+        "valid": bool(creds and getattr(creds, "valid", False)),
+        "account": acc_name,
+        "channel_title": c_title,
+        "channel_id": c_id,
         "token_file": str(Path(token_file).resolve()),
     }
 
@@ -608,7 +642,17 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     made_for_kids = def_kids
 
     # 4. Authenticate with YouTube Data API v3
-    creds = get_youtube_oauth_credentials()
+    target_account = getattr(args, "account", None)
+    acc_info = account_manager.get_account(target_account)
+    account_name_resolved = acc_info.account_name
+    channel_title = acc_info.channel_title
+    channel_id = acc_info.channel_id
+
+    try:
+        creds = get_youtube_oauth_credentials(account_name=target_account)
+    except TypeError:
+        creds = get_youtube_oauth_credentials()
+
     import importlib
     try:
         discovery_mod = importlib.import_module("googleapiclient.discovery")
@@ -717,6 +761,9 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         "status": "success",
         "video_id": video_id,
         "video_url": video_url,
+        "account": account_name_resolved,
+        "channel_title": channel_title,
+        "channel_id": channel_id,
         "title": title,
         "privacy_status": privacy,
         "captions_uploaded": captions_uploaded,
@@ -797,6 +844,8 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_auth(args)
     if yt_action == "thumbnail":
         return handle_youtube_thumbnail(args)
+    if yt_action in ("accounts", "account"):
+        return handle_youtube_accounts(args)
 
-    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, thumbnail.")
+    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, thumbnail, accounts.")
 
