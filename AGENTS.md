@@ -145,6 +145,8 @@ manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 
 ## 5. Coding Agent Behavioral Rules
 
+> **STRICT FORM MODE — HARD CONSTRAINT (V4):** Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn. Before ANY new-series pipeline action, collect exactly Q01–Q10 explicit, validated choices via `ask_question` (multiple calls if required); never infer from CLI defaults, old project config, preferred voice, active YouTube account, or hardware. Incomplete/invalid/unavailable `ask_question` => STOP without starting jobs. Persist a 10/10 user-approved series setup record. See canonical `.agents/skills/manga-recap/SKILL.md`, Stage 0. Later chapters inherit only this explicitly confirmed series setup. Do not mistake the chapter 1 preview, thumbnail, voice or YouTube review gates for a substitute.
+
 1. **Series-Level User Configuration Gate (Stage 0)**: Configure all series options once in `project.json` and interactively confirm with the user:
    - **Chương & Source URL**: Chapter / chapter range to process.
    - **Môi trường Server thực thi (Compute Environment)**: **Mặc định: Kaggle Cloud GPU (Tesla T4)** cho cả TTS và Render (`--kaggle`), hoặc Local khi người dùng yêu cầu.
