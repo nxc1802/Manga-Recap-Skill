@@ -475,3 +475,84 @@ class TestYouTubeMultiAccountManagement:
             handle_youtube_upload(args_bad)
         assert "not found" in str(exc.value)
 
+    def test_interactive_channel_selection(self, account_setup, monkeypatch):
+        from src.cli.youtube_cmd import prompt_interactive_channel_selection
+        from src.cli.exit_codes import CliValidationError
+
+        mgr = account_setup["manager"]
+        dummy_tok = account_setup["dir"] / "dummy.json"
+        dummy_tok.write_text("{}", encoding="utf-8")
+
+        mgr.add_or_update_account("chan1", token_file=dummy_tok)
+        mgr.add_or_update_account("chan2", token_file=dummy_tok)
+
+        # 1. Select option 2
+        monkeypatch.setattr("builtins.input", lambda prompt="": "2")
+        selected = prompt_interactive_channel_selection(mgr)
+        assert selected == "chan2"
+
+        # 2. Select default (empty input)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "")
+        selected_default = prompt_interactive_channel_selection(mgr)
+        assert selected_default == mgr.load_registry().default_account
+
+        # 3. Select 0 (cancel)
+        monkeypatch.setattr("builtins.input", lambda prompt="": "0")
+        with pytest.raises(CliValidationError) as exc:
+            prompt_interactive_channel_selection(mgr)
+        assert "hủy" in str(exc.value).lower()
+
+    def test_upload_interactive_mode(self, mock_project, monkeypatch):
+        from src.cli.youtube_cmd import handle_youtube_upload
+        slug = mock_project["slug"]
+        chap = mock_project["chapter"]
+        out_proj_dir = mock_project["output_dir"] / slug
+        out_proj_dir.mkdir(parents=True, exist_ok=True)
+        vid_path = out_proj_dir / "chapter_001.mp4"
+        vid_path.write_bytes(b"dummy mp4 video bytes")
+
+        # Mock interactive channel selection returning 'kênh_review_vip'
+        monkeypatch.setattr("src.cli.youtube_cmd.prompt_interactive_channel_selection", lambda mgr: "kênh_review_vip")
+        mock_creds = MagicMock()
+        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda account_name=None: mock_creds)
+
+        mock_acc_info = MagicMock()
+        mock_acc_info.account_name = "kênh_review_vip"
+        mock_acc_info.channel_title = "Review Truyện VIP"
+        mock_acc_info.channel_id = "UC_VIP_999"
+
+        from src.youtube.account_manager import account_manager
+        monkeypatch.setattr(account_manager, "get_account", lambda name: mock_acc_info)
+
+        mock_youtube_service = MagicMock()
+        mock_insert = MagicMock()
+        mock_insert.next_chunk.return_value = (None, {"id": "yt_interactive_123"})
+        mock_youtube_service.videos().insert.return_value = mock_insert
+
+        mock_discovery = MagicMock()
+        mock_discovery.build.return_value = mock_youtube_service
+        mock_http = MagicMock()
+        import sys
+        monkeypatch.setitem(sys.modules, "googleapiclient.discovery", mock_discovery)
+        monkeypatch.setitem(sys.modules, "googleapiclient.http", mock_http)
+
+        args = argparse.Namespace(
+            youtube_action="upload",
+            project=slug,
+            chapter=chap,
+            account=None,
+            interactive=True,
+            title="Interactive Test",
+            description="Test Desc",
+            tags="Test",
+            privacy="unlisted",
+            thumbnail=None,
+            no_captions=True,
+        )
+        res = handle_youtube_upload(args)
+        assert res["status"] == "success"
+        assert res["account"] == "kênh_review_vip"
+        assert res["video_id"] == "yt_interactive_123"
+
+
+

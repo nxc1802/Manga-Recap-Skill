@@ -1,9 +1,13 @@
 # CẤU HÌNH VẬN HÀNH PIPELINE MANGA RECAP (Agentic Hybrid Workflow)
 
+# Môi trường thực thi mặc định: kaggle (Cloud GPU Tesla T4) hoặc local
+compute_server: "kaggle"
+
 # Cấu hình xử lý & Dựng video
 orchestrator:
   video_mode: "auto"          # Chế độ khung hình: auto, portrait_padded, landscape_fit, portrait_vertical
   render_pan_mode: "static"   # Chế độ camera mặc định: static (tĩnh nghệ thuật, không rung giật), dynamic, zoom, vertical, horizontal
+  burn_subtitles: false       # Gắn phụ đề cứng đè lên video: mặc định TẮT (false)
   ffmpeg_max_concurrent: 4    # Số luồng render video clip song song
   # max_panels: 40           # Giới hạn số lượng panel tải và xử lý (dành cho test)
 

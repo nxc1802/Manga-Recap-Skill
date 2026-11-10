@@ -196,6 +196,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("-p", "--project", default=None, help="Project slug")
     p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
     p_yt.add_argument("--account", default=None, help="Target YouTube account/channel name (default: active default account)")
+    p_yt.add_argument("-i", "--interactive", action="store_true", help="Interactively select target YouTube channel from numbered list")
     p_yt.add_argument("--account-action", choices=["list", "add", "remove", "default"], default="list", help="Account management action (default: list)")
     p_yt.add_argument("--secrets", default=None, help="Path to client_secrets.json")
     p_yt.add_argument("--set-default", action="store_true", help="Set this account as the default account")
@@ -256,6 +257,27 @@ def build_parser() -> JsonAwareArgumentParser:
     p_rp.add_argument("--format", choices=["md", "html", "json", "all"], default="all", help="Output format(s)")
     p_rp.add_argument("--out-dir", default=None, help="Custom output directory")
 
+    # 16. thumbnail
+    p_th = subparsers.add_parser("thumbnail", help="Discover candidates, compose 16:9 thumbnail, and update YouTube", parents=[common_parent])
+    p_th.add_argument("-p", "--project", required=True, help="Project slug")
+    p_th.add_argument("-c", "--chapter", default="1", help="Chapter number")
+    p_th.add_argument("--candidates", action="store_true", help="Scan and list top aesthetic candidate panels from chapter")
+    p_th.add_argument("--limit", type=int, default=8, help="Max candidates to return (default: 8)")
+    p_th.add_argument("--left", default=None, help="Left split panel ID or path")
+    p_th.add_argument("--center", "--main", dest="center", default=None, help="Center hero / main panel ID or path")
+    p_th.add_argument("--right", default=None, help="Right split panel ID or path")
+    p_th.add_argument("--auto", action="store_true", help="Auto-pick top 3 scored candidates if panels not specified")
+    p_th.add_argument("--title", default=None, help="Title hook text line 1")
+    p_th.add_argument("--subtitle", default=None, help="Subtitle hook text line 2")
+    p_th.add_argument("--badge", default=None, help="Top-left badge text override (e.g. 'TẬP 1 | MANGA RECAP')")
+    p_th.add_argument("--no-text", action="store_true", help="Render pure artwork thumbnail without any typography overlay")
+    p_th.add_argument("--font", default=None, help="Custom TrueType/OpenType font path override")
+    p_th.add_argument("--color-preset", choices=["yellow_black", "red_white", "cyan_black", "gold_luxury", "white_clean"], default="yellow_black", help="Color palette preset")
+    p_th.add_argument("--stroke-width", type=int, default=6, help="Text outer stroke width in pixels")
+    p_th.add_argument("--output", default=None, help="Custom destination image file path")
+    p_th.add_argument("--upload", action="store_true", help="Update thumbnail on YouTube for this chapter immediately")
+    p_th.add_argument("--account", default="default", help="YouTube account alias if uploading")
+
     return parser
 
 
@@ -306,6 +328,9 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand in {"review-pack", "review_pack"}:
         from src.cli.review_pack import handle_review_pack
         return handle_review_pack(args)
+    elif subcommand == "thumbnail":
+        from src.cli.thumbnail_cmd import handle_thumbnail
+        return handle_thumbnail(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 
@@ -325,7 +350,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "thumbnail"
         }:
             detected_subcommand = arg
             break

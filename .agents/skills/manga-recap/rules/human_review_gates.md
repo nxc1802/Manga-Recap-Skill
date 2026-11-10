@@ -4,15 +4,24 @@ Diễn ra **ngay khi khởi tạo project/series** trước khi thực thi bất
 
 ### Mục tiêu:
 Cấu hình một lần duy nhất cho toàn bộ Series vào `data/projects/<project_slug>/project.json`:
-1. **Chapter & URL**: Số chapter khởi điểm và link bộ truyện.
-2. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Ngọc Huyền` - Nữ miền Bắc thanh lịch, tự nhiên, biểu cảm cao; hoặc `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, v.v.).
-3. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
-4. **Phụ đề (Burn Subtitles)**: `Có` (`true`, mặc định) hoặc `Không` (`false`).
-5. **Hiệu ứng Animation (Camera Motion)**:
-   - `Không` (`false`, mặc định: `render_pan_mode: static`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật 16:9, tránh rung lắc, vỡ hình và phóng to quá mức.
-   - `Có` (`true`, `render_pan_mode: dynamic`): Hiệu ứng zoom/pan nhẹ bám theo nhân vật.
-6. **Chất lượng Video**: `preview` (720p) hoặc `final` (1080p, mặc định).
-7. **BGM (Nhạc nền)**: File nhạc nền và âm lượng nếu có.
+1. **Chapter & URL**: Số chapter khởi điểm hoặc khoảng chapter cần xử lý và link bộ truyện.
+2. **Môi trường Server thực thi (Compute Server)**:
+   - **`Kaggle Cloud GPU` (Mặc định)**: Tăng tốc phần cứng Tesla T4, thực hiện TTS và Render video Full HD cực nhanh trên cloud container (`--kaggle`).
+   - `Local Environment`: Chạy trực tiếp trên máy nội bộ (CPU / Apple Silicon / local GPU).
+3. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Ngọc Huyền` - Nữ miền Bắc thanh lịch, tự nhiên, biểu cảm cao; hoặc `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, v.v.).
+4. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
+5. **Phụ đề (Burn Subtitles)**: **`Không` (Mặc định: TẮT, `false` / `--no-burn-subtitles`)** hoặc `Có` (`true` / `--burn-subtitles`).
+6. **Hiệu ứng Animation (Camera Motion)**:
+   - `Có` (`true`, `render_pan_mode: dynamic` / `--animation`): Hiệu ứng zoom/pan nhẹ bám theo biểu cảm và đòn thế nhân vật.
+   - `Không` (`false`, `render_pan_mode: static` / `--no-animation`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật 16:9.
+7. **Thiết kế Thumbnail tương tác (Thumbnail Interactive Gate)**:
+   - Trước khi tạo ảnh bìa, Agent **BẮT BUỘC** dừng lại hỏi người dùng:
+     * *Chọn ảnh*: Quét và gợi ý 5–8 panel kịch tính nhất từ `manga-recap thumbnail --candidates` để người dùng chọn (Trái - Giữa - Phải hoặc 1 ảnh Hero chính).
+     * *In chữ & Typography*: Hỏi người dùng có in chữ không? Nếu có thì in câu gì (gợi ý 2–3 hook 3–5 từ), màu sắc/phông chữ như thế nào (Vàng viền đen, Đỏ viền trắng...). Tuyệt đối không tự ý chọn ảnh và bịa chữ khi chưa hỏi người dùng.
+8. **Kênh YouTube Upload (Sau khi video hoàn chỉnh)**:
+   - Chọn kênh YouTube để xuất bản (danh sách lấy từ `manga-recap youtube accounts`) cùng trạng thái hiển thị (`private`, `unlisted`, `public`), hoặc lưu nội bộ không tải lên.
+9. **Chất lượng Video**: `final` (1080p Full HD, mặc định) hoặc `preview` (720p).
+10. **BGM (Nhạc nền)**: File nhạc nền và âm lượng nếu có (`bgm_volume: 0.15`).
 
 **Quy tắc kế thừa (Inheritance Rule)**: Mọi chapter tiếp theo trong cùng series sẽ **tự động kế thừa** các thông số trên từ `project.json`. Agent và CLI **tuyệt đối không hỏi lại** người dùng cho các chapter sau.
 
@@ -89,6 +98,25 @@ manga-recap review-pack --project <project_slug> --chapter <chapter_num> [--form
 3. **Agent Remediation & Incremental Re-synthesis**:
    - Agent edits only the specified segments in `script.json`.
    - Re-running `manga-recap tts` and `manga-recap render` automatically preserves valid cached audio clips for untouched segments. Only modified segments are re-synthesized.
+
+---
+
+## 3. Review Gate 3: YouTube Channel Selection Gate (Cổng Chọn Kênh YouTube Bắt Buộc)
+
+Diễn ra **sau** khi render video hoàn tất và **trước** khi upload lên YouTube.
+
+### Quy Tắc Cốt Lõi:
+1. **Tuyệt đối không tự ý upload**: Agent **KHÔNG BAO GIỜ** được tự ý chọn kênh mặc định hoặc bất kỳ kênh nào để tải lên khi chưa hỏi người dùng.
+2. **Quy trình truy vấn & trình bày**:
+   - Agent gọi CLI: `manga-recap youtube accounts --json` để lấy danh sách kênh hiện tại (Title, Channel ID, Alias, kênh mặc định).
+   - Agent sử dụng công cụ `ask_question` hiển thị câu hỏi trắc nghiệm rõ ràng:
+     - **Câu hỏi**: *"Bạn muốn upload video này lên kênh YouTube nào?"*
+     - **Các lựa chọn**:
+       - Tên từng kênh khả dụng (ví dụ: `Chờ Review (alias: cho_review)`, `Muốn Review (alias: muon_review)`, v.v.).
+       - Kèm lựa chọn: `Không upload (Chỉ lưu file video và thumbnail nội bộ)`.
+3. **Thực thi chính xác**:
+   - Sau khi người dùng chọn, Agent truyền chính xác `--account <kênh_được_chọn>` vào lệnh `manga-recap youtube upload`.
+   - Nếu người dùng chọn "Không upload", Agent kết thúc pipeline và báo cáo đường dẫn file video thành phẩm.
 
 ---
 

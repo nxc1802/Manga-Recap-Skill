@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -526,6 +527,51 @@ def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def prompt_interactive_channel_selection(manager: Optional[YouTubeAccountManager] = None) -> str:
+    """
+    Displays an interactive numbered terminal prompt to select a YouTube channel.
+    Supports selecting 1, 2, 3... or pressing Enter to select the default account.
+    """
+    mgr = manager or account_manager
+    accounts = mgr.list_accounts()
+    if not accounts:
+        raise CliValidationError(
+            "No YouTube accounts registered.\n"
+            "Please run 'manga-recap youtube accounts --account-action add --account <name>' first."
+        )
+
+    reg = mgr.load_registry()
+    print("\n" + "=" * 64)
+    print("  🎬 CHỌN KÊNH YOUTUBE ĐỂ TẢI VIDEO LÊN (INTERACTIVE MODE)")
+    print("=" * 64)
+    for idx, acc in enumerate(accounts, start=1):
+        def_tag = " ⭐ [MẶC ĐỊNH]" if acc.get("is_default") else ""
+        c_title = acc.get("channel_title") or "(Chưa đặt tên)"
+        a_name = acc.get("account_name")
+        c_id = acc.get("channel_id") or "(Chưa có ID)"
+        print(f"  [{idx}] {c_title} (alias: '{a_name}') (ID: {c_id}){def_tag}")
+    print("  [0] Hủy bỏ tải lên")
+    print("=" * 64)
+
+    default_alias = reg.default_account or accounts[0]["account_name"]
+    while True:
+        try:
+            choice = input(f"👉 Chọn kênh (1-{len(accounts)}) hoặc [0] để hủy [mặc định: {default_alias}]: ").strip()
+            if not choice:
+                print(f"👉 Đã chọn mặc định: '{default_alias}'\n")
+                return default_alias
+            if choice == "0":
+                raise CliValidationError("Người dùng đã hủy tiến trình upload.")
+            if choice.isdigit() and 1 <= int(choice) <= len(accounts):
+                chosen_acc = accounts[int(choice) - 1]["account_name"]
+                c_title = accounts[int(choice) - 1]["channel_title"]
+                print(f"✅ Đã chọn kênh: '{c_title}' (alias: {chosen_acc})\n")
+                return chosen_acc
+            print(f"❌ Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến {len(accounts)} (hoặc 0 để hủy).")
+        except (EOFError, KeyboardInterrupt):
+            raise CliValidationError("Upload bị hủy bởi người dùng.")
+
+
 def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     """Uploads chapter or feature compilation video to YouTube, attaches captions and custom thumbnail."""
     project_slug = getattr(args, "project", "")
@@ -636,8 +682,15 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     category_id = def_category
     made_for_kids = def_kids
 
-    # 4. Authenticate with YouTube Data API v3
+    # 4. Authenticate with YouTube Data API v3 (Mode 1: Direct/Headless vs Mode 2: Interactive Prompt)
     target_account = getattr(args, "account", None)
+    is_interactive_flag = getattr(args, "interactive", False)
+    is_json_mode = getattr(args, "json", False) or getattr(args, "json_mode", False)
+
+    # Trigger interactive selection if flag set OR (account omitted, not in JSON mode, and running on TTY)
+    if is_interactive_flag or (target_account is None and not is_json_mode and sys.stdin.isatty()):
+        target_account = prompt_interactive_channel_selection(account_manager)
+
     acc_info = account_manager.get_account(target_account)
     account_name_resolved = acc_info.account_name
     channel_title = acc_info.channel_title

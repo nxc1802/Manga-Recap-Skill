@@ -158,6 +158,13 @@ class YouTubeAccountManager:
             target = account_name.strip()
             if target in reg.accounts:
                 return reg.accounts[target]
+            # Flexible match: case-insensitive alias or channel_title
+            for name, acc in reg.accounts.items():
+                if name.lower() == target.lower():
+                    return acc
+            for name, acc in reg.accounts.items():
+                if acc.channel_title and acc.channel_title.strip().lower() == target.lower():
+                    return acc
             available = list(reg.accounts.keys())
             raise CliValidationError(
                 f"YouTube account '{target}' not found. Available accounts: {available}.\n"
@@ -176,12 +183,18 @@ class YouTubeAccountManager:
         """Sets the specified account as the default upload account."""
         reg = self.load_registry()
         target = account_name.strip()
-        if target not in reg.accounts:
+        matched_key = target if target in reg.accounts else None
+        if not matched_key:
+            for name, acc in reg.accounts.items():
+                if name.lower() == target.lower() or (acc.channel_title and acc.channel_title.strip().lower() == target.lower()):
+                    matched_key = name
+                    break
+        if not matched_key:
             available = list(reg.accounts.keys())
             raise CliValidationError(f"Cannot set default: account '{target}' not found. Available: {available}")
-        reg.default_account = target
+        reg.default_account = matched_key
         self.save_registry(reg)
-        logger.info(f"Set '{target}' as default YouTube upload account.")
+        logger.info(f"Set '{matched_key}' as default YouTube upload account.")
         return reg
 
     def remove_account(self, account_name: str, delete_token: bool = False) -> YouTubeAccountsRegistry:
@@ -272,15 +285,20 @@ class YouTubeAccountManager:
 
             if not creds:
                 if not secrets_path.exists():
-                    # Fallback check for client_secrets.json in root
-                    root_secrets = Path("client_secrets.json").resolve()
-                    if root_secrets.exists():
-                        secrets_path = root_secrets
+                    # Fallback check for client_secrets in credentials/ or root
+                    candidates = [
+                        Path("credentials/client_secrets_adroit.json").resolve(),
+                        Path("credentials/client_secrets.json").resolve(),
+                        Path("client_secrets.json").resolve(),
+                    ]
+                    found = next((c for c in candidates if c.exists()), None)
+                    if found:
+                        secrets_path = found
                     else:
                         raise StorageFileNotFoundError(
                             f"OAuth client secrets file not found at: {secrets_path}\n"
-                            "Please download your OAuth 2.0 Client credentials (client_secrets.json) "
-                            "from Google Cloud Console (YouTube Data API v3 enabled) and place it in the project root."
+                            "Please place your OAuth 2.0 Client credentials (client_secrets.json) "
+                            "in 'credentials/' or in the project root."
                         )
 
                 if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALLOW_INTERACTIVE_OAUTH"):
@@ -288,6 +306,11 @@ class YouTubeAccountManager:
 
                 logger.info(f"Launching local browser OAuth flow for account '{acc.account_name}'...")
                 flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), YOUTUBE_SCOPES)
+                if getattr(flow, "client_type", None) == "web":
+                    logger.warning(
+                        f"Note: '{secrets_path.name}' is of type 'Web application'. If Google displays "
+                        "'Error 400: redirect_uri_mismatch', create a 'Desktop app' OAuth Client ID in Google Cloud Console."
+                    )
                 creds = flow.run_local_server(port=0)
 
             # Persist authorized credentials

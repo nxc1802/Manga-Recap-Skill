@@ -20,6 +20,8 @@ dist/
 .env.*
 client_secret*.json
 .youtube_token*.json
+credentials/*
+!credentials/README.md
 
 # Large model weight directories
 models/

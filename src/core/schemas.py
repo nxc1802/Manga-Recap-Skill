@@ -294,7 +294,7 @@ class RenderSettings(BaseModel):
     audio_codec: str = "aac"
     crf: int = Field(default=20, ge=0, le=51)
     preset: str = "medium"
-    burn_subtitles: bool = True
+    burn_subtitles: bool = False
     video_mode: str = "auto"
     render_pan_mode: str = "static"
     subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)

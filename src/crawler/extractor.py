@@ -75,7 +75,7 @@ class ChapterExtractor:
                 container = c
         else:
             # Try known reader containers
-            for sel in ["div#_imageList", "div.page-chapter", "div.viewer", "div.reading-content", "div.chapter-content"]:
+            for sel in ["div#_imageList", "div.chapter_content", "div.chapter-content", "div.reading-content", "div.viewer", "div.page-chapter"]:
                 c = soup.select_one(sel)
                 if c:
                     container = c

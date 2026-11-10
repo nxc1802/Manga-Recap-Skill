@@ -183,10 +183,42 @@ manga-recap youtube metadata --project <slug> --chapter <num> --json
 4. Trường hợp chưa có kênh nào được liên kết (`accounts_count == 0`), Agent hướng dẫn người dùng chạy script xác thực:
    `python scripts/youtube_auth.py --account <tên_kênh>`.
 
-### Bước 3: Tải video lên kênh YouTube đã chọn
+### Bước 3: Tải video lên kênh YouTube (Hỗ trợ 2 Modes CLI)
+
+CLI hỗ trợ **cả 2 chế độ (Mode)** đáp ứng cả nhu cầu tương tác thủ công trên Terminal và tự động hóa qua Agent/Script:
+
+#### Mode 1: Chỉ định trực tiếp hoặc tự động (Direct / Headless / Scripting Mode)
+Sử dụng cờ `--account <alias_hoặc_tên_kênh>`. Thích hợp khi Agent gọi lệnh hoặc chạy trong script tự động:
 ```bash
-manga-recap youtube upload --project <slug> --chapter <num> --account <selected_account> --privacy unlisted --json
+# Chỉ định bằng alias
+manga-recap youtube upload --project <slug> --chapter <num> --account cho_review --privacy unlisted --json
+
+# Hoặc chỉ định trực tiếp bằng tên kênh có dấu
+manga-recap youtube upload --project <slug> --chapter <num> --account "Chờ Review" --privacy unlisted --json
 ```
+
+#### Mode 2: Chọn kênh tương tác trên Terminal (Interactive Menu Prompt Mode)
+Khi chạy trực tiếp trên Terminal và người dùng **không truyền cờ `--account`** (hoặc truyền cờ `-i` / `--interactive`), CLI sẽ tự động hiển thị menu tương tác đánh số để người dùng chọn:
+```bash
+# Kích hoạt menu chọn kênh tương tác
+manga-recap youtube upload --project <slug> --chapter <num> -i
+# Hoặc đơn giản là không truyền cờ --account trên terminal
+manga-recap youtube upload --project <slug> --chapter <num>
+```
+*Giao diện tương tác trên Terminal:*
+```text
+================================================================
+  🎬 CHỌN KÊNH YOUTUBE ĐỂ TẢI VIDEO LÊN (INTERACTIVE MODE)
+================================================================
+  [1] Đầu Tư Nhàn Rỗi Và Thông Minhh (alias: 'default') ⭐ [MẶC ĐỊNH]
+  [2] Chờ Review (alias: 'cho_review')
+  [3] Muốn Review (alias: 'muon_review')
+  [0] Hủy bỏ tải lên
+================================================================
+👉 Chọn kênh (1-3) hoặc [0] để hủy [mặc định: default]: 2
+✅ Đã chọn kênh: 'Chờ Review' (alias: cho_review)
+```
+
 - Sử dụng chính xác token OAuth của kênh đã được người dùng chỉ định.
 - Tự động lấy file `output/<slug>/chapter_001.mp4`.
 - Tự động tải phụ đề `output/<slug>/chapter_001.srt` lên làm Closed Captions tiếng Việt.

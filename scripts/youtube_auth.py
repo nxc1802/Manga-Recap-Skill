@@ -33,6 +33,16 @@ def main():
     if not secrets_path.is_absolute():
         secrets_path = PROJECT_ROOT / secrets_path
 
+    if not secrets_path.exists():
+        fallback_candidates = [
+            PROJECT_ROOT / "credentials/client_secrets_adroit.json",
+            PROJECT_ROOT / "credentials/client_secrets.json",
+            PROJECT_ROOT / "client_secrets.json",
+        ]
+        found = next((c for c in fallback_candidates if c.exists()), None)
+        if found:
+            secrets_path = found
+
     if args.token:
         token_path = Path(args.token)
         if not token_path.is_absolute():

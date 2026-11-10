@@ -106,12 +106,19 @@ manga-recap compile --project <slug> --chapters 1,2 --output <path> --json
 # 10. Run TTS voice screening and emotion benchmarks (isolated testing lab)
 manga-recap tts_benchmark --out-dir data/benchmarks/vieneu_v3_turbo/ --json
 
-# 11. YouTube SEO metadata packaging and video publishing
+# 11. YouTube SEO metadata packaging and video publishing (Mode 1: Direct, Mode 2: Interactive -i)
 manga-recap youtube accounts [--account-action list|add|remove|default] [--account <name>] --json
 manga-recap youtube metadata --project <slug> --chapter <num> --json
-manga-recap youtube upload --project <slug> --chapter <num> [--account <name>] [--privacy private|unlisted|public] [--thumbnail <path>] --json
+# Mode 1: Chỉ định kênh trực tiếp (Direct/Headless)
+manga-recap youtube upload --project <slug> --chapter <num> --account <name_or_title> [--privacy private|unlisted|public] [--thumbnail <path>] --json
+# Mode 2: Chọn kênh tương tác trên Terminal (Interactive Menu Prompt)
+manga-recap youtube upload --project <slug> --chapter <num> -i
 
-# 12. Clean intermediate clips, temp files, and caches safely after final output verification
+# 12. Thumbnail composition & interactive candidate discovery
+manga-recap thumbnail --project <slug> --chapter <num> --candidates --json
+manga-recap thumbnail --project <slug> --chapter <num> [--left <p1>] --center <p2> [--right <p3>] [--title "<hook>"] [--subtitle "<sub>"] [--no-text] [--color-preset yellow_black] [--upload] --json
+
+# 13. Clean intermediate clips, temp files, and caches safely after final output verification
 manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 ```
 
@@ -138,7 +145,18 @@ manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 
 ## 5. Coding Agent Behavioral Rules
 
-1. **Series-Level User Configuration Gate (Stage 0)**: Configure video settings (Resolution, Video Mode, Burn Subtitles, Frame Animation, BGM) once per series in `project.json`. Chapters automatically inherit these settings without repetitive re-prompting.
+1. **Series-Level User Configuration Gate (Stage 0)**: Configure all series options once in `project.json` and interactively confirm with the user:
+   - **Chương & Source URL**: Chapter / chapter range to process.
+   - **Môi trường Server thực thi (Compute Environment)**: **Mặc định: Kaggle Cloud GPU (Tesla T4)** cho cả TTS và Render (`--kaggle`), hoặc Local khi người dùng yêu cầu.
+   - **Giọng đọc (Voice ID)**: Selected from VieNeu-TTS presets (mặc định: `Ngọc Huyền`).
+   - **Tốc độ đọc (Speed)**: Mặc định `1.0x`.
+   - **Gắn phụ đề (Burn Subtitles)**: **Mặc định: TẮT** (`burn_subtitles: false` / `--no-burn-subtitles`).
+   - **Hiệu ứng Animation (Camera Motion)**: `dynamic / animation` hoặc `static`.
+   - **Cổng lựa chọn Thumbnail tương tác (Thumbnail Interactive Gate)**: Trước khi tạo Thumbnail (ngay cả khi chạy song song trong lúc chờ Server chạy TTS & Render), Agent **BẮT BUỘC PHẢI HỎI NGƯỜI DÙNG 2 ĐIỀU**:
+     * *Lựa chọn ảnh*: Chạy `manga-recap thumbnail --candidates` đề xuất 5–8 panel kịch tính nhất để người dùng tự chọn (Bên Trái - Ở Giữa - Bên Phải, hoặc 1 panel Hero chính).
+     * *In chữ & Typography*: Hỏi người dùng có in chữ không? Nếu có thì in câu gì (gợi ý 2–3 hook 3–5 từ), phong cách màu sắc ra sao (Vàng viền đen, Đỏ viền trắng, v.v.). Tuyệt đối không tự tiện chọn ảnh và bịa chữ mà không hỏi ý kiến người dùng.
+   - **Kênh YouTube Upload**: Xác định kênh upload đích (hoặc lưu nháp Unlisted/Private, hoặc không upload) sau khi video hoàn tất.
+   Chapters automatically inherit these settings without repetitive re-prompting.
 2. **Subject-Centric Framing, Static Default & Chat Box Avoidance**: Never set the frame focal center on speech bubbles / chat boxes. Always focus on character eyes, facial expressions, or physical action. Enforce safe crop scale ($\ge 0.45$) and clamp Ken Burns zoom factor ($\le 1.15\times$). Default camera mode is `static` with cinematic blurred background wings.
 3. **Look Before Scripting**: Never write narration from filenames (`panel_001.jpg`) or guesswork. Inspect contact sheets (`contact_sheets/sheet_*.jpg`) directly.
 4. **Storytelling & Direct Dialogue (1 Panel $\leftrightarrow$ 1 Segment)**: Transition from third-person summaries to immersive storytelling with direct character dialogue. Default to 1 panel per segment (holding 4–8s) applying the recommended 4-part structure: [Bối cảnh] + [Chủ thể/Thần sắc] + [Hành động/Đòn thế] + [Lời thoại trực tiếp]. 50–250 chars is a recommended prompt guideline for natural pacing, not a strict validator.
@@ -146,5 +164,6 @@ manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 6. **Consolidated Review Gates**:
    - Approve Gate 1 (voice strategy: `single_narrator`, default voice: `Ngọc Huyền`) once per series in `voice_selection.json`; chapters inherit approval automatically.
    - Gate 2 (preview verification) is optional for manual inspection and automatically bypassed in batch runs via `--skip-preview`.
+   - **Gate 3 (Mandatory YouTube Channel Selection Gate)**: Before publishing, Agent MUST query available channels (`manga-recap youtube accounts --json`) and prompt the user via `ask_question` to explicitly select the target channel (or local save only). Never blindly upload to default.
 7. **Atomic Checkpointing**: Update `script.json` after every scripting batch so progress is never lost.
 

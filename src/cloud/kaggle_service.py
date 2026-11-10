@@ -340,20 +340,25 @@ chapter_dir.mkdir(parents=True, exist_ok=True)
 found_payload_tar = None
 found_script = None
 
-for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
-    if not root_dir.exists():
-        continue
-    for tar_candidate in root_dir.rglob("*.tar.gz"):
-        if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
-            found_payload_tar = tar_candidate
+print("Searching for chapter data in /kaggle/input and current directory...")
+for _round in range(10):
+    for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
+        if not root_dir.exists():
+            continue
+        for tar_candidate in root_dir.rglob("*.tar.gz"):
+            if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
+                found_payload_tar = tar_candidate
+                break
+        if found_payload_tar:
             break
-    if found_payload_tar:
+        for s_candidate in root_dir.rglob("script.json"):
+            found_script = s_candidate
+            break
+        if found_script:
+            break
+    if found_payload_tar or found_script:
         break
-    for s_candidate in root_dir.rglob("script.json"):
-        found_script = s_candidate
-        break
-    if found_script:
-        break
+    time.sleep(3)
 
 if found_payload_tar:
     print(f"📦 Extracting payload archive securely: {{found_payload_tar}} -> {{workspace}}")
@@ -365,7 +370,12 @@ elif found_script:
     script_path = chapter_dir / "script.json"
     shutil.copy2(found_script, script_path)
 else:
-    raise FileNotFoundError("Could not find payload archive or script.json in /kaggle/input")
+    input_scan = []
+    if Path("/kaggle/input").exists():
+        for r, d, f in os.walk("/kaggle/input"):
+            input_scan.append(f"{{r}} -> dirs:{{d}}, files:{{f[:5]}} (total {{len(f)}})")
+    scan_summary = "\\n".join(input_scan) if input_scan else "Empty /kaggle/input"
+    raise FileNotFoundError(f"Could not find payload archive or script.json in /kaggle/input.\\nScan:\\n{{scan_summary}}")
 
 with open(script_path, "r", encoding="utf-8") as f:
     script = json.load(f)
@@ -629,37 +639,43 @@ found_manifest = None
 found_panels_dir = None
 found_project_json = None
 
-for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
-    if not root_dir.exists():
-        continue
-    for tar_candidate in root_dir.rglob("*.tar.gz"):
-        if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
-            found_payload_tar = tar_candidate
+print("Searching for chapter data in /kaggle/input and current directory...")
+for _round in range(10):
+    for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
+        if not root_dir.exists():
+            continue
+        for tar_candidate in root_dir.rglob("*.tar.gz"):
+            if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
+                found_payload_tar = tar_candidate
+                break
+        if found_payload_tar:
             break
-    if found_payload_tar:
-        break
 
-    for s_candidate in root_dir.rglob("script.json"):
-        try:
-            with open(s_candidate, "r", encoding="utf-8") as test_f:
-                s_data = json.load(test_f)
-                if "segments" in s_data:
-                    found_script = s_candidate
-                    found_chap_parent = s_candidate.parent
-                    m_cand = found_chap_parent / "manifest.json"
-                    if m_cand.exists():
-                        found_manifest = m_cand
-                    p_cand = found_chap_parent / "panels"
-                    if p_cand.exists():
-                        found_panels_dir = p_cand
-                    proj_cand = found_chap_parent.parent.parent / "project.json"
-                    if proj_cand.exists():
-                        found_project_json = proj_cand
-                    break
-        except Exception:
-            pass
-    if found_script:
+        for s_candidate in root_dir.rglob("script.json"):
+            try:
+                with open(s_candidate, "r", encoding="utf-8") as test_f:
+                    s_data = json.load(test_f)
+                    if "segments" in s_data:
+                        found_script = s_candidate
+                        found_chap_parent = s_candidate.parent
+                        m_cand = found_chap_parent / "manifest.json"
+                        if m_cand.exists():
+                            found_manifest = m_cand
+                        p_cand = found_chap_parent / "panels"
+                        if p_cand.exists():
+                            found_panels_dir = p_cand
+                        for p_cand_test in [found_chap_parent.parent / "project.json", found_chap_parent.parent.parent / "project.json", found_chap_parent / "project.json"]:
+                            if p_cand_test.exists():
+                                found_project_json = p_cand_test
+                                break
+                        break
+            except Exception:
+                pass
+        if found_script:
+            break
+    if found_payload_tar or found_script:
         break
+    time.sleep(3)
 
 if found_payload_tar:
     print(f"📦 Extracting payload archive securely: {{found_payload_tar}} -> {{workspace}}")
@@ -676,6 +692,9 @@ elif found_script:
     shutil.copy2(found_script, script_path)
     if found_manifest:
         shutil.copy2(found_manifest, manifest_path)
+    c_cand = found_chap_parent / "chapter.json"
+    if c_cand.exists():
+        shutil.copy2(c_cand, chapter_dir / "chapter.json")
     if found_project_json:
         project_json_path = workspace / "project.json"
         shutil.copy2(found_project_json, project_json_path)
@@ -699,7 +718,12 @@ elif found_script:
             shutil.copy2(wav_file, audio_clips_target / wav_file.name)
         print(f"Copied {{len(list(audio_clips_target.glob('*.wav')))}} audio clips to workspace.")
 else:
-    raise FileNotFoundError("Could not find payload archive or chapter files in /kaggle/input")
+    input_scan = []
+    if Path("/kaggle/input").exists():
+        for r, d, f in os.walk("/kaggle/input"):
+            input_scan.append(f"{{r}} -> dirs:{{d}}, files:{{f[:5]}} (total {{len(f)}})")
+    scan_summary = "\\n".join(input_scan) if input_scan else "Empty /kaggle/input"
+    raise FileNotFoundError(f"Could not find payload archive or chapter files in /kaggle/input.\\nScan:\\n{{scan_summary}}")
 
 if not panels_dir or not panels_dir.exists() or len(list(panels_dir.glob("*.jpg"))) == 0:
     for p_dir in Path("/kaggle/input").rglob("panels"):
@@ -1402,37 +1426,43 @@ found_manifest = None
 found_panels_dir = None
 found_project_json = None
 
-for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
-    if not root_dir.exists():
-        continue
-    for tar_candidate in root_dir.rglob("*.tar.gz"):
-        if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
-            found_payload_tar = tar_candidate
+print("Searching for chapter data in /kaggle/input and current directory...")
+for _round in range(10):
+    for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
+        if not root_dir.exists():
+            continue
+        for tar_candidate in root_dir.rglob("*.tar.gz"):
+            if "payload" in tar_candidate.name.lower() or "manga" in tar_candidate.name.lower():
+                found_payload_tar = tar_candidate
+                break
+        if found_payload_tar:
             break
-    if found_payload_tar:
-        break
 
-    for s_candidate in root_dir.rglob("script.json"):
-        try:
-            with open(s_candidate, "r", encoding="utf-8") as test_f:
-                s_data = json.load(test_f)
-                if "segments" in s_data:
-                    found_script = s_candidate
-                    found_chap_parent = s_candidate.parent
-                    m_cand = found_chap_parent / "manifest.json"
-                    if m_cand.exists():
-                        found_manifest = m_cand
-                    p_cand = found_chap_parent / "panels"
-                    if p_cand.exists():
-                        found_panels_dir = p_cand
-                    proj_cand = found_chap_parent.parent.parent / "project.json"
-                    if proj_cand.exists():
-                        found_project_json = proj_cand
-                    break
-        except Exception:
-            pass
-    if found_script:
+        for s_candidate in root_dir.rglob("script.json"):
+            try:
+                with open(s_candidate, "r", encoding="utf-8") as test_f:
+                    s_data = json.load(test_f)
+                    if "segments" in s_data:
+                        found_script = s_candidate
+                        found_chap_parent = s_candidate.parent
+                        m_cand = found_chap_parent / "manifest.json"
+                        if m_cand.exists():
+                            found_manifest = m_cand
+                        p_cand = found_chap_parent / "panels"
+                        if p_cand.exists():
+                            found_panels_dir = p_cand
+                        for p_cand_test in [found_chap_parent.parent / "project.json", found_chap_parent.parent.parent / "project.json", found_chap_parent / "project.json"]:
+                            if p_cand_test.exists():
+                                found_project_json = p_cand_test
+                                break
+                        break
+            except Exception:
+                pass
+        if found_script:
+            break
+    if found_payload_tar or found_script:
         break
+    time.sleep(3)
 
 if found_payload_tar:
     print(f"📦 Extracting payload archive securely: {{found_payload_tar}} -> {{workspace}}")
@@ -1449,6 +1479,9 @@ elif found_script:
     shutil.copy2(found_script, script_path)
     if found_manifest:
         shutil.copy2(found_manifest, manifest_path)
+    c_cand = found_chap_parent / "chapter.json"
+    if c_cand.exists():
+        shutil.copy2(c_cand, chapter_dir / "chapter.json")
     if found_project_json:
         project_json_path = workspace / "project.json"
         shutil.copy2(found_project_json, project_json_path)
@@ -1472,7 +1505,12 @@ elif found_script:
             shutil.copy2(wav_file, audio_clips_target / wav_file.name)
         print(f"Copied {{len(list(audio_clips_target.glob('*.wav')))}} audio clips to workspace.")
 else:
-    raise FileNotFoundError("Could not find payload archive or chapter files in /kaggle/input")
+    input_scan = []
+    if Path("/kaggle/input").exists():
+        for r, d, f in os.walk("/kaggle/input"):
+            input_scan.append(f"{{r}} -> dirs:{{d}}, files:{{f[:5]}} (total {{len(f)}})")
+    scan_summary = "\\n".join(input_scan) if input_scan else "Empty /kaggle/input"
+    raise FileNotFoundError(f"Could not find payload archive or chapter files in /kaggle/input.\\nScan:\\n{{scan_summary}}")
 
 if not panels_dir or not panels_dir.exists() or len(list(panels_dir.glob("*.jpg"))) == 0:
     for p_dir in Path("/kaggle/input").rglob("panels"):
@@ -2258,7 +2296,7 @@ print("=" * 60)
                         raise
                     logger.debug(f"Pre-flight audio check note: {e}")
 
-        kernel_slug = kernel_slug or f"manga-recap-{project_slug}-ch{chapter_number}".lower().replace("_", "-")
+        kernel_slug = (kernel_slug or f"mr-{project_slug[:12]}-c{chapter_number}-{int(time.time())%100000}".lower().replace("_", "-"))[:45].rstrip("-")
         staging_dir = Path(f"/tmp/kaggle_job_{project_slug}_{chapter_number}_{job_type}").resolve()
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
@@ -2269,29 +2307,74 @@ print("=" * 60)
         self.package_chapter_payload(project_slug, chapter_number, payload_tar, job_type=job_type)
 
         # Upload or update payload dataset on Kaggle with unconfirmed rights ("other")
-        dataset_slug = f"manga-recap-payload-{project_slug}-{chapter_number}".lower().replace("_", "-")[:40]
+        dataset_slug = "manga-recap-payload"
         ds_staging = Path(f"/tmp/kaggle_ds_{dataset_slug}").resolve()
         ds_staging.mkdir(parents=True, exist_ok=True)
         shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
         ds_meta = {
-            "title": f"Manga Recap Payload {project_slug} {chapter_number}",
+            "title": "Manga Recap Payload",
             "id": f"{self._username}/{dataset_slug}",
             "licenses": [{"name": "other"}],
         }
         (ds_staging / "dataset-metadata.json").write_text(json.dumps(ds_meta, indent=2))
+        # Check initial version before update
+        ds_ref = f"{self._username}/{dataset_slug}"
+        initial_ver = 0
         try:
-            logger.info("Syncing payload dataset to Kaggle...")
-            self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
+            for d in self._api.dataset_list(user=self._username):
+                if d.ref == ds_ref:
+                    initial_ver = getattr(d, "current_version_number", None) or getattr(d, "_current_version_number", 0) or 0
+                    break
         except Exception:
+            pass
+
+        # Check if current dataset is already ready and contains chapter files
+        existing_ready = False
+        try:
+            st = str(self._api.dataset_status(ds_ref)).lower()
+            flist = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
+            has_files = any("script.json" in f.name or "chapter.json" in f.name for f in flist)
+            if "ready" in st and has_files and initial_ver > 0:
+                logger.info(f"Dataset '{ds_ref}' (v{initial_ver}) is already verified ready with {len(flist)} files.")
+                existing_ready = True
+        except Exception as e:
+            logger.debug(f"Initial dataset verification note: {e}")
+
+        if not existing_ready:
             try:
+                logger.info("Syncing payload dataset to Kaggle (cuongnguyen1802/manga-recap-payload)...")
                 self._api.dataset_create_version(
                     str(ds_staging),
-                    version_notes=f"Job ch.{chapter_number} {job_type}",
+                    version_notes=f"Job {project_slug} ch.{chapter_number} {job_type}",
                     quiet=True,
                     delete_old_versions=True,
                 )
-            except Exception as e:
-                logger.warning(f"Dataset upload note: {e}")
+            except Exception:
+                try:
+                    self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
+                except Exception as e:
+                    logger.warning(f"Dataset upload note: {e}")
+
+            target_ver = initial_ver + 1
+            logger.info(f"Waiting for dataset '{ds_ref}' version {target_ver} to be ready on Kaggle...")
+            t_ds_start = time.time()
+            while time.time() - t_ds_start < 180:
+                time.sleep(5)
+                try:
+                    curr_ver = 0
+                    for d in self._api.dataset_list(user=self._username):
+                        if d.ref == ds_ref:
+                            curr_ver = getattr(d, "current_version_number", None) or getattr(d, "_current_version_number", 0) or 0
+                            break
+                    st = str(self._api.dataset_status(ds_ref)).lower()
+                    flist = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
+                    has_files = any("script.json" in f.name or "chapter.json" in f.name for f in flist)
+                    if curr_ver >= target_ver and "ready" in st and has_files:
+                        logger.info(f"Dataset '{ds_ref}' version {curr_ver} is ready with {len(flist)} files ({time.time() - t_ds_start:.1f}s)")
+                        time.sleep(5)
+                        break
+                except Exception as e:
+                    logger.debug(f"dataset_status check: {e}")
 
         worker_py = staging_dir / "worker.py"
         worker_code = self.generate_worker_script(
@@ -2362,11 +2445,11 @@ print("=" * 60)
                 logger.info(f"Kaggle Cloud Status [{int(time.time() - t0)}s]: {current_status}")
                 last_status = current_status
 
-            if str(current_status).upper() == "COMPLETE":
+            if "COMPLETE" in str(current_status).upper():
                 logger.info(f"Kaggle execution COMPLETE in {int(time.time() - t0)}s!")
                 completed_cleanly = True
                 break
-            elif str(current_status).upper() in ["FAILED", "ERROR"]:
+            elif any(err_kw in str(current_status).upper() for err_kw in ["FAILED", "ERROR"]):
                 fail_msg = getattr(status_obj, "failureMessage", "Unknown cloud error")
                 try:
                     err_dir = staging_dir / "error_out"

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -74,6 +75,18 @@ class SiteAdapterRegistry:
                     return profile
                 except Exception as e:
                     logger.warning(f"Failed to load profile from {p}: {e}")
+
+        # 3.5 Check url_patterns across registered profiles
+        for prof in self.list_profiles(project_slug):
+            if prof.url_patterns:
+                for pat in prof.url_patterns:
+                    try:
+                        if re.search(pat, domain_or_url, re.IGNORECASE):
+                            self._cache[cache_key] = prof
+                            logger.debug(f"Matched profile '{prof.domain}' via url_patterns for '{domain_or_url}'")
+                            return prof
+                    except Exception:
+                        pass
 
         # 4. Fallback to generic profile
         generic_path = self.builtin_dir / "generic.json"
