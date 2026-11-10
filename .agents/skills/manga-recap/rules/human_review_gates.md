@@ -1,3 +1,5 @@
+> **HARD CONSTRAINT / STRICT FORM MODE (V4):** Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn. Collect and validate explicit user answers for Q01–Q10 from the canonical `SKILL.md` Stage 0 BEFORE crawl, segmentation, scripting, GPU dispatch, TTS or render. Do NOT bypass via `--approved`, `--skip-preview`, system defaults or restored configurations without user-approval provenance. If the tool cannot ask ten items at once, ask them in successive tool invocations; if unavailable, stop. The separate thumbnail and YouTube channel-selection gates remain mandatory at their respective stages.
+
 ## 0. Review Gate 0: Video Configuration & Series Setup Gate (Cấu hình 1 LẦN cho cả Series)
 
 Diễn ra **ngay khi khởi tạo project/series** trước khi thực thi bất kỳ bước nào (Crawl, Script, TTS, Render).
