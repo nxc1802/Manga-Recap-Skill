@@ -414,13 +414,12 @@ def validate_complete_setup(
 def require_series_setup(
     project_slug: str,
     project_dir: Optional[Path] = None,
-    allow_legacy: bool = True,
+    allow_legacy: bool = False,
 ) -> SeriesSetupAnswers:
     """
     Fail-closed gate checking that the series has complete, user-confirmed 10-question setup.
     Raises CliValidationError if setup is missing, incomplete, or tampered.
-    If allow_legacy=True and the project is a legacy V3 project with existing project.json,
-    returns a synthetic migrated answers object.
+    Legacy project.json defaults never substitute for explicit 10/10 user choices.
     """
     proj_dir = project_dir or get_project_dir(project_slug)
     answers_file = proj_dir / "series_setup_answers.json"
@@ -445,23 +444,11 @@ def require_series_setup(
             )
         return answers_obj
 
-    # If answers_file does not exist, check legacy migration support
     if allow_legacy:
-        proj_json = proj_dir / "project.json"
-        if proj_json.exists():
-            try:
-                p_data = read_json(proj_json)
-                # If it's a legacy V3 config without setup_revision
-                if isinstance(p_data, dict) and (
-                    p_data.get("schema_version") == "3.0.0" or "setup_revision" not in p_data
-                ):
-                    logger.warning(
-                        f"Project '{project_slug}' is running in legacy compatibility mode. "
-                        "Run 'manga-recap setup migrate' to persist user provenance."
-                    )
-                    return _synthesize_legacy_answers(project_slug, p_data)
-            except Exception:
-                pass
+        logger.warning(
+            "allow_legacy=True is deprecated and ignored: user-confirmed "
+            "Q01-Q10 answers are mandatory for every series."
+        )
 
     raise CliValidationError(
         f"Strict Form Gate failed: Series '{project_slug}' is missing required user configuration.",
@@ -780,13 +767,18 @@ def migrate_legacy_setup(
         )
 
     p_data = read_json(proj_json)
-    synthetic = _synthesize_legacy_answers(project_slug, p_data)
-
-    answers_dict: Dict[str, Any] = {
-        qid: item.model_dump() for qid, item in synthetic.answers.items()
-    }
-    if overrides:
-        answers_dict.update(overrides)
+    # Migration must be a new explicit user approval, not a synthetic
+    # reconstruction of preferences from legacy project.json.
+    if not overrides:
+        raise CliValidationError(
+            "Legacy migration requires all ten explicit user answers via --answers-json. "
+            "Old project defaults are not user consent."
+        )
+    answers_dict: Dict[str, Any] = dict(overrides.get("answers", overrides))
+    if set(answers_dict) != set(ALL_QUESTION_IDS):
+        raise CliValidationError(
+            "Legacy migration requires exactly Q01-Q10, answered directly by the user."
+        )
 
     recorded = record_series_setup(
         project_slug=project_slug,
