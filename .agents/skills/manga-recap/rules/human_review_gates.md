@@ -1,35 +1,32 @@
+> **HARD CONSTRAINT / STRICT FORM MODE (V4):** Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn. Collect and validate explicit user answers for Q01–Q10 from the canonical `SKILL.md` Stage 0 BEFORE crawl, segmentation, scripting, GPU dispatch, TTS or render. Do NOT bypass via `--approved`, `--skip-preview`, system defaults or restored configurations without user-approval provenance. If the tool cannot ask ten items at once, ask them in successive tool invocations; if unavailable, stop. The separate thumbnail and YouTube channel-selection gates remain mandatory at their respective stages.
+
 ## 0. Review Gate 0: Video Configuration & Series Setup Gate (Cấu hình 1 LẦN cho cả Series)
 
 Diễn ra **ngay khi khởi tạo project/series** trước khi thực thi bất kỳ bước nào (Crawl, Script, TTS, Render).
 
 ### Mục tiêu:
-Cấu hình một lần duy nhất cho toàn bộ Series vào `data/projects/<project_slug>/project.json`:
-1. **Chapter & URL**: Số chapter khởi điểm hoặc khoảng chapter cần xử lý và link bộ truyện.
-2. **Môi trường Server thực thi (Compute Server)**:
-   - **`Kaggle Cloud GPU` (Mặc định)**: Tăng tốc phần cứng Tesla T4, thực hiện TTS và Render video Full HD cực nhanh trên cloud container (`--kaggle`).
-   - `Local Environment`: Chạy trực tiếp trên máy nội bộ (CPU / Apple Silicon / local GPU).
-3. **Giọng đọc (Voice ID)**: Chọn giọng đọc VieNeu-TTS (mặc định: `Ngọc Huyền` - Nữ miền Bắc thanh lịch, tự nhiên, biểu cảm cao; hoặc `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, v.v.).
-4. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
-5. **Phụ đề (Burn Subtitles)**: **`Không` (Mặc định: TẮT, `false` / `--no-burn-subtitles`)** hoặc `Có` (`true` / `--burn-subtitles`).
-6. **Hiệu ứng Animation (Camera Motion)**:
-   - `Có` (`true`, `render_pan_mode: dynamic` / `--animation`): Hiệu ứng zoom/pan nhẹ bám theo biểu cảm và đòn thế nhân vật.
-   - `Không` (`false`, `render_pan_mode: static` / `--no-animation`): Chế độ tĩnh (`STATIC`) toàn bộ, hiển thị trọn vẹn panel với nền mờ nghệ thuật 16:9.
-7. **Thiết kế Thumbnail tương tác (Thumbnail Interactive Gate)**:
-   - Trước khi tạo ảnh bìa, Agent **BẮT BUỘC** dừng lại hỏi người dùng:
-     * *Chọn ảnh*: Quét và gợi ý 5–8 panel kịch tính nhất từ `manga-recap thumbnail --candidates` để người dùng chọn (Trái - Giữa - Phải hoặc 1 ảnh Hero chính).
-     * *In chữ & Typography*: Hỏi người dùng có in chữ không? Nếu có thì in câu gì (gợi ý 2–3 hook 3–5 từ), màu sắc/phông chữ như thế nào (Vàng viền đen, Đỏ viền trắng...). Tuyệt đối không tự ý chọn ảnh và bịa chữ khi chưa hỏi người dùng.
-8. **Kênh YouTube Upload (Sau khi video hoàn chỉnh)**:
-   - Chọn kênh YouTube để xuất bản (danh sách lấy từ `manga-recap youtube accounts`) cùng trạng thái hiển thị (`private`, `unlisted`, `public`), hoặc lưu nội bộ không tải lên.
-9. **Chất lượng Video**: `final` (1080p Full HD, mặc định) hoặc `preview` (720p).
-10. **BGM (Nhạc nền)**: File nhạc nền và âm lượng nếu có (`bgm_volume: 0.15`).
+Stage 0 **phải** gọi công cụ `ask_question` thu thập đủ 10 hạng mục Q01–Q10 theo danh sách chuẩn trong `.agents/skills/manga-recap/SKILL.md`. Đây là câu trả lời **người dùng tự chọn**, không phải các giá trị đề xuất được Agent tự điền.
 
-**Quy tắc kế thừa (Inheritance Rule)**: Mọi chapter tiếp theo trong cùng series sẽ **tự động kế thừa** các thông số trên từ `project.json`. Agent và CLI **tuyệt đối không hỏi lại** người dùng cho các chapter sau.
+1. **Q01 — Chapter & URL / Import:** Chọn chapter hoặc chapter range và URL, hoặc thư mục ảnh nguồn.
+2. **Q02 — Compute Server:** `Kaggle Cloud GPU` hoặc `Local Environment`. Không tự chọn Kaggle.
+3. **Q03 — Voice ID:** Chọn một giọng VieNeu-TTS khả dụng, không tự chọn `Ngọc Huyền`.
+4. **Q04 — Speed:** Chọn tốc độ đọc từ các giá trị được hỗ trợ.
+5. **Q05 — Burn Subtitles:** Chọn `Có` hoặc `Không`.
+6. **Q06 — Animation:** Chọn `Có` hoặc `Không`; motion policy top-down mới chỉ nằm trong kế hoạch V4 cho đến khi Render Engine được cập nhật.
+7. **Q07 — Thumbnail:** Chọn `Tạo` hoặc `Không tạo`. Nếu chọn `Tạo`, Gate thumbnail tiếp tục yêu cầu chọn panel và chữ sau khi có hình nguồn.
+8. **Q08 — YouTube Upload:** Chọn `Không upload` hoặc một kênh cụ thể cùng privacy `private`/`unlisted`/`public`; nếu có upload, Gate 3 tiếp tục xác nhận kênh.
+9. **Q09 — Video Quality:** Chọn `preview 720p` hoặc `final 1080p`. Chapter 1 của quy trình V4 phải qua preview và human approval trước khi final, dù Q09 chọn `final`.
+10. **Q10 — BGM:** Chọn `Không BGM` hoặc `Có BGM` kèm đường dẫn nguồn và gain đã xác nhận.
+
+Đối với mỗi Q, thiếu hoặc không hợp lệ => phải hỏi lại, không tự thay bằng default. Lưu `project.json` và `series_setup_answers.json` (kế hoạch: Python runtime validator cần được triển khai ở PR-01 kế tiếp, chưa có trong runtime hiện tại).
+
+**Quy tắc kế thừa (Inheritance Rule)**: Mọi chapter tiếp theo trong cùng series sẽ **tự động kế thừa** các thông số trên từ `project.json`. Agent không hỏi lại khi đã có bản ghi xác nhận 10/10 hợp lệ và không thay đổi; nếu thiếu provenance hoặc người dùng đổi cấu hình, phải hỏi và xác nhận lại các trường bị ảnh hưởng. CLI validator cho quy tắc này chưa được triển khai.
 
 ---
 
 ## 1. Review Gate 1: Voice & Emotion Strategy Approval (Duyệt 1 LẦN cho cả Series)
 
-Diễn ra **sau** khi thử giọng / audition và **trước** khi render video.
+Diễn ra **sau** khi thử giọng / audition và **trước** khi render video. Giọng trong bản ghi mẫu dưới đây chỉ minh họa; không được dùng để suy ra lựa chọn của người dùng.
 
 ### Objectives
 1. Verify synthesized audio quality, pronunciation of character names, and cadence.
@@ -60,9 +57,10 @@ The pipeline strictly decouples technical execution from human editorial judgmen
 
 ### Objectives & Bypass Rules:
 1. **Interactive Inspection**: Inspect audio-visual synchronization, Ken Burns motion, subtitle readability, and BGM ducking on `video/preview.mp4` or `video/final.mp4`.
-2. **Optional in Production / Batch Runs (`--skip-preview`)**:
-   - In single-chapter direct rendering: pass `--skip-preview` to bypass Gate 2 and render production 1080p directly.
-   - In batch runs (`manga-recap batch`): Gate 2 is **bypassed by default** (`--skip-preview`).
+2. **Chapter 1 Mandatory Preview in the V4 Series Workflow**:
+   - Chapter 1 MUST be rendered in preview quality and explicitly approved by a human before a full-series final job is requested. A user choosing `final` at Q09 does not waive the Chapter 1 preview.
+   - After Chapter 1 approval is recorded with its script/config fingerprint, chapters 2+ MAY use `--skip-preview` to render finals without repeated manual approval.
+   - **Current limitation:** legacy CLI still accepts `--skip-preview` for Chapter 1; this policy is enforced by Agent guidance only until the proposed Python runtime checks ship.
    - **MANDATORY STATUS INVARIANT**: When preview is bypassed via `--skip-preview`, the technical stage completes (`technical_status = "completed"`), but `human_review_status` MUST BE recorded as **`unreviewed`**.
    - **STRICT PROHIBITION**: The system and agent MUST NEVER automatically mark unreviewed chapters as `"approved"`.
 3. **Approval Recording**:

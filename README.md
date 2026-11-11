@@ -27,12 +27,14 @@ An autonomous, agent-native manga and webtoon recap video creation pipeline. Eng
    - Dynamic FFmpeg `sidechaincompress` BGM volume ducking and millisecond-synchronized `.srt` subtitles.
 5. **Streamlined 5-Stage Architecture & Consolidated Review Gates**:
    - Streamlined into 5 operational stages: **Ingest** $\to$ **Agent** $\to$ **Audio** $\to$ **Render** $\to$ **Export**.
-   - **Gate 0 (Video Config)**: Configured **ONCE** per series in `project.json` and automatically inherited across all chapters without repetitive prompts.
+   - **Gate 0 (Video Config)**: V4 Agent policy requires the user to explicitly answer **all 10 setup questions** via `ask_question` once per new series, without implicit defaults; validated selections then carry forward to later chapters. This is currently an **Agent instruction, not a CLI-level runtime guard**.
    - **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `voice_selection.json` and inherited by all chapters.
-   - **Gate 2 (Preview Approval)**: Optional for human inspection; automatically bypassed in batch runs (`--skip-preview`) to enable direct unattended 1080p rendering.
+   - **Gate 2 (Preview Approval)**: V4 series policy requires a real **Chapter 1 preview approval** before full-series final processing. Later chapters can skip additional previews while retaining `unreviewed` review status; legacy V3 CLI still permits `--skip-preview` without this safeguard.
    - **Batch Mode**: Multi-chapter sequential execution (`manga-recap batch`) with chapter error isolation and single-chapter retry (`--retry-chapter`).
 
 ---
+
+> **V4 implementation status:** Strict Form is currently documented in `.agents/skills/manga-recap/SKILL.md`; Python enforcement, visual-only top-down motion, single-session dual-T4 Kaggle jobs, and verified Hugging Face archiving/cleanup are planned in [the V4 implementation plan](docs/V4_Implementation_Plan.md) and are **not** existing runtime features.
 
 ## 🏗️ Repository Layout
 
@@ -132,10 +134,12 @@ manga-recap validate --project <slug> --chapter <num> --strict --json
 # 6. Synthesize local VieNeu-TTS 48 kHz audio utterances
 manga-recap tts --project <slug> --chapter <num> [--force] --json
 
-# 7. Render chapter video (preview or final 1080p; use --skip-preview to bypass preview gate)
+# 7. Chapter 1: preview and obtain explicit human approval before final production
+manga-recap render --project <slug> --chapter 1 --quality preview --json
+# After Chapter 1 approval only (runtime guard planned for V4):
 manga-recap render --project <slug> --chapter <num> --quality final --skip-preview --json
 
-# 8. Sequential multi-chapter batch processing (with failure isolation and direct 1080p render)
+# 8. Legacy V3 sequential multi-chapter batch (only after Chapter 1 human approval in V4 workflow)
 manga-recap batch --project <slug> [--chapters 1-5] [--retry-chapter <num>] [--compile] --json
 
 # 9. Concatenate multiple chapter videos into a continuous feature recap

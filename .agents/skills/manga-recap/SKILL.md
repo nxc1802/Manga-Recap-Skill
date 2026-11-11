@@ -54,36 +54,40 @@ The pipeline operates across 5 streamlined operational stages:
 
 - **Gate 0 (Video Config)**: Configured **ONCE** per series in `data/projects/<slug>/project.json`. All chapters automatically inherit resolution, video mode, subtitles, animation, voice, and BGM settings without repeated prompts.
 - **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `data/projects/<slug>/voice_selection.json` (or `characters.json`) and inherited across all chapters.
-- **Gate 2 (Preview Approval)**: Optional preview verification; bypassed via `--skip-preview` or in batch runs to enable direct final render. When bypassed, `chapter.json` explicitly records `human_review_status = "unreviewed"`. Never auto-marked as approved without actual human review.
+- **Gate 2 (Preview Approval)**: **V4 series policy:** Chapter 1 preview and explicit human approval are mandatory before full-series final production. After this approval, chapters 2+ may bypass repeated previews via `--skip-preview` (still marked `human_review_status = "unreviewed"`). The legacy CLI does not enforce this new policy yet; the Agent must block an unapproved Chapter 1 full-series job.
 - **Batch Mode**: Multi-chapter sequential processing via `manga-recap batch` with chapter failure isolation and single-chapter retry (`--retry-chapter`).
 
-### Stage 0: Series Configuration Gate (Configured ONCE per Series)
-Before launching any pipeline execution, the Agent **MUST** ask the user or explicitly confirm all video configurations:
-1. **Chapter & Source URL**: Chapter number or chapter range and source URL (webtoon/manga reader link).
-2. **Môi trường Server thực thi (Compute Server)**:
-   - **`Kaggle Cloud GPU` (Mặc định)**: Tăng tốc phần cứng Tesla T4, xử lý TTS và Render video Full HD cực nhanh trên cloud container (`--kaggle`).
-   - `Local Environment`: Chạy trực tiếp trên máy nội bộ (CPU / Apple Silicon / local GPU).
-3. **Giọng đọc (Voice ID)**: Selected from VieNeu-TTS presets:
-   - `Ngọc Huyền` (Nữ miền Bắc, thanh lịch, tự nhiên, biểu cảm cao — Mặc định)
-   - `Trúc Ly` (Nữ miền Bắc, truyền cảm, ấm áp)
-   - `Hải Đăng` (Nam miền Nam, dõng dạc, hành động)
-   - `Thiền Tâm Đức` (Nam miền Bắc, trầm ấm, cổ phong kiếm hiệp)
-   - `Thiện Minh` (Nam miền Bắc, hào sảng, kịch tính)
-   - `Mai Anh` (Nữ miền Bắc, trẻ trung, tươi sáng)
-   - `Quang Sơn` (Nam miền Trung, sắc bén, phản diện)
-4. **Tốc độ đọc (Speed)**: `1.0x` (chuẩn mặc định), `0.9x`, `1.1x`, `1.2x`.
-5. **Gắn phụ đề (Burn Subtitles)**: **`Không` (Mặc định tắt: `--no-burn-subtitles` / `burn_subtitles: false`)** hoặc `Có` (`--burn-subtitles`).
-6. **Hiệu ứng Animation (Camera Motion)**:
-   - `Có` (`--animation`): Chuyển động zoom/pan bám sát biểu cảm và đòn thế của nhân vật.
-   - `Không` (`--no-animation`, `render_pan_mode: static`): Chế độ tĩnh với nền mờ nghệ thuật 16:9.
-7. **Thiết kế Thumbnail (Trong khi chờ Render & TTS)**:
-   - Tự động sinh Thumbnail 16:9 chuẩn YouTube độ phân giải cao kết hợp ảnh nhân vật kịch tính + Typography chữ giật tít tiếng Việt thu hút người xem.
-8. **Kênh YouTube Upload (Sau khi video hoàn chỉnh)**:
-   - Xác nhận kênh YouTube để xuất bản (danh sách lấy từ `manga-recap youtube accounts`) cùng trạng thái hiển thị (`private`, `unlisted`, `public`), hoặc lưu nội bộ không tải lên.
-9. **Chất lượng Video**: `final` (1080p Full HD, mặc định) hoặc `preview` (720p).
-10. **Nhạc nền BGM**: File nhạc nền nếu có, âm lượng BGM (`bgm_volume: 0.15`), voice volume (`1.0`).
+### Stage 0: STRICT FORM MODE — MANDATORY 10-QUESTION USER CONFIGURATION GATE
 
-All approved settings are saved into `data/projects/<slug>/project.json`.
+> **HARD CONSTRAINT — KHÔNG CÓ NGOẠI LỆ:** **Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn.**
+>
+> **MUST / FAIL-CLOSED:** Before performing any crawl, segmentation, scripting, TTS, rendering, upload, or cloud job submission for a NEW series, the Agent MUST invoke the interactive `ask_question` tool with ALL TEN questions below, await an explicit answer to EACH, and validate the returned selections. No omitted questions, inferred answers, automatic preselection, saved tool defaults, or silent substitution from `config.yaml`, `project.json`, CLI defaults, or historical preferences are allowed. Tool defaults in the underlying engine are implementation details, NOT user consent.
+>
+> If `ask_question` cannot display all ten questions in a single call, use successive `ask_question` calls until ALL ten are answered, without executing any pipeline stage in between. If the tool is unavailable, STOP automation and explain the missing requirement; do not replace this gate with guessed values. A user may explicitly select "Không", "Không upload", or "Không có BGM", which counts as an answer; an empty/unanswered field does NOT. If the answer is invalid, ask the same question again rather than guessing. Persist each explicit selection (and its source/time) as the series setup record before starting work.
+
+**Mandatory 10-item question list (show the full item set to the user; labels are NOT preselected):**
+
+1. **Chương & nguồn truyện:** Choose a chapter number / range and supply a source URL, OR explicitly select import of a local image folder and provide its path. Both source and scope must be supplied.
+2. **Môi trường thực thi:** Choose exactly one: `Kaggle Cloud GPU (T4 x2)` or `Local Environment`. Cloud is NOT selected automatically.
+3. **Giọng đọc:** Choose a VieNeu-TTS preset: `Ngọc Huyền`, `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, `Thiện Minh`, `Mai Anh`, `Quang Sơn`, or another verified voice from `manga-recap tts_benchmark`. No implicit `Ngọc Huyền`.
+4. **Tốc độ giọng đọc:** Choose `0.9x`, `1.0x`, `1.1x`, `1.2x`, or enter an explicitly supported numeric speed. No implicit `1.0x`.
+5. **Phụ đề:** Choose `Có` (burn subtitles) or `Không` (no burn). Neither state is assumed.
+6. **Animation:** Choose `Có` (motion policy: smooth, slow, top-to-bottom only, visual-content focus; no shake/text-focus) or `Không` (static). This choice MUST feed both local and Kaggle renderers.
+7. **Thumbnail:** Choose `Tạo thumbnail` or `Không tạo`. When enabled, the existing later-stage thumbnail review gate STILL MUST ask the user which source panels and hook text to use; Stage 0 is NOT permission to guess these details.
+8. **YouTube upload + privacy:** Choose `Không upload` or select an explicitly listed YouTube channel (from `manga-recap youtube accounts --json`) AND privacy `private` / `unlisted` / `public`. If no channel is linked, the user must choose `Không upload` or complete OAuth setup. The later Review Gate 3 still confirms the account before upload. No silent default channel or privacy.
+9. **Chất lượng:** Choose `preview 720p` or `final 1080p`. For multi-chapter production, Chapter 1 ALWAYS goes through preview + editorial approval first, then final; chapters 2+ may be dispatched as one cloud production batch only after approval.
+10. **Nhạc nền:** Choose `Không BGM` or `Có BGM`; if yes, provide the file/path and explicitly choose `bgm_volume` and `voice_volume`. Never guess file or gains.
+
+**Enforcement & gate behavior:**
+- An answer counts as confirmed ONLY when directly provided by the user in the current series setup interaction, not a tool's populated default. Present all ten questions as multiple-choice items, with text/path entry for fields requiring a URL, path, title, or gain.
+- Do NOT infer choices from example values, README defaults, prior projects, CLI parser defaults, existing GPU hardware, or stored account defaults.
+- Block ALL stages until 10/10 valid answers exist. If the user explicitly revises a choice, update the corresponding series setting and invalidate only affected downstream assets.
+- Gate 0 is performed ONCE per series. Subsequent chapters inherit the *explicitly approved* stored answers; do not ask again unless configuration is missing, the user changes it, or setup provenance cannot be established.
+- Preserve the existing thumbnail selection, voice approval, preview approval, and YouTube channel confirmation gates. Never mark any human approval automatically.
+- Save the explicitly approved settings in `data/projects/<slug>/project.json` and a separate `series_setup_answers.json` audit record, with an exact set of question IDs `Q01`–`Q10`, user selections, timestamps and no secrets.
+- Any programmatic `--approved`, `--skip-preview`, `--kaggle`, or CLI default MUST NOT bypass this user-facing series configuration gate.
+
+> **Implementation boundary (V4):** The 10-item form is an enforceable **Agent instruction** in this branch, not yet a Python runtime validator. Existing CLI commands can still execute with internal defaults. The planned `SeriesSetupValidator`, canonical top-down animation policy, dual-T4 series job and HF archive are **not yet implemented**; see `docs/V4_Implementation_Plan.md`.
 
 ### Stage 1: Ingestion & Crawl
 Fetch raw webtoon page images or import local chapter scans into project storage.
@@ -154,7 +158,7 @@ manga-recap tts --project <project_slug> --chapter <chapter_num> --kaggle --json
 - Resumability: By default, re-running TTS resumes without re-synthesizing segments that already possess valid, verified audio matching the current voice. Pass `--force` to re-synthesize all chapter segments.
 
 ### Stage 7: Human Review Gate 1 (Voice Strategy)
-Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (Một giọng đọc thống nhất — Mặc định: `Ngọc Huyền`), tùy chọn hỗ trợ thẻ cảm xúc `emotion_aware` (`[cười]`, `[thở dài]`, `[hắng giọng]`):
+Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (Một giọng đọc thống nhất — giọng đã được người dùng chọn rõ tại Q03), tùy chọn hỗ trợ thẻ cảm xúc `emotion_aware` (`[cười]`, `[thở dài]`, `[hắng giọng]`):
 1. Direct the user to listen to voice samples or review `data/benchmarks/vieneu_v3_turbo/review/index.html`.
 2. Record human approval into `data/projects/<project_slug>/voice_selection.json` once per series.
 
@@ -164,10 +168,10 @@ Render preview or final video clips with dynamic FFmpeg filterchains:
 # Preview render (for manual inspection)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality preview --json
 
-# Final 1080p render (use --skip-preview to bypass Gate 2 preview requirement)
+# Final 1080p render (ONLY after mandatory Chapter 1 preview approval for V4 series)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --json
 
-# Cloud GPU extreme-speed render (NVIDIA Hardware NVENC h264_nvenc single-pass)
+# Cloud GPU render (ONLY after mandatory Chapter 1 preview approval for V4 series)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --kaggle --json
 ```
 - Applies chosen camera motion (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`, `vertical_scroll`).
@@ -176,7 +180,7 @@ manga-recap render --project <project_slug> --chapter <chapter_num> --quality fi
 - Cloud mode (`--kaggle`): Composites frames in parallel (8 workers), merges audio, and renders Full HD 1080p using NVIDIA NVENC hardware encoder in a single-pass concat demuxer (~76s for an 8-minute video). Automatically syncs `final.mp4`, `chapter_<num>.srt`, and `cloud_telemetry.json` back to local storage.
 
 ### Stage 9: Human Review Gate 2 (Video Preview Verification)
-Verify output video stream using `ffprobe` and human inspection at Review Gate 2 (optional, bypassed via `--skip-preview` or batch mode):
+Verify output video stream using `ffprobe` and human inspection at Review Gate 2. **Chapter 1 preview + explicit approval are mandatory for V4 series; later chapters may bypass repeated manual preview** (the existing CLI does not yet enforce the Chapter 1 exception):
 1. **Interactive Inspection**: Check audio-visual synchronization, Ken Burns motion, subtitle readability, and BGM ducking on `video/preview.mp4` or `video/final.mp4`.
 2. **Review Status Semantics**:
    - If preview is skipped (`--skip-preview` or batch mode): `technical_status = "completed"` is recorded, but `human_review_status` is strictly recorded as **`unreviewed`**. It is **NEVER** automatically marked as `approved`.
@@ -203,10 +207,10 @@ manga-recap review-pack --project <project_slug> --chapter <chapter_num> [--form
 ### Stage 10: Multi-Chapter Compilation & Batch Mode
 Process multiple chapters in unattended batch mode or assemble into a master feature recap:
 ```bash
-# 1. Unattended sequential multi-chapter batch mode (Local)
+# 1. Legacy V3 sequential multi-chapter batch mode (Local; run ONLY after Chapter 1 preview approval)
 manga-recap batch --project <project_slug> --chapters 1-5 --compile --json
 
-# 2. Extreme-speed Cloud GPU batch mode (Kaggle Tesla T4: TTS + NVENC per chapter)
+# 2. Legacy V3 cloud batch mode (chapter-by-chapter; NOT the planned V4 single-session dual-T4 job)
 manga-recap batch --project <project_slug> --chapters 1-5 --kaggle --compile --json
 
 # 3. Single-chapter retry without restarting completed chapters
@@ -233,8 +237,8 @@ manga-recap cloud run --project <project_slug> --chapter <chapter_num> --json
 5. **Zero Cloud API / Zero Database Rule Compliance**: Reasoning, scriptwriting, and OCR remain 100% native to the Agent. VieNeu-TTS runs offline within the Kaggle container. State persistence is strictly local JSON.
 
 ### Stage 10c: Thumbnail Composition & Interactive Selection Gate
-Quy trình tạo Thumbnail chuẩn YouTube (High-CTR) được thiết kế song song trong lúc chờ Server chạy TTS & Render:
-1. **Interactive Selection Gate**: Agent **BẮT BUỘC** hỏi người dùng 2 bước trước khi tạo thumbnail:
+Nếu và chỉ nếu người dùng chọn **Tạo thumbnail** ở Q07, thực hiện quy trình thumbnail sau trong lúc chờ TTS & Render. Nếu Q07 chọn Không tạo, không tạo hay hỏi thêm về thumbnail:
+1. **Conditional Interactive Selection Gate**: Khi Q07 = Tạo thumbnail, Agent **BẮT BUỘC** hỏi người dùng 2 bước trước khi tạo thumbnail:
    - **Chọn ảnh**: Quét và đề xuất danh sách 5–8 panel đẹp nhất qua CLI `manga-recap thumbnail --candidates`, hỏi người dùng chọn ảnh Trái - Giữa - Phải (hoặc 1 ảnh Hero chính).
    - **In chữ & Typography**: Hỏi người dùng có in chữ không? Nếu có thì in tiêu đề gì (gợi ý 2–3 hook 3–5 từ), màu sắc và font chữ ra sao.
 2. **Deterministic CLI Execution**:

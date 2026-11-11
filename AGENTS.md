@@ -145,25 +145,18 @@ manga-recap clean --project <slug> [--chapter <num>] [--dry-run] --json
 
 ## 5. Coding Agent Behavioral Rules
 
-1. **Series-Level User Configuration Gate (Stage 0)**: Configure all series options once in `project.json` and interactively confirm with the user:
-   - **Chương & Source URL**: Chapter / chapter range to process.
-   - **Môi trường Server thực thi (Compute Environment)**: **Mặc định: Kaggle Cloud GPU (Tesla T4)** cho cả TTS và Render (`--kaggle`), hoặc Local khi người dùng yêu cầu.
-   - **Giọng đọc (Voice ID)**: Selected from VieNeu-TTS presets (mặc định: `Ngọc Huyền`).
-   - **Tốc độ đọc (Speed)**: Mặc định `1.0x`.
-   - **Gắn phụ đề (Burn Subtitles)**: **Mặc định: TẮT** (`burn_subtitles: false` / `--no-burn-subtitles`).
-   - **Hiệu ứng Animation (Camera Motion)**: `dynamic / animation` hoặc `static`.
-   - **Cổng lựa chọn Thumbnail tương tác (Thumbnail Interactive Gate)**: Trước khi tạo Thumbnail (ngay cả khi chạy song song trong lúc chờ Server chạy TTS & Render), Agent **BẮT BUỘC PHẢI HỎI NGƯỜI DÙNG 2 ĐIỀU**:
-     * *Lựa chọn ảnh*: Chạy `manga-recap thumbnail --candidates` đề xuất 5–8 panel kịch tính nhất để người dùng tự chọn (Bên Trái - Ở Giữa - Bên Phải, hoặc 1 panel Hero chính).
-     * *In chữ & Typography*: Hỏi người dùng có in chữ không? Nếu có thì in câu gì (gợi ý 2–3 hook 3–5 từ), phong cách màu sắc ra sao (Vàng viền đen, Đỏ viền trắng, v.v.). Tuyệt đối không tự tiện chọn ảnh và bịa chữ mà không hỏi ý kiến người dùng.
-   - **Kênh YouTube Upload**: Xác định kênh upload đích (hoặc lưu nháp Unlisted/Private, hoặc không upload) sau khi video hoàn tất.
-   Chapters automatically inherit these settings without repetitive re-prompting.
-2. **Subject-Centric Framing, Static Default & Chat Box Avoidance**: Never set the frame focal center on speech bubbles / chat boxes. Always focus on character eyes, facial expressions, or physical action. Enforce safe crop scale ($\ge 0.45$) and clamp Ken Burns zoom factor ($\le 1.15\times$). Default camera mode is `static` with cinematic blurred background wings.
+> **STRICT FORM MODE — HARD CONSTRAINT (V4):** Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn. Before ANY new-series pipeline action, collect exactly Q01–Q10 explicit, validated choices via `ask_question` (multiple calls if required); never infer from CLI defaults, old project config, preferred voice, active YouTube account, or hardware. Incomplete/invalid/unavailable `ask_question` => STOP without starting jobs. Persist a 10/10 user-approved series setup record. See canonical `.agents/skills/manga-recap/SKILL.md`, Stage 0. Later chapters inherit only this explicitly confirmed series setup. Do not mistake the chapter 1 preview, thumbnail, voice or YouTube review gates for a substitute.
+
+1. **Series-Level User Configuration Gate (Stage 0)**: Execute the exact Q01–Q10 `ask_question` protocol from `.agents/skills/manga-recap/SKILL.md` before starting a NEW series. Each answer must come from a direct user choice; do not infer or preselect it from `config.yaml`, `project.json` defaults, account defaults, prior projects or hardware. The questions cover: chapter/source, compute, voice, speed, subtitles, animation, thumbnail, YouTube destination/privacy or no upload, video quality, and BGM. A no-upload/no-thumbnail/no-BGM selection is a valid explicit answer. Persist all 10 selections with provenance before execution; subsequent chapters inherit only an explicitly approved series setup. If `ask_question` is missing or any answer is missing, STOP.
+   - **Thumbnail detail gate (conditional):** Only if Q07 enables thumbnail, ask which source panels to use and what title/typography (or no text). Never invent choices.
+   - **YouTube channel gate (conditional):** Only if Q08 enables upload, list current channels and reconfirm the selected destination immediately before upload.
+2. **Subject-Centric Framing & Chat Box Avoidance**: Use the user's explicit Q06 motion choice; do not assume static or animated mode. Focus on characters, facial expressions and action rather than speech bubbles; enforce safe crop bounds. Smooth top-down-only motion and visual-only omission are **V4 roadmap goals**, not capabilities guaranteed by the current renderer.
 3. **Look Before Scripting**: Never write narration from filenames (`panel_001.jpg`) or guesswork. Inspect contact sheets (`contact_sheets/sheet_*.jpg`) directly.
 4. **Storytelling & Direct Dialogue (1 Panel $\leftrightarrow$ 1 Segment)**: Transition from third-person summaries to immersive storytelling with direct character dialogue. Default to 1 panel per segment (holding 4–8s) applying the recommended 4-part structure: [Bối cảnh] + [Chủ thể/Thần sắc] + [Hành động/Đòn thế] + [Lời thoại trực tiếp]. 50–250 chars is a recommended prompt guideline for natural pacing, not a strict validator.
 5. **No Hallucination**: If text in a speech bubble is unreadable, watermarked, or cut off, or if an action is ambiguous, mark `status: "needs_review"` and flag with `[CAN_XAC_MINH: <lý_do>]`. Never fabricate lore.
 6. **Consolidated Review Gates**:
-   - Approve Gate 1 (voice strategy: `single_narrator`, default voice: `Ngọc Huyền`) once per series in `voice_selection.json`; chapters inherit approval automatically.
-   - Gate 2 (preview verification) is optional for manual inspection and automatically bypassed in batch runs via `--skip-preview`.
+   - Approve Gate 1 (voice strategy: `single_narrator`, explicitly chosen voice from Q03) once per series in `voice_selection.json`; chapters inherit approval automatically.
+   - Gate 2: for V4 series production, Chapter 1 preview requires actual human approval before any full-series final production; `--skip-preview` is allowed only for later chapters after this approval. Existing CLI does not yet enforce this policy, so the Agent MUST enforce it until PR-03 ships.
    - **Gate 3 (Mandatory YouTube Channel Selection Gate)**: Before publishing, Agent MUST query available channels (`manga-recap youtube accounts --json`) and prompt the user via `ask_question` to explicitly select the target channel (or local save only). Never blindly upload to default.
 7. **Atomic Checkpointing**: Update `script.json` after every scripting batch so progress is never lost.
 

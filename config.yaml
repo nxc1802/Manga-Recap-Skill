@@ -1,13 +1,14 @@
 # CẤU HÌNH VẬN HÀNH PIPELINE MANGA RECAP (Agentic Hybrid Workflow)
 
-# Môi trường thực thi mặc định: kaggle (Cloud GPU Tesla T4) hoặc local
+# INTERNAL RUNTIME FALLBACK ONLY — KHÔNG PHẢI lựa chọn người dùng. Agent phải hỏi Q01–Q10 bằng ask_question trước khi bắt đầu series mới.
+# Môi trường thực thi: kaggle (Cloud GPU Tesla T4) hoặc local; không tự chọn cho người dùng
 compute_server: "kaggle"
 
 # Cấu hình xử lý & Dựng video
 orchestrator:
   video_mode: "auto"          # Chế độ khung hình: auto, portrait_padded, landscape_fit, portrait_vertical
-  render_pan_mode: "static"   # Chế độ camera mặc định: static (tĩnh nghệ thuật, không rung giật), dynamic, zoom, vertical, horizontal
-  burn_subtitles: false       # Gắn phụ đề cứng đè lên video: mặc định TẮT (false)
+  render_pan_mode: "static"   # Chế độ camera fallback engine: static (không phải sự đồng ý Q06), dynamic, zoom, vertical, horizontal
+  burn_subtitles: false       # Gắn phụ đề cứng đè lên video: fallback nội bộ, không thay thế lựa chọn Q05
   ffmpeg_max_concurrent: 4    # Số luồng render video clip song song
   # max_panels: 40           # Giới hạn số lượng panel tải và xử lý (dành cho test)
 
@@ -20,4 +21,4 @@ script_limits:
 # Cấu hình giọng đọc thuyết minh VieNeu-TTS v3 Turbo
 tts:
   speed: 1.0                  # Tốc độ đọc: 1.0 (chuẩn)
-  voice: "Ngọc Huyền"         # Giọng đọc mặc định: "Ngọc Huyền" (Nữ Bắc thanh lịch, tự nhiên, biểu cảm cao)
+  voice: "Ngọc Huyền"         # Fallback nội bộ: "Ngọc Huyền" (không thay thế lựa chọn Q03) (Nữ Bắc thanh lịch, tự nhiên, biểu cảm cao)
