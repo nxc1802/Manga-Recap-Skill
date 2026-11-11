@@ -241,6 +241,7 @@ class TestArchivePushAndVerify:
         proj_dir = mock_archive_project["proj_dir"]
 
         mock_api = MagicMock()
+        mock_api.repo_info.return_value.private = True
         mock_commit_info = MagicMock()
         mock_commit_info.oid = "a1b2c3d4e5f67890abcdef1234567890abcdef12"
         mock_commit_info.commit_url = "https://huggingface.co/datasets/Cuong2004/manga-recap-archive/commit/a1b2c3"
@@ -263,7 +264,8 @@ class TestArchivePushAndVerify:
         receipt = json.loads(Path(res["receipt_path"]).read_text(encoding="utf-8"))
         assert receipt["schema_version"] == "4.0.0"
         assert receipt["receipt_type"] == "huggingface_archive"
-        assert receipt["status"] == "verified"
+        assert receipt["status"] == "uploaded"
+        assert receipt["verified_file_count"] == 0
         assert receipt["commit_sha"] == "a1b2c3d4e5f67890abcdef1234567890abcdef12"
 
     def test_archive_verify_success(self, mock_archive_project, monkeypatch):
@@ -272,6 +274,7 @@ class TestArchivePushAndVerify:
 
         # First generate manifest and receipt
         mock_api = MagicMock()
+        mock_api.repo_info.return_value.private = True
         mock_commit_info = MagicMock()
         mock_commit_info.oid = "commithash12345"
         mock_api.upload_folder.return_value = mock_commit_info
@@ -306,6 +309,7 @@ class TestArchivePushAndVerify:
         proj_dir = mock_archive_project["proj_dir"]
 
         mock_api = MagicMock()
+        mock_api.repo_info.return_value.private = True
         mock_commit_info = MagicMock()
         mock_commit_info.oid = "commithash12345"
         mock_api.upload_folder.return_value = mock_commit_info
@@ -361,10 +365,27 @@ class TestArchiveRestoreRoundTrip:
 
         # Push to generate manifest
         mock_api = MagicMock()
+        mock_api.repo_info.return_value.private = True
         mock_commit_info = MagicMock()
         mock_commit_info.oid = "commithash12345"
         mock_api.upload_folder.return_value = mock_commit_info
         archive_push(slug, project_dir=proj_dir, api_client=mock_api)
+
+        # Remote objects and downloaded hashes must be verified BEFORE restore.
+        manifest = json.loads((proj_dir / "archive_manifest.json").read_text(encoding="utf-8"))
+        remote_items = []
+        for item in manifest["files"]:
+            mock_file = MagicMock()
+            mock_file.path = item["repo_path"]
+            mock_file.size = item["size_bytes"]
+            remote_items.append(mock_file)
+        mock_api.list_repo_tree.return_value = remote_items
+
+        def remote_download(repo_id, repo_type, filename, revision, token):
+            return str(proj_dir / filename.removeprefix(f"series/{slug}/"))
+
+        monkeypatch.setattr("src.archive.hf_archive.hf_hub_download", remote_download)
+        archive_verify(slug, project_dir=proj_dir, api_client=mock_api)
 
         # Mock snapshot_download by populating local_dir from proj_dir
         def mock_snapshot(repo_id, repo_type, revision, allow_patterns, local_dir, token):
@@ -397,6 +418,7 @@ class TestArchiveRestoreRoundTrip:
         proj_dir = mock_archive_project["proj_dir"]
 
         mock_api = MagicMock()
+        mock_api.repo_info.return_value.private = True
         mock_commit_info = MagicMock()
         mock_commit_info.oid = "commithash12345"
         mock_api.upload_folder.return_value = mock_commit_info
