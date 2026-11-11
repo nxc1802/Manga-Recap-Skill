@@ -349,10 +349,10 @@ def archive_push(
             "commit_sha": commit_sha,
             "remote_url": remote_url,
             "created_at": utc_iso_now(),
-            "verified_file_count": manifest["total_files"],
+            "verified_file_count": 0,
             "total_bytes": manifest["total_bytes"],
             "manifest_sha256": compute_file_sha256(manifest_path),
-            "status": "verified",
+            "status": "uploaded",  # NOT trusted until archive_verify + archive_restore succeed.
         }
 
         receipt_path = proj_dir / "archive_receipt.json"
@@ -399,7 +399,15 @@ def archive_verify(
     receipt = read_json(receipt_path)
 
     target_repo = repo_id or receipt.get("repo_id") or DEFAULT_HF_REPO_ID
-    commit_sha = revision or receipt.get("commit_sha") or "main"
+    commit_sha = revision or receipt.get("commit_sha")
+    if not commit_sha:
+        raise CliValidationError("Archive verification requires a pinned commit SHA from the upload receipt.")
+    if receipt.get("repo_id") != target_repo or manifest.get("repo_id") != target_repo:
+        raise CliValidationError("Archive repo identity does not match manifest and upload receipt.")
+    if manifest.get("project_slug") != project_slug or receipt.get("project_slug") != project_slug:
+        raise CliValidationError("Archive project identity mismatch; refusing to verify another series.")
+    if compute_file_sha256(manifest_path) != receipt.get("manifest_sha256"):
+        raise CliValidationError("Archive manifest changed after upload; create a new archive commit.")
     api = api_client or get_hf_api(token)
 
     prefix = f"series/{project_slug}"
@@ -446,25 +454,23 @@ def archive_verify(
             errors.append(f"Size mismatch on {r_path}: expected {expected_size}, remote {remote_size}")
             continue
 
-        # For critical metadata files (.json, .md), verify SHA-256 by downloading content
-        if r_path.endswith(".json") or r_path.endswith(".md"):
-            try:
-                subpath = r_path[len(prefix) :].lstrip("/")
-                downloaded_file = hf_hub_download(
-                    repo_id=target_repo,
-                    repo_type="dataset",
-                    filename=r_path,
-                    revision=commit_sha,
-                    token=resolve_hf_token(token),
-                )
-                computed_hash = compute_file_sha256(Path(downloaded_file))
-                if computed_hash != expected_hash:
-                    errors.append(
-                        f"SHA-256 mismatch for metadata {r_path}: expected {expected_hash}, remote {computed_hash}"
-                    )
-                    continue
-            except Exception as e:
-                logger.warning(f"Could not verify SHA-256 for {r_path}: {e}")
+        # Every required archive artifact (including MP4, WAV and images) MUST be
+        # independently verified byte-for-byte before authorizing cleanup.
+        try:
+            downloaded_file = hf_hub_download(
+                repo_id=target_repo,
+                repo_type="dataset",
+                filename=r_path,
+                revision=commit_sha,
+                token=resolve_hf_token(token),
+            )
+            computed_hash = compute_file_sha256(Path(downloaded_file))
+        except Exception as e:
+            errors.append(f"Could not download/hash {r_path}: {e}")
+            continue
+        if computed_hash != expected_hash:
+            errors.append(f"SHA-256 mismatch for {r_path}: expected {expected_hash}, remote {computed_hash}")
+            continue
 
         verified_files += 1
 
@@ -475,7 +481,12 @@ def archive_verify(
 
     # 3. Update receipt
     receipt["last_verified_at"] = utc_iso_now()
+    receipt["verified_file_count"] = verified_files
     receipt["status"] = "verified"
+    receipt["verification_revision"] = commit_sha
+    receipt.pop("restore_verified_at", None)
+    receipt.pop("restored_revision", None)
+    receipt.pop("restored_verified_files", None)
     atomic_write_json(receipt_path, receipt)
 
     logger.info(f"Remote verification successful: {verified_files}/{len(manifest['files'])} files verified.")
@@ -614,6 +625,12 @@ def archive_restore(
             validation_errors.append(f"Restored size mismatch on {rel}: {actual_size} vs {item['size_bytes']}")
             continue
 
+        restored_hash = compute_file_sha256(f_path)
+        if restored_hash != item["sha256"]:
+            validation_errors.append(
+                f"Restored SHA-256 mismatch on {rel}: {restored_hash} vs {item['sha256']}"
+            )
+            continue
         restored_files_count += 1
 
         # Check media header if applicable
@@ -638,6 +655,25 @@ def archive_restore(
             f"Restore verification failed with {len(validation_errors)} errors:\n"
             + "\n".join(validation_errors[:10])
         )
+
+    # Only a fully verified round-trip is sufficient evidence for local cleanup.
+    if receipt_path.exists():
+        receipt_data = read_json(receipt_path)
+        if (
+            receipt_data.get("status") != "verified"
+            or receipt_data.get("commit_sha") != commit_sha
+            or receipt_data.get("repo_id") != target_repo
+            or receipt_data.get("manifest_sha256") != compute_file_sha256(
+                proj_dir / "archive_manifest.json"
+            )
+        ):
+            raise CliValidationError(
+                "Remote archive receipt/revision is not verified; cannot certify restoration."
+            )
+        receipt_data["restore_verified_at"] = utc_iso_now()
+        receipt_data["restored_revision"] = commit_sha
+        receipt_data["restored_verified_files"] = restored_files_count
+        atomic_write_json(receipt_path, receipt_data)
 
     logger.info(
         f"Restore round-trip verification PASSED: {restored_files_count} files, "
