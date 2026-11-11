@@ -1,8 +1,9 @@
 """Chapter-one approval bound to validated media and current content/config."""
 from pathlib import Path
 import hashlib
+import datetime
 import json
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 from src.cli.exit_codes import CliValidationError
 from src.core.storage import atomic_write_json, read_json
@@ -16,11 +17,18 @@ class HumanApproval(BaseModel):
     human_review_status: Literal["approved"]
     project_slug: str
     chapter_number: Literal["1"] = "1"
-    approved_at: str
+    approved_at: datetime.datetime
     reviewer: str = Field(min_length=1)
     config_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     artifact_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     artifact_path: Literal["video/preview.mp4"] = "video/preview.mp4"
+
+    @field_validator("approved_at")
+    @classmethod
+    def explicit_timestamp(cls, value):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Approval timestamp must include a timezone")
+        return value
 
 
 def require_voice_approval(project_dir):

@@ -103,6 +103,10 @@ class KaggleCloudService:
         from src.cloud.payload import package_payload
         path, digest = package_payload(get_project_dir(project_slug), chapter_number, out_tar_path, job_type)
         self._payload_manifest_hash = digest
+        with tarfile.open(path) as archive:
+            manifest = json.load(archive.extractfile("payload_manifest.json"))
+        self._dispatch_input_hashes = {relative.removeprefix("project/"): value
+            for relative, value in manifest["files"].items() if relative.startswith("project/")}
         return path
 
     def generate_worker_script(
@@ -378,7 +382,8 @@ class KaggleCloudService:
         if (root / "results").is_dir():
             root = root / "results"
         return sync_result(get_project_dir(project_slug), chapter_number, root, job_type,
-                           getattr(self, "_payload_manifest_hash", None))
+                           getattr(self, "_payload_manifest_hash", None),
+                           getattr(self, "_dispatch_input_hashes", None))
 
     # =========================================================================
     # Multi-Chapter Dual-T4 Single-Session Series Production Methods (PR-03)

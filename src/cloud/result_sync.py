@@ -2,17 +2,32 @@
 import shutil
 from pathlib import Path
 from src.core.storage import read_json, atomic_write_json, load_manifest, load_recap_script, load_chapter_metadata, acquire_lock
-from src.core.schemas import RecapScript, CheckpointStatus, StageType
+from src.core.schemas import CheckpointStatus, StageType, HumanReviewStatus
 from src.core.visual_contract import VisualPlan
 from src.render.visual_policy import resolve_visual_plan
 from src.render.artifact_validation import fingerprint, validate_audio, validate_final_artifact
 from src.render.chapter_renderer import resolve_audio
 
 
-def sync_result(project, number, downloaded, job_type, expected_manifest_hash):
+def sync_result(project, number, downloaded, job_type, expected_manifest_hash, expected_inputs=None):
     if not expected_manifest_hash:
         raise ValueError("Missing trusted dispatch manifest fingerprint")
     project, downloaded = Path(project), Path(downloaded).resolve()
+    required = {"project.json", "series_setup_answers.json", f"chapters/{number}/script.json", f"chapters/{number}/manifest.json"}
+    if not expected_inputs or not required.issubset(expected_inputs):
+        raise ValueError("Missing trusted dispatch input snapshot")
+    def check_inputs():
+        for relative, digest in expected_inputs.items():
+            path = (project / relative).resolve()
+            if not path.is_relative_to(project.resolve()) or fingerprint(path) != digest:
+                raise ValueError(f"Local input changed while cloud job ran: {relative}")
+    check_inputs()
+    from src.core.series_setup import require_series_setup
+    config = read_json(project / "project.json")
+    require_series_setup(config["slug"], project_dir=project)
+    if str(number) != "1":
+        from src.core.human_review import require_preview_approval
+        require_preview_approval(project)
     receipt = read_json(downloaded / "result_manifest.json")
     config = read_json(project / "project.json")
     if receipt.get("payload_manifest_sha256") != expected_manifest_hash or receipt.get("project_slug") != config["slug"] or receipt.get("chapter_number") != str(number) or receipt.get("job_type") != job_type:
@@ -60,7 +75,11 @@ def sync_result(project, number, downloaded, job_type, expected_manifest_hash):
     # No imported status strings are trusted; construct completion from local
     # chapter metadata only after semantic/audio validation above.
     with acquire_lock(chapter / "chapter.json"):
+        check_inputs()
         metadata = load_chapter_metadata(chapter)
+        metadata.overall_status = metadata.technical_status = CheckpointStatus.RUNNING
+        metadata.human_review_status = HumanReviewStatus.UNREVIEWED
+        atomic_write_json(chapter / "chapter.json", metadata)
         for subdir in ("audio", "video", "subtitles"):
             if (incoming / subdir).exists():
                 shutil.copytree(incoming / subdir, chapter / subdir, dirs_exist_ok=True)
@@ -72,6 +91,12 @@ def sync_result(project, number, downloaded, job_type, expected_manifest_hash):
         metadata.stages[StageType.AUDIO].status = CheckpointStatus.COMPLETED
         # Preview completion is technical evidence, never human approval.
         metadata.technical_status = CheckpointStatus.COMPLETED if report else CheckpointStatus.PENDING
+        metadata.overall_status = (CheckpointStatus.NEEDS_REVIEW if quality == "preview" else CheckpointStatus.COMPLETED) if report else CheckpointStatus.PENDING
+        if not report:
+            for stage in (StageType.RENDER, StageType.EXPORT):
+                metadata.stages[stage].status = CheckpointStatus.PENDING
+                metadata.stages[stage].artifacts = []
+                metadata.stages[stage].checksums = {}
         atomic_write_json(chapter / "chapter.json", metadata)
     return dict(status="success", job_type=job_type, project_slug=config["slug"], chapter_number=str(number),
                 video_path=str(chapter / "video" / f"{quality}.mp4") if report else None,

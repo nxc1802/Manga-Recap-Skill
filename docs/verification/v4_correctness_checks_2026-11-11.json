@@ -3,8 +3,14 @@
   "date": "2026-11-11",
   "status": "draft_not_release_ready",
   "source_commit": null,
-  "focused": {"level": "L1/L2 fixtures only", "passed": 151, "live_verified": false},
-  "full_regression": {"status": "pending_committed_source_run"},
+  "focused": {
+    "level": "L1/L2 fixtures only",
+    "passed": 154,
+    "live_verified": false
+  },
+  "full_regression": {
+    "status": "pending_committed_source_run"
+  },
   "real_chapter": "not_run_missing_explicit_setup_and_ask_question",
   "human_review": "not_performed",
   "kaggle_live": "not_run",

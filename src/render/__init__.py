@@ -15,6 +15,9 @@ __all__ = list(_EXPORTS)
 def __getattr__(name):
     if name not in _EXPORTS:
         raise AttributeError(name)
-    value = getattr(import_module(f"src.render.{_EXPORTS[name]}"), name)
-    globals()[name] = value
-    return value
+    module_name = _EXPORTS[name]
+    module = import_module(f"src.render.{module_name}")
+    for export, owner in _EXPORTS.items():
+        if owner == module_name:
+            globals()[export] = getattr(module, export)
+    return globals()[name]

@@ -86,3 +86,14 @@ def test_real_encoded_blank_video_is_rejected(color, tmp_path):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"color={color}:size=320x180:rate=10:duration=0.5", "-c:v", "libx264", str(path)], check=True)
     with pytest.raises(ArtifactValidationError, match="sampled video frame"):
         validate_video(path, 320, 180, 0.5, 10, require_audio=False)
+
+
+def test_contract_import_does_not_initialize_render_backend():
+    import os
+    import sys
+    # Schema/approval imports must work even before media binaries are installed.
+    code = "import sys; import src.core.human_review; assert 'src.render.video_engine' not in sys.modules"
+    subprocess.run([sys.executable, "-c", code], env={**os.environ, "PATH": ""}, check=True, capture_output=True)
+    if shutil.which("ffprobe"):
+        from src.render import VideoEngine, video_engine
+        assert isinstance(video_engine, VideoEngine)

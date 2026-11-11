@@ -120,6 +120,14 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
         atomic_write_json(chapter / "artifact_validation.json", report)
         update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.COMPLETED,
             artifacts=[str(output.relative_to(chapter)), str(subtitles.relative_to(chapter)), "visual_plan.json", "artifact_validation.json"])
+        from src.core.storage import acquire_lock, load_chapter_metadata
+        from src.core.schemas import HumanReviewStatus
+        with acquire_lock(chapter / "chapter.json"):
+            metadata = load_chapter_metadata(chapter)
+            metadata.technical_status = CheckpointStatus.COMPLETED
+            metadata.overall_status = CheckpointStatus.NEEDS_REVIEW if quality == "preview" else CheckpointStatus.COMPLETED
+            metadata.human_review_status = HumanReviewStatus.UNREVIEWED
+            atomic_write_json(chapter / "chapter.json", metadata)
     except Exception as exc:
         update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.FAILED, error=str(exc))
         raise

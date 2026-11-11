@@ -17,7 +17,7 @@ No P0–P7 phase is declared complete by this change. The ordered gate chain is 
 | P4 | Local and worker call the same `render_visual_plan`; legacy chapter compositors removed/disabled; component MP4s are actually encoded and decoded | **G4 OPEN:** a real chapter with real neural WAVs must render under a directly confirmed series setup |
 | P5 | Native PCM energy/header/count checks; decoded video/frame count/streams/energy checks; strict SRT timing; source/script/audio/plan/video fingerprints; cache and status revalidation | **G5 OPEN:** real end-to-end chapter validation; legacy suite is not green |
 | P6 | Explicit `review-approve`; hashes and current source/config binding; no render flag grants approval; exact Chapter 1 artifact promotion; conditional thumbnail evidence required | **G6 OPEN:** an actual human must watch and approve the exact technically valid preview |
-| P7 | Source/runtime/project inventory with pinned manifest hash; private per-job dataset; startup verification; shared neural/planning/rendering/validation runtime; downloaded hashes + local semantic parity checked before state publication | **G7 OPEN:** actual Kaggle run with real media; dependency/model provisioning, NVENC and live dataset behavior remain unverified |
+| P7 | Source/runtime/project inventory with pinned manifest hash; private per-job dataset; startup verification; shared neural/planning/rendering/validation runtime; downloaded hashes + local semantic parity + dispatch input snapshot checked before state publication | **G7 OPEN:** actual Kaggle run with real media; dependency/model provisioning, NVENC and live dataset behavior remain unverified |
 
 P8/P9 are not accepted or benchmarked. Dual-T4 package/worker/dispatch/result-sync endpoints remain disabled. No new performance or live-service report is published.
 
@@ -39,7 +39,7 @@ PYTHONPATH=. python scripts/freeze_contracts.py --check
 
 ## What was tested
 
-The focused L1/L2 suite uses isolated unit fixtures, including explicitly synthetic PCM/image inputs. Those fixtures test failure handling, actual encode/decode, N:M planning, approval binding and result import. **They do not prove real neural speech, actual human approval, a real manga chapter, or a live cloud run.** No fixture was inserted into a user's project to obtain production acceptance.
+The focused L1/L2 suite uses isolated unit fixtures, including explicitly synthetic PCM/image inputs. Those fixtures test failure handling, actual encode/decode, N:M planning, approval binding and result import. **They do not prove real neural speech, actual human approval, a real manga chapter, or a live cloud run.** No fixture was inserted into a user's project to obtain production acceptance. An interrupted cloud artifact copy leaves the chapter running rather than completed; a changed local input snapshot rejects the result before publication.
 
 Focused command:
 
@@ -54,7 +54,7 @@ python -m pytest -q --disable-warnings \
   tests/unit/test_schemas.py
 ```
 
-Focused result before the source checkpoint: **151 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The final committed-source full regression result is recorded in `docs/verification/v4_correctness_checks_2026-11-11.json`; a non-green result blocks acceptance.
+Focused result at the latest source checkpoint: **154 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The final committed-source full regression result is recorded in `docs/verification/v4_correctness_checks_2026-11-11.json`; a non-green result blocks acceptance.
 
 Earlier repository-wide runs were red, including tests that assert flag-based approval bypass, source-string details of the removed cloud renderer, status-only approval, mock production synthesis and fake/header-only artifact acceptance. Some failures also predate this work. These failures are retained and must be reviewed/migrated; they are not suppressed with skip/xfail or reported as passing verification.
 
