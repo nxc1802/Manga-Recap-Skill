@@ -1,0 +1,27 @@
+name: V4 code-review smoke checks
+
+on:
+  push:
+    branches:
+      - feat/v4-strict-form-motion-cloud-archive
+  pull_request:
+    branches: [main]
+
+jobs:
+  syntax-and-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile all Python source and tests
+        run: python -m compileall -q src tests
+      - name: Check patch whitespace
+        run: git diff --check HEAD~1 HEAD
+      - name: Install lightweight test dependencies
+        run: pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx beautifulsoup4 python-dotenv huggingface_hub
+      - name: Run focused V4 contract tests
+        run: |
+          pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_kaggle_dual_t4.py
