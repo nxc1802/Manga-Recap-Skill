@@ -13,9 +13,12 @@ Validates:
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
+
+from tests.fixtures.generate_synthetic_fixture import ensure_synthetic_audio_clips
 
 from src.core.schemas import (
     CameraMotionType,
@@ -31,8 +34,12 @@ from src.tts.engine import get_wav_duration_seconds
 
 
 @pytest.fixture
-def fixture_dir():
-    return Path(__file__).resolve().parent.parent / "fixtures" / "synthetic"
+def fixture_dir(tmp_path):
+    src = Path(__file__).resolve().parent.parent / "fixtures" / "synthetic"
+    dst = tmp_path / "synthetic"
+    shutil.copytree(src, dst)
+    ensure_synthetic_audio_clips(dst)
+    return dst
 
 
 class TestSyntheticFixtureContract:

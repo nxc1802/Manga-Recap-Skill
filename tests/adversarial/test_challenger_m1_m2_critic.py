@@ -503,7 +503,7 @@ class TestPR02AdversarialKinematicsAndSlicing:
         Generates synthetic panels with aspect ratios H/W = 3.0, 5.0, 10.0, 20.0.
         Verifies that decompose_tall_panel decomposes every panel into sub-boxes
         strictly within [0.65, 2.0] aspect ratio with valid reading progression and overlaps.
-        
+
         NOTE: This test empirically challenges the 0.30 clamp in decompose_tall_panel.
         """
         width = 1000

@@ -1,6 +1,6 @@
 # Kaggle Dual-T4 V4 — Benchmark audit / NOT VERIFIED
 
-**Review date:** 2026-11-11  
+**Review date:** 2026-11-11
 **Status:** BLOCKED — no trustworthy live benchmark or production media result was established in the reviewed repository.
 
 ## Why the previous “EMPIRICAL BENCHMARK VERIFIED” claim was withdrawn

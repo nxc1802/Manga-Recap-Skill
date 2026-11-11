@@ -376,4 +376,3 @@ class TestCliFailClosedGatesEmpirical:
         assert res["exit_code"] == 2
         assert res["error"]["code"] == "VALIDATION_ERROR"
         assert "Strict Form Gate failed" in res["error"]["message"]
-

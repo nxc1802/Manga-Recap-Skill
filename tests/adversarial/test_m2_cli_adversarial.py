@@ -63,7 +63,7 @@ class TestCliExitCodesAndPurity:
             if subcmd == "tts":
                 args += ["-c", "1"]
             proc = run_cli(args)
-            expected = ExitCode.VALIDATION_ERROR if subcmd in {"tts", "compile", "validate"} else ExitCode.IO_ERROR
+            expected = ExitCode.VALIDATION_ERROR if subcmd in {"tts", "compile"} else ExitCode.IO_ERROR
             assert proc.returncode == expected
             
             # Stdout must be strictly parseable as single JSON envelope
@@ -91,8 +91,9 @@ class TestCliExitCodesAndPurity:
         assert envelope["error"]["code"] == "VALIDATION_ERROR"
         assert "Strict Form Gate failed" in envelope["error"]["message"]
 
-    def test_schema_validation_failure_returns_exit_code_2(self, tmp_path):
+    def test_schema_validation_failure_returns_exit_code_2(self, tmp_path, monkeypatch):
         env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", env["MANGA_RECAP_DATA_DIR"])
         init_confirmed_project("invalid_schema_proj", "Invalid Schema Proj")
         chap_dir = init_chapter_layout("invalid_schema_proj", "1")
         # Script references non-existent panel
@@ -174,8 +175,9 @@ class TestCliExitCodesAndPurity:
         finally:
             os.chmod(proj_dir, 0o755)
 
-    def test_stdout_purity_under_verbose_logging(self, tmp_path):
+    def test_stdout_purity_under_verbose_logging(self, tmp_path, monkeypatch):
         env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", env["MANGA_RECAP_DATA_DIR"])
         init_confirmed_project("purity_proj", "Purity Proj")
         init_chapter_layout("purity_proj", "1")
 

@@ -31,6 +31,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.fixtures.generate_synthetic_fixture import ensure_synthetic_audio_clips
 from src.cli.exit_codes import ExitCode
 from src.cli.main import main
 from src.cloud.kaggle_service import KaggleCloudService
@@ -71,6 +72,7 @@ def isolated_workspace(tmp_path, synthetic_fixture_dir, monkeypatch):
     proj_dir = data_dir / "projects" / "synthetic_fixture"
     proj_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(synthetic_fixture_dir, proj_dir)
+    ensure_synthetic_audio_clips(proj_dir)
     chap_dir = proj_dir / "chapters" / "1"
 
     monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(data_dir))

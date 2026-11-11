@@ -215,7 +215,7 @@ def validate_complete_setup(
     2. All answers have answer_source == 'user' and non-empty user_answer.
     3. Domain validation for each question passes without implicit fallback.
     4. Cryptographic snapshot_hash matches computed hash.
-    
+
     Returns (is_valid, list_of_errors).
     """
     errors: List[str] = []

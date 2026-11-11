@@ -1,10 +1,10 @@
 # V4 Remaining Fixes & Real E2E Verification Handoff
 
-> Repository: `nxc1802/Manga-Recap-Skill`  
-> Branch: `feat/v4-strict-form-motion-cloud-archive`  
-> Controlling plan: `docs/V4_Correctness_Improvement_Plan.md`  
-> Current evidence: `docs/V4_Correctness_Status.md`  
-> Status: **handoff for remaining correctness work and real E2E verification**  
+> Repository: `nxc1802/Manga-Recap-Skill`
+> Branch: `feat/v4-strict-form-motion-cloud-archive`
+> Controlling plan: `docs/V4_Correctness_Improvement_Plan.md`
+> Current evidence: `docs/V4_Correctness_Status.md`
+> Status: **handoff for remaining correctness work and real E2E verification**
 > Release state: **NOT RELEASE READY — gate chain remains OPEN**
 
 ---

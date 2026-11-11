@@ -9,7 +9,7 @@ on:
 
 jobs:
   syntax-and-contracts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -23,17 +23,22 @@ jobs:
       - name: Check patch whitespace
         run: git diff --check HEAD~1 HEAD
       - name: Install lightweight test dependencies
-        run: pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx beautifulsoup4 python-dotenv huggingface_hub
+        run: python -m pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx beautifulsoup4 python-dotenv huggingface_hub
       - name: Install media validators
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1; then
+            echo "ffmpeg and ffprobe already installed"
+          else
+            sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update
+            sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 install -y --no-install-recommends ffmpeg
+          fi
       - name: Check frozen canonical contracts
         run: PYTHONPATH=. python scripts/freeze_contracts.py --check
       - name: Run canonical correctness checks (L1 and L2 only)
         run: |
-          pytest -q tests/unit/test_series_setup.py tests/unit/test_visual_policy.py tests/unit/test_artifact_correctness.py tests/unit/test_canonical_workflow.py tests/unit/cloud/test_canonical_cloud.py tests/unit/test_tts_engine.py tests/unit/test_schemas.py
+          python -m pytest -q tests/unit/test_series_setup.py tests/unit/test_visual_policy.py tests/unit/test_artifact_correctness.py tests/unit/test_canonical_workflow.py tests/unit/cloud/test_canonical_cloud.py tests/unit/test_tts_engine.py tests/unit/test_schemas.py
       - name: Run focused V4 contract tests
         run: |
-          pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_v4_regression_migration.py
+          python -m pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_v4_regression_migration.py
       - name: Run entire test suite for regression review
-        if: always()
-        run: pytest -q --disable-warnings
+        run: python -m pytest -q --disable-warnings

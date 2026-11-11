@@ -1,6 +1,6 @@
 # Hugging Face archive V4 — Verification audit / NOT YET LIVE VERIFIED
 
-**Review date:** 2026-11-11  
+**Review date:** 2026-11-11
 **Status:** BLOCKED for destructive cleanup until a genuine private remote round-trip passes.
 
 ## Why previous “VERIFIED ROUND-TRIP” wording was withdrawn

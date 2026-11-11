@@ -95,11 +95,17 @@ def parse_riff_wave_header(file_path: Path) -> Dict[str, Any]:
 class TestMasterAudioFormatAdversarial:
     """Empirical verification of 48 kHz 16-bit Mono WAV format across voices & prompts."""
 
-    def test_existing_benchmark_samples_binary_headers(self):
-        """Scans all pre-generated benchmark samples and verifies binary RIFF/WAVE compliance."""
+    def test_existing_benchmark_samples_binary_headers(self, tmp_path):
+        """Scans benchmark samples (or isolated mock benchmark run in clean checkouts) and verifies binary RIFF/WAVE compliance."""
         samples_dir = Path("data/benchmarks/vieneu_v3_turbo/samples")
         if not samples_dir.exists():
-            pytest.skip("Benchmark samples directory not found")
+            bench_out = tmp_path / "vieneu_v3_turbo"
+            TTSBenchmarkRunner(
+                output_dir=bench_out,
+                use_mock=True,
+                copy_to_lab=False,
+            ).run()
+            samples_dir = bench_out / "samples"
 
         wav_files = list(samples_dir.glob("*.wav"))
         assert len(wav_files) >= 50, f"Expected at least 50 benchmark samples, found {len(wav_files)}"

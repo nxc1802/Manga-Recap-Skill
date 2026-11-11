@@ -1064,4 +1064,3 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, verify, auth, accounts."
     )
 
-

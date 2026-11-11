@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tests.fixtures.generate_synthetic_fixture import ensure_synthetic_audio_clips
 from src.cloud.kaggle_service import KaggleCloudService
 from src.core.schemas import (
     ChapterMetadata,
@@ -59,6 +60,7 @@ def synthetic_workspace(tmp_path, monkeypatch):
 
     proj_dir = tmp_path / "synthetic_fixture"
     shutil.copytree(src_fixture, proj_dir)
+    ensure_synthetic_audio_clips(proj_dir)
 
     chap_dir = proj_dir / "chapters" / "1"
     assert (proj_dir / "project.json").exists()

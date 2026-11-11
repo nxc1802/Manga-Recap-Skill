@@ -199,7 +199,7 @@ class TestYouTubeCliCommands:
             handle_youtube_upload(args)
         assert "Video not found" in str(exc_info.value)
 
-    def test_handle_youtube_upload_success_mock(self, mock_project, monkeypatch):
+    def test_handle_youtube_upload_success_mock(self, mock_project, monkeypatch, tmp_path):
         slug = mock_project["slug"]
         chap = mock_project["chapter"]
         out_proj_dir = mock_project["output_dir"] / slug
@@ -211,9 +211,12 @@ class TestYouTubeCliCommands:
         srt_path = out_proj_dir / "chapter_001.srt"
         srt_path.write_text("1\n00:00:00,000 --> 00:00:05,000\nXin chào\n", encoding="utf-8")
 
-        # Mock OAuth credentials
+        # Provide isolated credentials file and mock OAuth credentials
+        token_path = tmp_path / ".test_token.json"
+        token_path.write_text('{"token": "mock_tok"}', encoding="utf-8")
+        monkeypatch.setenv("YOUTUBE_CREDENTIALS_FILE", str(token_path))
         mock_creds = MagicMock()
-        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda: mock_creds)
+        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda account_name=None: mock_creds)
 
         # Mock Google API client
         mock_youtube_service = MagicMock()
@@ -244,8 +247,8 @@ class TestYouTubeCliCommands:
             return original_import(name, *args, **kwargs)
 
         import sys
-        sys.modules["googleapiclient.discovery"] = mock_discovery
-        sys.modules["googleapiclient.http"] = mock_http
+        monkeypatch.setitem(sys.modules, "googleapiclient.discovery", mock_discovery)
+        monkeypatch.setitem(sys.modules, "googleapiclient.http", mock_http)
 
         args = argparse.Namespace(
             youtube_action="upload",
@@ -436,8 +439,8 @@ class TestYouTubeMultiAccountManagement:
         mock_http = MagicMock()
 
         import sys
-        sys.modules["googleapiclient.discovery"] = mock_discovery
-        sys.modules["googleapiclient.http"] = mock_http
+        monkeypatch.setitem(sys.modules, "googleapiclient.discovery", mock_discovery)
+        monkeypatch.setitem(sys.modules, "googleapiclient.http", mock_http)
 
         # 1. Upload with valid target account
         args = argparse.Namespace(

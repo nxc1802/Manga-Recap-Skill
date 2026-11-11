@@ -1,8 +1,8 @@
 # V4 Correctness Improvement Plan
 
-> Repository: `nxc1802/Manga-Recap-Skill`  
-> Target branch: `feat/v4-strict-form-motion-cloud-archive`  
-> Status: Implementation plan  
+> Repository: `nxc1802/Manga-Recap-Skill`
+> Target branch: `feat/v4-strict-form-motion-cloud-archive`
+> Status: Implementation plan
 > Primary goal: make the pipeline provably correct end-to-end before adding further optimization or feature work.
 
 ## 1. Final Goal
