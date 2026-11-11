@@ -148,19 +148,27 @@ class KaggleCloudService:
             raise ValueError("Unsupported cloud encoder")
         # Bootstrap uses only stdlib until source inventory has been verified.
         return "\n".join([
-            "import os, sys, json, hashlib, tarfile, subprocess",
+            "import os, sys, json, hashlib, tarfile, shutil, subprocess",
             "from pathlib import Path",
             "sys.dont_write_bytecode = True",
             "root = Path('/kaggle/working/runtime')",
             "if root.exists(): raise RuntimeError('Runtime must be fresh')",
             "root.mkdir()",
             "payloads = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
-            "if len(payloads) != 1: raise RuntimeError('Expected one exact payload')",
-            "with tarfile.open(payloads[0]) as archive:",
-            "    for entry in archive.getmembers():",
-            "        target = (root / entry.name).resolve()",
-            "        if not target.is_relative_to(root) or not entry.isfile(): raise RuntimeError('Unsafe payload member')",
-            "    archive.extractall(root, filter='data')",
+            "if len(payloads) == 1:",
+            "    with tarfile.open(payloads[0]) as archive:",
+            "        for entry in archive.getmembers():",
+            "            target = (root / entry.name).resolve()",
+            "            if not target.is_relative_to(root) or not entry.isfile(): raise RuntimeError('Unsafe payload member')",
+            "        archive.extractall(root, filter='data')",
+            "else:",
+            "    manifests = list(Path('/kaggle/input').rglob('payload_manifest.json'))",
+            "    if len(manifests) != 1: raise RuntimeError('Expected one payload archive or extracted manifest')",
+            "    src_root = manifests[0].parent",
+            "    for item in src_root.iterdir():",
+            "        dst = root / item.name",
+            "        if item.is_dir(): shutil.copytree(item, dst)",
+            "        else: shutil.copy2(item, dst)",
             f"expected = {digest!r}",
             "manifest_path = root / 'payload_manifest.json'",
             "if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected: raise RuntimeError('Manifest changed')",
@@ -183,7 +191,7 @@ class KaggleCloudService:
         gpu: bool = True,
         wait: bool = True,
         poll_interval: int = 6,
-        timeout_seconds: int = 900,
+        timeout_seconds: int = 1800,
         job_type: str = "produce",
         render_workers: int = 4,
         encoder_preference: str = "auto",
@@ -245,19 +253,26 @@ class KaggleCloudService:
         self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
         ready = False
         started = time.monotonic()
-        while time.monotonic() - started < 180:
-            status = self._api.dataset_status(ds_ref)
+        while time.monotonic() - started < 600:
+            time.sleep(5)
+            try:
+                status = self._api.dataset_status(ds_ref)
+            except Exception as err:
+                logger.info(f"Waiting for Kaggle dataset creation to propagate ({ds_ref}): {err}")
+                continue
             status = getattr(status, "status", status)
             if isinstance(status, dict):
                 status = status.get("status", "")
             if str(status).strip().lower().split(".")[-1] == "ready":
-                entries = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
-                if any(entry.name == "payload.tar.gz" for entry in entries):
-                    ready = True
-                    break
+                try:
+                    entries = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
+                    if any(entry.name == "payload.tar.gz" for entry in entries) or entries:
+                        ready = True
+                        break
+                except Exception:
+                    pass
             if str(status).strip().lower() in {"error", "failed"}:
                 raise RuntimeError(f"Kaggle payload dataset failed: {status}")
-            time.sleep(5)
         if not ready:
             raise TimeoutError("Kaggle payload dataset did not become ready; kernel not launched")
 

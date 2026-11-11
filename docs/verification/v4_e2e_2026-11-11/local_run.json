@@ -1,0 +1,70 @@
+{
+  "schema_version": "4.1.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapter_number": "1",
+  "setup": {
+    "setup_revision": 1,
+    "snapshot_hash": "89391b5d9caf937da1d13ba2373eb4e6a6ceaaa83355b87f3bd365ab1182c31d",
+    "answers": {
+      "Q01": {
+        "source": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/raw",
+        "chapters": "1"
+      },
+      "Q02": "kaggle",
+      "Q03": "Ng\u1ecdc Huy\u1ec1n",
+      "Q04": 1.0,
+      "Q05": false,
+      "Q06": "static",
+      "Q07": true,
+      "Q08": {
+        "account": "default",
+        "privacy": "unlisted"
+      },
+      "Q09": "final",
+      "Q10": {
+        "none": true
+      }
+    }
+  },
+  "tts": {
+    "engine": "neural",
+    "voice": "Ng\u1ecdc Huy\u1ec1n",
+    "clips_count": 37,
+    "total_duration_seconds": 304.24,
+    "valid": true
+  },
+  "visual_plan": {
+    "shots_count": 97,
+    "total_duration_seconds": 304.24,
+    "input_fingerprint": "29b17ad895197d858933d91b60d732a1a7c9ff04971058088e869f51fc62dec9",
+    "motions": [
+      "static"
+    ]
+  },
+  "render": {
+    "preview_sha256": "f74608cdf29c1afe130909f01ac7f69f0e1f58bc4b8f468697f64c68c344f330",
+    "frames": 9127,
+    "duration": 304.24,
+    "subtitles_cues": 187,
+    "subtitles_sha256": "bc8d083db3599c445840a49bea04a4bfdf91d9d5a7ac7820c4fb971e7c24615b",
+    "final_promoted": true,
+    "final_sha256": "f74608cdf29c1afe130909f01ac7f69f0e1f58bc4b8f468697f64c68c344f330"
+  },
+  "thumbnail": {
+    "sha256": "c943948db9c8627d282a035ac730cffbac0a2ca3b5a399f6c1d118bf3f9846ab",
+    "title": "NH\u00c2N V\u1eacT PH\u1ee4",
+    "subtitle": "TH\u1ebe GI\u1edaI \u0110I\u00caN LO\u1ea0N",
+    "color_preset": "yellow_black"
+  },
+  "approval": {
+    "schema_version": "4.1.0",
+    "human_review_status": "approved",
+    "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+    "chapter_number": "1",
+    "approved_at": "2026-11-11T13:55:16.427010Z",
+    "reviewer": "cuongnguyen1802",
+    "config_fingerprint": "6155808a9e2ea78e2333e6b819a22d77bcc3c5267b2af4eb2a91486e788cda7c",
+    "artifact_hash": "f74608cdf29c1afe130909f01ac7f69f0e1f58bc4b8f468697f64c68c344f330",
+    "artifact_path": "video/preview.mp4"
+  }
+}

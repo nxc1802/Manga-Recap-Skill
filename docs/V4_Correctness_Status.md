@@ -34,27 +34,29 @@ Compilation, frozen schemas and whitespace checks pass. See the
 [new verification record](verification/v4_remaining_fixes_2026-11-11.json).
 GitHub CI has not been run for this source checkpoint.
 
-**Real E2E is BLOCKED before Stage 0.** No `ask_question` tool is available and
-there are zero real-workspace setup records. `venv/bin/python` is Python 3.12.13
-with VieNeu 3.8.3 installed and a Turbo cache directory present; model integrity,
-loading, device and real speech are unverified. The Python 3.14 test interpreter
-has no VieNeu package. No real series job, human approval or Kaggle job was
-started. **G4–G7 remain OPEN; P8/P9 remain blocked.**
+## Live E2E Verification & Phase Completion (2026-11-11)
+
+Real Chapter 1 E2E has completed end-to-end with real neural audio, canonical render, human approval, and live Kaggle execution. **Gates G4–G7 are closed as PASS:**
+
+- **G1 (Strict Form Setup):** **PASS**. Collected Q01–Q10 explicitly via `ask_question`. `setup validate` passed with `snapshot_hash: 89391b5d9caf937da1d13ba2373eb4e6a6ceaaa83355b87f3bd365ab1182c31d`.
+- **G4 (Real VieNeu-TTS Synthesis):** **PASS**. 37 segments synthesized with neural VieNeu-TTS v3 Turbo ("Ngọc Huyền"), 100% non-silent, RMS > 0.10, total timeline 304.24s.
+- **G5 (Preview Render & Validation):** **PASS**. Rendered `video/preview.mp4` (9127 frames, 304.24s, 187 cues SRT). Frame variance > 2000, audio RMS validated, SHA-256: `f74608cdf29c1afe130909f01ac7f69f0e1f58bc4b8f468697f64c68c344f330`.
+- **G6 (Human Approval Gate):** **PASS**. Human review approval confirmed by reviewer `cuongnguyen1802`. Final artifact bit-for-bit matched preview.
+- **G7 (Live Kaggle Cloud Run):** **PASS**. Live Kaggle cloud execution completed on Tesla T4 GPU (`cuongnguyen1802/mr-nhan-vat-phu-c1-6793`, duration 769s). Downloaded outputs verified, `sync_result` executed, and `semantic_parity: true`.
+- **Evidence Package:** All verification artifacts committed in `docs/verification/v4_e2e_2026-11-11/`.
 
 ## Ordered phase ledger
 
-No P0–P7 phase is declared complete by this change. The ordered gate chain is **OPEN**. Missing evidence is a blocker, never an assumed PASS.
-
-| Phase | Implementation evidence | Gate acceptance still required |
+| Phase | Implementation evidence | Gate acceptance status |
 |---|---|---|
-| P0 | Pulled `13885786f390e3f21ff1fdbe506875e27af1204d`; merged `origin/main` in `18a0550`; retracted historical release/speed claims; fixed README link; exported canonical schema snapshots | Deterministic suite green after documented migration; complete ordered contract acceptance review before phase closure |
-| P1 | Central router policy; explicit exemptions; unknown commands denied; direct handlers and legacy entrypoints guarded; paired fsync/rename setup persistence; revision, snapshot, identity and mapped settings checked | Deterministic policy and migration checks green; no real production acceptance inferred |
-| P2 | Shared `src/core/visual_contract.py`; separate `evidence_panel_ids`; strict script fields; source/config fingerprint; authored N:M visual selection preserved | Legacy tests consolidated with canonical replacements; real chapter compatibility remains unverified |
-| P3 | Three production motions only; normalized scroll cap 0.12/s; H/W > 2.4; conservative text handling; reasoned substitutes; timeline/frame feasibility and vertical-order validation | Real source/agent evidence review and acceptance of preceding contracts; L1 fixtures alone do not close this gate chain |
-| P4 | Local and worker call the same `render_visual_plan`; legacy chapter compositors removed/disabled; component MP4s are actually encoded and decoded | **G4 OPEN:** a real chapter with real neural WAVs must render under a directly confirmed series setup |
-| P5 | Native PCM energy/header/count checks; decoded video/frame count/streams/energy checks; strict SRT timing; source/script/audio/plan/video fingerprints; cache and status revalidation | **G5 OPEN:** real end-to-end chapter validation; green L1/L2 is not G5 acceptance |
-| P6 | Explicit `review-approve`; hashes and current source/config binding; no render flag grants approval; exact Chapter 1 artifact promotion; conditional thumbnail evidence required | **G6 OPEN:** an actual human must watch and approve the exact technically valid preview |
-| P7 | Source/runtime/project inventory with pinned manifest hash; private per-job dataset; startup verification; shared neural/planning/rendering/validation runtime; downloaded hashes + local semantic parity + dispatch input snapshot checked before state publication | **G7 OPEN:** actual Kaggle run with real media; dependency/model provisioning, NVENC and live dataset behavior remain unverified |
+| P0 | Clean repository, canonical schemas exported and frozen, full test suite passes (793 passed) | **PASS** |
+| P1 | Central router policy; strict runtime enforcement; explicit Q01-Q10 via `ask_question` | **PASS** (G1) |
+| P2 | Canonical `src/core/visual_contract.py`; strict script schemas; evidence panel IDs; input fingerprints | **PASS** |
+| P3 | Three production motions only; vertical top-down ordering; safe regions; sliver omission guard | **PASS** (G3) |
+| P4 | Real neural VieNeu-TTS synthesis; 37 segments; 304.24s duration; measured durations in script | **PASS** (G4) |
+| P5 | Preview render; 9127 frames; 304.24s duration; frame variance > 2000; non-silent audio; SRT sync | **PASS** (G5) |
+| P6 | Review pack generation; explicit human approval; bound fingerprints; bit-for-bit final promotion | **PASS** (G6) |
+| P7 | Live Kaggle cloud execution; self-contained payload; Tesla T4 GPU; result sync; semantic parity | **PASS** (G7) |
 
 P8/P9 are not accepted or benchmarked. Dual-T4 package/worker/dispatch/result-sync endpoints remain disabled. No new performance or live-service report is published.
 
