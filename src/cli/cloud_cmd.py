@@ -96,9 +96,14 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
 
         try:
             from src.core.series_setup import require_series_setup
-            require_series_setup(project_slug, project_dir=proj_dir, allow_legacy=True)
+            require_series_setup(project_slug, project_dir=proj_dir, allow_legacy=False)
         except Exception as ve:
-            logger.warning(f"Series setup check notice: {ve}")
+            return {
+                "status": "error",
+                "command": "cloud produce-series",
+                "exit_code": ExitCode.VALIDATION_ERROR,
+                "error": f"Strict Form Gate: {ve}",
+            }
 
         from src.cli.batch_cmd import parse_chapter_list
         if isinstance(chapters_arg, list):
@@ -115,21 +120,21 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
             }
 
         skip_preview = getattr(args, "skip_preview", False)
-        # Enforce Chapter 1 preview gate if supported
-        if hasattr(service, "check_chapter_1_preview_approval"):
-            try:
-                res_check = service.check_chapter_1_preview_approval(project_slug, skip_preview=skip_preview)
-                if isinstance(res_check, tuple) and len(res_check) == 2:
-                    ok, preview_err = res_check
-                    if not ok:
-                        return {
-                            "status": "error",
-                            "command": "cloud produce-series",
-                            "exit_code": ExitCode.VALIDATION_ERROR,
-                            "error": preview_err or "Chapter 1 preview has not been approved.",
-                        }
-            except Exception as pe:
-                logger.debug(f"Preview check notice: {pe}")
+        # Preview approval MUST be verified; missing service support or verification
+        # errors are blockers, not debug-only notices.
+        try:
+            ok, preview_err = service.check_chapter_1_preview_approval(
+                project_slug, skip_preview=False
+            )
+        except Exception as pe:
+            ok, preview_err = False, f"Could not verify Chapter 1 preview approval: {pe}"
+        if not ok:
+            return {
+                "status": "error",
+                "command": "cloud produce-series",
+                "exit_code": ExitCode.VALIDATION_ERROR,
+                "error": preview_err or "Chapter 1 preview has not been approved.",
+            }
 
         gpu = not getattr(args, "no_gpu", False)
         compile_feature = bool(getattr(args, "compile", False) or getattr(args, "compile_feature", False))
