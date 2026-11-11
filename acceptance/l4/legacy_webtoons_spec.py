@@ -212,4 +212,3 @@ class TestPhase4RealVerification:
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass
-
