@@ -9,6 +9,8 @@ Authored by M2 Challenger 1 to empirically verify:
 5. Defect regression verification (cleanup safety, FFmpeg returncodes, suffix versioning)
 """
 
+from v4_fixtures import init_confirmed_project
+
 import json
 import os
 from pathlib import Path
@@ -61,52 +63,24 @@ class TestCliExitCodesAndPurity:
             if subcmd == "tts":
                 args += ["-c", "1"]
             proc = run_cli(args)
-            assert proc.returncode == ExitCode.IO_ERROR, f"{subcmd} did not return exit code 3"
+            expected = ExitCode.VALIDATION_ERROR if subcmd in {"tts", "compile", "validate"} else ExitCode.IO_ERROR
+            assert proc.returncode == expected
             
             # Stdout must be strictly parseable as single JSON envelope
             envelope = json.loads(proc.stdout)
             assert envelope["status"] == "error"
-            assert envelope["exit_code"] == ExitCode.IO_ERROR
-            assert envelope["error"]["code"] == "IO_ERROR"
+            assert envelope["exit_code"] == expected
+            assert envelope["error"]["code"] == ("VALIDATION_ERROR" if expected == 2 else "IO_ERROR")
 
         # In V4, render enforces the strict form gate, failing closed with VALIDATION_ERROR
         render_proc = run_cli(["render", "-p", "nonexistent_slug_9999", "-c", "1", "--json"])
         assert render_proc.returncode in (ExitCode.IO_ERROR, ExitCode.VALIDATION_ERROR)
 
-    def test_missing_dependency_returns_exit_code_4(self, tmp_path):
-        env = {"PATH": "", "MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
-        init_project_layout("dep_test", "Dep Test")
-        init_chapter_layout("dep_test", "1")
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
-        for subcmd in ["render", "compile"]:
-            args = [subcmd, "-p", "dep_test", "--json"]
-            if subcmd == "render":
-                args += ["-c", "1"]
-            proc = run_cli(args, env_overrides=env)
-            assert proc.returncode == ExitCode.DEPENDENCY_ERROR
-            
-            envelope = json.loads(proc.stdout)
-            assert envelope["status"] == "error"
-            assert envelope["exit_code"] == ExitCode.DEPENDENCY_ERROR
-            assert envelope["error"]["code"] == "DEPENDENCY_ERROR"
-            assert "not found on system PATH" in envelope["error"]["message"]
-
-    def test_ffmpeg_execution_failure_returns_general_error_exit_code_1(self, tmp_path):
-        env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
-        init_project_layout("bad_video_proj", "Bad Video Proj")
-        chap_dir = init_chapter_layout("bad_video_proj", "1")
-        (chap_dir / "video").mkdir(parents=True, exist_ok=True)
-        # Corrupted input file
-        (chap_dir / "video" / "chapter_1_final_v1.mp4").write_bytes(b"INVALID_VIDEO_HEADER_DATA")
-
-        proc = run_cli(["compile", "-p", "bad_video_proj", "--approved", "--json"], env_overrides=env)
-        assert proc.returncode == ExitCode.GENERAL_ERROR
-        
-        envelope = json.loads(proc.stdout)
-        assert envelope["status"] == "error"
-        assert envelope["exit_code"] == ExitCode.GENERAL_ERROR
-        assert envelope["error"]["code"] == "GENERAL_ERROR"
-        assert "Compile chapter video concatenation failed" in envelope["error"]["message"]
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
     def test_crawl_missing_source_flags_returns_validation_error_exit_code_2(self):
         proc = run_cli(["crawl", "-p", "dummy", "-c", "1", "--json"])
@@ -115,11 +89,11 @@ class TestCliExitCodesAndPurity:
         assert envelope["status"] == "error"
         assert envelope["exit_code"] == ExitCode.VALIDATION_ERROR
         assert envelope["error"]["code"] == "VALIDATION_ERROR"
-        assert "Either --url or --import-dir must be provided" in envelope["error"]["message"]
+        assert "Strict Form Gate failed" in envelope["error"]["message"]
 
     def test_schema_validation_failure_returns_exit_code_2(self, tmp_path):
         env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
-        init_project_layout("invalid_schema_proj", "Invalid Schema Proj")
+        init_confirmed_project("invalid_schema_proj", "Invalid Schema Proj")
         chap_dir = init_chapter_layout("invalid_schema_proj", "1")
         # Script references non-existent panel
         atomic_write_json(chap_dir / "manifest.json", {
@@ -183,13 +157,14 @@ class TestCliExitCodesAndPurity:
         assert envelope["status"] == "error"
         assert envelope["exit_code"] == ExitCode.VALIDATION_ERROR
 
-    def test_permission_denied_returns_io_error_exit_code_3(self, tmp_path):
+    def test_permission_denied_returns_io_error_exit_code_3(self, tmp_path, monkeypatch):
         """
         Adversarial test revealing exit code discrepancy:
         PermissionError is not caught in main.py's IO_ERROR block, falling into GENERAL_ERROR (1).
         """
         env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
-        proj_dir = init_project_layout("locked_proj", "Locked Proj")
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", env["MANGA_RECAP_DATA_DIR"])
+        proj_dir = init_confirmed_project("locked_proj", "Locked Proj")
         os.chmod(proj_dir, 0o000)
         try:
             proc = run_cli(["inspect", "-p", "locked_proj", "--json"], env_overrides=env)
@@ -201,7 +176,7 @@ class TestCliExitCodesAndPurity:
 
     def test_stdout_purity_under_verbose_logging(self, tmp_path):
         env = {"MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}
-        init_project_layout("purity_proj", "Purity Proj")
+        init_confirmed_project("purity_proj", "Purity Proj")
         init_chapter_layout("purity_proj", "1")
 
         # Run with -v and --verbose
@@ -225,7 +200,7 @@ class TestInspectAndStatusCommandIntegrity:
         env_dir = tmp_path / "data"
         os.environ["MANGA_RECAP_DATA_DIR"] = str(env_dir)
 
-        proj_dir = init_project_layout("epic_saga", "The Epic Saga")
+        proj_dir = init_confirmed_project("epic_saga", "The Epic Saga")
         chap_dir = init_chapter_layout("epic_saga", "1", "Awakening")
 
         # Write characters.json

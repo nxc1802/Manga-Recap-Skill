@@ -435,6 +435,8 @@ def validate_complete_setup(
 def require_series_setup(project_slug: str, project_dir: Optional[Path] = None,
                          allow_legacy: bool = False) -> SeriesSetupAnswers:
     proj_dir = project_dir or get_project_dir(project_slug)
+    if not proj_dir.is_dir():
+        return _require_series_setup_unlocked(project_slug, proj_dir, allow_legacy)
     with FileLock(proj_dir / "series_setup_answers.json"):
         return _require_series_setup_unlocked(project_slug, proj_dir, allow_legacy)
 

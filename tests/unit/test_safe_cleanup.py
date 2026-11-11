@@ -10,6 +10,8 @@ Tests:
 - Scoped intermediate cleanup and optional raw purge.
 """
 
+from v4_fixtures import init_confirmed_project
+
 import argparse
 import hashlib
 import json
@@ -35,7 +37,7 @@ def cleanup_project(tmp_path, monkeypatch):
     monkeypatch.setenv("MANGA_RECAP_OUTPUT_DIR", str(output_dir))
 
     slug = "safe_clean_test_series"
-    proj_dir = init_project_layout(slug, "Safe Clean Test")
+    proj_dir = init_confirmed_project(slug, "Safe Clean Test")
     chap_dir = init_chapter_layout(slug, 1)
 
     # Output verified final video
@@ -60,21 +62,12 @@ def cleanup_project(tmp_path, monkeypatch):
     raw_page.parent.mkdir(parents=True, exist_ok=True)
     raw_page.write_bytes(b"\xff\xd8" + b"\x00" * 1000)
 
-    # Setup answers with YouTube enabled by default
-    setup_answers = {
-        "schema_version": "4.0.0",
-        "project_slug": slug,
-        "answers": {
-            "Q08": {
-                "question_id": "Q08",
-                "question_title": "Kênh YouTube & Hiển thị",
-                "user_answer": {"account": "review_truyen", "privacy": "private"},
-                "answer_source": "user",
-                "confirmed_at": "2026-11-10T20:00:00Z",
-            }
-        },
-    }
-    atomic_write_json(proj_dir / "series_setup_answers.json", setup_answers)
+    # Full explicit unit setup; receipts are isolated protocol fixtures.
+    from unit.test_series_setup import _make_valid_answers_dict
+    from src.core.series_setup import record_series_setup
+    answers = _make_valid_answers_dict()
+    answers['Q08']['user_answer'] = {'account': 'review_truyen', 'privacy': 'private'}
+    record_series_setup(slug, answers, project_dir=proj_dir)
 
     return {
         "slug": slug,

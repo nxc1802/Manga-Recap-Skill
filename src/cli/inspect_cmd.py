@@ -40,12 +40,7 @@ def handle_inspect(args: argparse.Namespace) -> Dict[str, Any]:
     # 1. Project-level inspection
     if chapter_num is None:
         project_json_path = project_dir / "project.json"
-        project_cfg: Dict[str, Any] = {}
-        if project_json_path.exists():
-            try:
-                project_cfg = read_json(project_json_path)
-            except Exception:
-                pass
+        project_cfg = read_json(project_json_path)
 
         characters_path = project_dir / "characters.json"
         char_count = 0

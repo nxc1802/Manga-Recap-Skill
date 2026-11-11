@@ -610,3 +610,11 @@ def test_project_model_round_trip_preserves_setup_pair(tmp_path):
     model.chapters.append("2")
     atomic_write_json(tmp_path / "project.json", model)
     assert require_series_setup("series", project_dir=tmp_path).setup_revision == model.setup_revision
+
+
+
+def test_setup_read_does_not_create_missing_series(tmp_path):
+    missing = tmp_path / "absent"
+    with pytest.raises(CliValidationError, match="Strict Form Gate"):
+        require_series_setup("absent", project_dir=missing)
+    assert not missing.exists()

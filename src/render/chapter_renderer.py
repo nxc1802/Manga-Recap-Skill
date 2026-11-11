@@ -38,6 +38,8 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
     chapter = root / "chapters" / str(chapter_num)
     script = load_recap_script(chapter)
     manifest = load_manifest(chapter)
+    if script is None or manifest is None:
+        raise CliValidationError("Canonical script and manifest are required before rendering")
     from src.core.storage import load_chapter_metadata
     metadata = load_chapter_metadata(chapter)
     if script.project_slug != slug or manifest.project_slug != slug or metadata.project_slug != slug:

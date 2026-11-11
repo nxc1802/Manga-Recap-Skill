@@ -6,6 +6,8 @@ Comprehensive Unit Test Suite for Phase B:
 - PR-06: Thumbnail Director
 """
 
+from v4_fixtures import init_confirmed_project
+
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -341,48 +343,8 @@ class TestYouTubeChaptersTimeline:
         assert markers[1]["time"] == "02:00"
         assert markers[2]["time"] == "04:30"
 
-    def test_feature_timeline_persistence_in_compile(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        proj_slug = "test_compile_proj"
-        init_project_layout(proj_slug, title=proj_slug)
-
-        chap1_dir = init_chapter_layout(proj_slug, 1)
-        chap2_dir = init_chapter_layout(proj_slug, 2)
-
-        # Create dummy chapter MP4 files
-        (chap1_dir / "video").mkdir(parents=True, exist_ok=True)
-        (chap2_dir / "video").mkdir(parents=True, exist_ok=True)
-        mp1 = chap1_dir / "video" / "chapter_001_final.mp4"
-        mp2 = chap2_dir / "video" / "chapter_002_final.mp4"
-        mp1.write_bytes(b"dummy mp4 1")
-        mp2.write_bytes(b"dummy mp4 2")
-
-        # Mock ffmpeg execution
-        with patch("src.cli.compile_cmd.run_ffmpeg") as mock_ffmpeg, \
-             patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
-            # Set fake output file creation on run_ffmpeg
-            def side_effect(cmd, **kwargs):
-                out_p = Path(cmd[-1])
-                out_p.parent.mkdir(parents=True, exist_ok=True)
-                out_p.write_bytes(b"compiled video content")
-
-            mock_ffmpeg.side_effect = side_effect
-
-            args = MagicMock(
-                project=proj_slug,
-                chapters="1,2",
-                output=None,
-                extract_audio=False,
-                approved=True,
-            )
-            res = handle_compile(args)
-            assert res["project_slug"] == proj_slug
-            assert "timeline_path" in res
-            assert Path(res["timeline_path"]).exists()
-
-            timeline_data = read_json(Path(res["timeline_path"]))
-            assert timeline_data["chapters_count"] == 2
-            assert len(timeline_data["chapters"]) == 2
+    # Canonical actual-media coverage: test_compile_validated_final_and_feature_timeline.
+    pass
 
 
 # ==============================================================================
@@ -393,7 +355,7 @@ class TestYouTubeThumbnailIntegration:
     def test_youtube_metadata_detects_ai_thumbnail(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         proj_slug = "meta_thumb_proj"
-        init_project_layout(proj_slug, title="Meta Thumb Proj")
+        init_confirmed_project(proj_slug, title="Meta Thumb Proj")
         chap_dir = init_chapter_layout(proj_slug, 1)
 
         # Stage an AI thumbnail in output directory
@@ -421,7 +383,7 @@ class TestYouTubeThumbnailIntegration:
     def test_youtube_metadata_detects_feature_thumbnail(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         proj_slug = "feature_thumb_proj"
-        init_project_layout(proj_slug, title="Feature Thumb Proj")
+        init_confirmed_project(proj_slug, title="Feature Thumb Proj")
 
         out_dir = get_output_dir(proj_slug)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +406,7 @@ class TestPhaseBCLIIntegration:
     def test_crawl_verify_flag(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         proj_slug = "test_crawl_verify"
-        init_project_layout(proj_slug, title=proj_slug)
+        init_confirmed_project(proj_slug, title=proj_slug)
 
         # Import directory with real images
         import_dir = tmp_path / "imports"
@@ -470,7 +432,7 @@ class TestPhaseBCLIIntegration:
     def test_youtube_metadata_feature_with_timeline(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         proj_slug = "test_yt_feature"
-        init_project_layout(proj_slug, title=proj_slug)
+        init_confirmed_project(proj_slug, title=proj_slug)
 
 
         # Save feature_timeline.json

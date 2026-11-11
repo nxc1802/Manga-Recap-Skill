@@ -33,7 +33,7 @@ jobs:
           pytest -q tests/unit/test_series_setup.py tests/unit/test_visual_policy.py tests/unit/test_artifact_correctness.py tests/unit/test_canonical_workflow.py tests/unit/cloud/test_canonical_cloud.py tests/unit/test_tts_engine.py tests/unit/test_schemas.py
       - name: Run focused V4 contract tests
         run: |
-          pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_kaggle_dual_t4.py
+          pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_v4_regression_migration.py
       - name: Run entire test suite for regression review
         if: always()
-        run: pytest -q --disable-warnings --maxfail=20
+        run: pytest -q --disable-warnings

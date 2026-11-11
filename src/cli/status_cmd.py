@@ -48,6 +48,8 @@ def handle_status(args: argparse.Namespace) -> Dict[str, Any]:
                 f"Project '{project_slug}' directory not found at {project_dir}"
             )
 
+    read_json(project_dir / "project.json")
+
     chapter_arg = getattr(args, "chapter", None)
 
     # 1. Chapter-level status

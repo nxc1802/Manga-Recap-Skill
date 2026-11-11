@@ -5,6 +5,8 @@ Unit tests for YouTube metadata generation, packaging, timestamps, and upload co
 
 from __future__ import annotations
 
+from v4_fixtures import init_confirmed_project
+
 import argparse
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -129,7 +131,7 @@ def mock_project(tmp_path, monkeypatch):
     c_dir = p_dir / "chapters" / chap
     c_dir.mkdir(parents=True)
 
-    atomic_write_json(p_dir / "project.json", {"project_slug": slug, "title": "Đại Lão Trùng Sinh"})
+    init_confirmed_project(slug, "Đại Lão Trùng Sinh")
     (p_dir / "story_summary.md").write_text("# Đại Lão Trùng Sinh\n\nNội dung chương 1 diễn biến ly kỳ.", encoding="utf-8")
 
     script_data = {

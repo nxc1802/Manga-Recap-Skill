@@ -9,6 +9,8 @@ Covers:
 
 from __future__ import annotations
 
+from v4_fixtures import init_confirmed_project
+
 import io
 import json
 import os
@@ -207,59 +209,11 @@ class TestDefect2FFmpegEnforcementAdversarial:
                 # str(exc_info.value) contains trailing 500 chars snippet
                 assert "STREAM_CORRUPT" in str(exc_info.value)
 
-    def test_cli_compile_missing_ffmpeg_yields_dependency_exit_code_4(self, tmp_path, monkeypatch):
-        """Verifies manga-recap compile emits exit code 4 and DEPENDENCY_ERROR envelope when FFmpeg missing."""
-        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
-        init_project_layout("adv_p", "Adv Project")
-        init_chapter_layout("adv_p", "1")
-
-        with patch("shutil.which", return_value=None):
-            with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p", "--chapters", "1", "--json"]):
-                out_buf = io.StringIO()
-                with patch("sys.stdout", out_buf):
-                    code = main()
-
-                assert code == ExitCode.DEPENDENCY_ERROR
-                assert code == 4
-
-                payload = json.loads(out_buf.getvalue())
-                assert payload["exit_code"] == 4
-                assert payload["status"] == "error"
-                assert payload["error"]["code"] == "DEPENDENCY_ERROR"
-
-    def test_cli_compile_ffmpeg_failure_yields_general_error_exit_code_1(self, tmp_path, monkeypatch):
-        """Verifies manga-recap compile emits exit code 1 and captures stderr when FFmpeg transcode fails."""
-        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
-
-        init_project_layout("adv_p2", "Adv Project 2")
-        init_chapter_layout("adv_p2", "1")
-        chap_dir = tmp_path / "projects" / "adv_p2" / "chapters" / "1"
-        (chap_dir / "video").mkdir(parents=True, exist_ok=True)
-        (chap_dir / "video" / "chapter_1_final_v1.mp4").write_text("dummy")
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "FFmpeg codec crash: out of memory / corrupted bitstream"
-        mock_result.stdout = ""
-
-        with patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
-            with patch("subprocess.run", return_value=mock_result):
-                with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p2", "--chapters", "1", "--approved", "--json"]):
-                    out_buf = io.StringIO()
-                    with patch("sys.stdout", out_buf):
-                        code = main()
-
-                    assert code == ExitCode.GENERAL_ERROR
-                    assert code == 1
-
-                    payload = json.loads(out_buf.getvalue())
-                    assert payload["exit_code"] == 1
-                    assert payload["status"] == "error"
-                    assert payload["error"]["code"] == "GENERAL_ERROR"
-                    assert "FFmpeg codec crash" in payload["error"]["message"]
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
 
 # ==============================================================================

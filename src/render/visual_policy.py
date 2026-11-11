@@ -53,12 +53,16 @@ def detect_omit_visual_band(img_path_or_crop=None, panel_item=None, min_height_p
             return True, panel_item.notes or "source_not_for_display"
         if panel_item.notes and "text_only" in panel_item.notes.lower():
             return True, "text_only_agent_evidence"
+    if panel_item is not None and panel_item.height < min_height_px:
+        return True, "short_sliver"
     if img_path_or_crop is not None:
         if isinstance(img_path_or_crop, Image.Image):
             pixels = np.asarray(img_path_or_crop.convert("L"), dtype=float)
         else:
             with Image.open(img_path_or_crop) as image:
                 pixels = np.asarray(image.convert("L"), dtype=float)
+        if pixels.shape[0] < min_height_px:
+            return True, "short_sliver"
         if float(pixels.var()) < variance_threshold:
             return True, "blank_band"
     return False, None
@@ -66,7 +70,7 @@ def detect_omit_visual_band(img_path_or_crop=None, panel_item=None, min_height_p
 
 def validate_narration_evidence(chapter_dir, script, manifest=None):
     manifest = manifest if manifest is not None else load_manifest(chapter_dir)
-    if not script.segments or not manifest.panels:
+    if script is None or manifest is None or not script.segments or not manifest.panels:
         raise ValueError("Narration and real panel evidence are required")
     if script.project_slug != manifest.project_slug or script.chapter_number != manifest.chapter_number:
         raise ValueError("Narration/evidence identity mismatch")
@@ -217,14 +221,33 @@ def validate_visual_plan(plan, chapter_dir, manifest, script, target_width, targ
         raise ValueError("VisualPlan segment sequence differs from script")
     for segment in script.segments:
         expected_shots = baseline.get_shots_for_segment(segment.seq_id)
-        by_panel = {s.source_panel_id: s for s in expected_shots}
+        by_panel = {}
+        for reference in expected_shots:
+            by_panel.setdefault(reference.source_panel_id, []).append(reference)
+        last_tall_box = {}
         shots = plan.get_shots_for_segment(segment.seq_id)
         if not math.isclose(sum(s.duration_sec for s in shots), segment.duration, abs_tol=1e-6):
             raise ValueError("Segment duration differs from measured narration")
         for shot in shots:
             if shot.source_panel_id not in by_panel:
                 raise ValueError("Rendered source lacks segment evidence")
-            reference = by_panel[shot.source_panel_id]
+            references = by_panel[shot.source_panel_id]
+            reference = references[0]
+            displayed_id = shot.substitute_panel_id or shot.source_panel_id
+            panel = next(p for p in manifest.panels if p.panel_id == displayed_id)
+            if is_tall_panel(panel.width, panel.height):
+                # An authored hold may retain the whole panel. Crops must be
+                # evidenced canonical regions (including approved safe focus).
+                if shot.source_box == Region():
+                    if shot.motion_type != ProductionMotion.STATIC:
+                        raise ValueError("Tall full-panel hold must remain static")
+                elif not any(shot.source_box == ref.source_box for ref in references):
+                    raise ValueError("Tall crop is not a canonical safe region")
+                previous_box = last_tall_box.get(displayed_id)
+                if previous_box is not None and (shot.source_box.y_min < previous_box.y_min - 1e-9
+                        or shot.source_box.y_max < previous_box.y_max - 1e-9):
+                    raise ValueError("Tall shot sequence reverses vertical order")
+                last_tall_box[displayed_id] = shot.source_box
             for field in ("visual_role", "visual_omit_reason", "substitute_panel_id", "substitution_reason", "focus_regions", "avoid_regions"):
                 if getattr(shot, field) != getattr(reference, field):
                     raise ValueError(f"VisualPlan changes evidenced visual classification: {field}")

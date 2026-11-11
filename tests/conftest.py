@@ -60,3 +60,9 @@ def json_script_text():
         "3_2": "Chào mừng ngươi đã đến với thế giới này."
     }
     """
+
+
+@pytest.fixture(autouse=True)
+def isolated_default_data_root(tmp_path, monkeypatch):
+    """No deterministic test may create projects in the working repository."""
+    monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "isolated_data"))

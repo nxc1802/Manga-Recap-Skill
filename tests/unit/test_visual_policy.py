@@ -158,3 +158,36 @@ def test_authored_visual_plan_can_omit_evidence_without_losing_provenance(eviden
     script.segments[0].narrator_text = "new narration"
     with pytest.raises(ValueError, match="stale"):
         resolve_visual_plan(root, manifest, script, target_width=320, target_height=180, fps=30, motion_enabled=None)
+
+
+@pytest.mark.parametrize("variant,valid", [("canonical", True), ("reverse", False),
+    ("full", True), ("single", True), ("arbitrary", False), ("interleaved_reverse", False)])
+def test_authored_tall_order_and_canonical_regions(evidence, variant, valid):
+    from src.render.visual_policy import validate_visual_plan
+    root, manifest, script = evidence
+    plan = generate_visual_plan(root, manifest, script)
+    data = plan.model_dump(mode="json")
+    tall = [s for s in data["shots"] if s["source_panel_id"] == "p2"]
+    if variant == "reverse": tall.reverse()
+    elif variant == "full": tall = [dict(tall[0], source_box=Region().model_dump())]
+    elif variant == "single": tall = [tall[1]]
+    elif variant == "arbitrary": tall = [dict(tall[0], source_box=Region(y_min=0.123, y_max=0.456).model_dump())]
+    elif variant == "interleaved_reverse": tall = [tall[-1], data["shots"][0], tall[0]]
+    for i, shot in enumerate(tall):
+        shot.update(shot_id=f"authored_{i}", duration_sec=2 / len(tall))
+    data["shots"] = tall
+    # The schema may reject reversal before the evidence validator does.
+    if valid:
+        validate_visual_plan(VisualPlan.model_validate(data), root, manifest, script, 1920, 1080, 30, None)
+    else:
+        with pytest.raises(ValueError):
+            validate_visual_plan(VisualPlan.model_validate(data), root, manifest, script, 1920, 1080, 30, None)
+
+
+@pytest.mark.parametrize("height,omit", [(1, True), (10, True), (45, True), (79, True), (80, False), (81, False)])
+def test_short_sliver_boundary(height, omit):
+    from src.render.visual_policy import detect_omit_visual_band
+    pixels = np.tile(np.arange(200, dtype=np.uint8), (height, 1))
+    result, reason = detect_omit_visual_band(Image.fromarray(pixels))
+    assert result is omit
+    assert reason == ("short_sliver" if omit else None)

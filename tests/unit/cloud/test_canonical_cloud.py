@@ -101,3 +101,21 @@ def test_interrupted_cloud_copy_cannot_leave_completed_state(unit_project, tmp_p
     metadata = read_json(chapter / "chapter.json")
     assert metadata["overall_status"] == "running"
     assert metadata["technical_status"] != "completed"
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "device", "duplicate"])
+def test_tar_special_members_rejected_before_extraction(tmp_path, kind):
+    import io
+    content = io.BytesIO()
+    with tarfile.open(fileobj=content, mode="w") as tar:
+        member = tarfile.TarInfo("entry")
+        if kind == "symlink": member.type, member.linkname = tarfile.SYMTYPE, "../escape"
+        elif kind == "hardlink": member.type, member.linkname = tarfile.LNKTYPE, "../escape"
+        elif kind == "device": member.type = tarfile.CHRTYPE
+        tar.addfile(member)
+        if kind == "duplicate": tar.addfile(tarfile.TarInfo("./entry"))
+    content.seek(0)
+    with tarfile.open(fileobj=content) as tar:
+        with pytest.raises(ValueError, match="Security error"):
+            safe_extract_tar(tar, tmp_path / "extracted")
+    assert not (tmp_path / "extracted" / "entry").exists()

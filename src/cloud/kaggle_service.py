@@ -26,7 +26,16 @@ def safe_extract_tar(tar: tarfile.TarFile, target_dir: Union[str, Path]) -> None
     Rejects absolute member names and any path navigating outside target_dir.
     """
     resolved_target = Path(target_dir).resolve()
+    seen = set()
     for member in tar.getmembers():
+        # Python 3.10 lacks the data extraction filter. Reject links and special
+        # entries before extraction on every supported Python version.
+        if not (member.isfile() or member.isdir()):
+            raise ValueError(f"Security error: Unsupported tar member: '{member.name}'")
+        normalized = (resolved_target / member.name).resolve()
+        if normalized in seen:
+            raise ValueError(f"Security error: Duplicate tar member: '{member.name}'")
+        seen.add(normalized)
         # Prevent absolute paths or path traversal via ../
         if member.name.startswith("/") or ".." in member.name.split("/"):
             raise ValueError(

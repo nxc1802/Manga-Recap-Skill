@@ -347,7 +347,7 @@ class TestPR01AdversarialSetup:
             obj.snapshot_hash = compute_snapshot_hash(obj.answers)
             is_valid, errors = validate_complete_setup(obj)
             assert not is_valid, f"Quality '{bad_q}' was accepted!"
-            assert any("video quality must specify" in err for err in errors)
+            assert any("select preview/720p or final/1080p" in err for err in errors)
 
     def test_fail_closed_unconfigured_project_cli_entry_points(self, tmp_path):
         """
@@ -552,7 +552,7 @@ class TestPR02AdversarialKinematicsAndSlicing:
         img = Image.new("RGB", (1000, h), (128, 128, 128))
         is_omit, reason = detect_omit_visual_band(img_path_or_crop=img, min_height_px=80)
         assert is_omit is True
-        assert reason == "sliver"
+        assert reason == "short_sliver"
 
     def test_blank_band_detection_pure_white_and_pure_black(self):
         """
@@ -598,4 +598,4 @@ class TestPR02AdversarialKinematicsAndSlicing:
         )
         is_omit, reason = detect_omit_visual_band(img_path_or_crop=img_text, panel_item=p_item)
         assert is_omit is True
-        assert reason == "text_only"
+        assert reason == "text_only_agent_evidence"
