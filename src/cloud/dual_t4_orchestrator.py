@@ -21,6 +21,7 @@ In-Container Supervisor and Worker Architecture:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -138,7 +139,7 @@ class MicroBatchPlanner:
         grouped: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
         for seg in segments:
             voice = seg.get("voice_id", "default")
-            text = seg.get("text", "")
+            text = seg.get("narrator_text") or seg.get("text", "")
             bucket = cls.get_length_bucket(text)
 
             if voice not in grouped:
@@ -188,7 +189,7 @@ class MicroBatchPlanner:
         if current_batch_size is None:
             current_batch_size = len(batch)
 
-        texts = [s.get("text", "") for s in batch]
+        texts = [s.get("narrator_text") or s.get("text", "") for s in batch]
 
         try:
             return infer_func(texts, voice)
@@ -299,10 +300,10 @@ class TTSWorker:
             self.engine = Vieneu(mode="v3turbo")
             logger.info(f"[TTSWorker] VieNeu model loaded resident successfully on GPU {self.gpu_id}.")
         except Exception as exc:
-            logger.warning(
-                f"[TTSWorker] Could not load vieneu ({exc}). Operating with synthetic wav generator."
-            )
-            self.engine = None
+            raise RuntimeError(
+                f"Production neural TTS initialization failed on GPU {self.gpu_id}; "
+                "refusing to substitute synthetic/silent audio."
+            ) from exc
 
     def synthesize_chapter(
         self,
@@ -333,7 +334,9 @@ class TTSWorker:
         def _run_infer(texts: List[str], voice: str) -> List[Any]:
             if self.engine is not None and hasattr(self.engine, "infer_batch"):
                 return self.engine.infer_batch(texts, voice=voice, batch_size=len(texts))
-            # Fallback synthetic generator for tests/environments without Vieneu weights
+            if not self.mock_mode:
+                raise RuntimeError("Neural TTS infer_batch is unavailable; refusing synthetic production audio.")
+            # Deliberate synthetic test mode only.
             results = []
             for t in texts:
                 # Est duration: ~0.06s per char, min 1.5s
@@ -371,7 +374,13 @@ class TTSWorker:
 
             # Write standard 48 kHz mono WAV
             dur = self._write_wav_clip(clip_path, res_obj, speed=speed_override or 1.0)
+            if dur <= 0 or not clip_path.is_file():
+                raise RuntimeError(f"No neural speech WAV produced for chapter {chapter_num} segment {seq_id}.")
             clip_paths.append(str(clip_path))
+            seg["duration"] = round(dur, 3)
+            seg["audio_path"] = f"audio/clips/audio_{chapter_num}_{seq_id}.wav"
+            seg["status"] = "synthesized"
+            seg["checksum"] = hashlib.sha256(clip_path.read_bytes()).hexdigest()
 
             seg["start_time"] = round(current_time_offset, 3)
             seg["end_time"] = round(current_time_offset + dur, 3)
@@ -398,9 +407,8 @@ class TTSWorker:
             try:
                 peak_vram = float(torch.cuda.max_memory_allocated(self.gpu_id)) / (1024.0 * 1024.0)
             except Exception:
-                peak_vram = 4120.0
-        else:
-            peak_vram = 4120.0  # Empirical benchmark estimate on T4
+                peak_vram = 0.0
+        # Never fabricate hardware measurements for an offline/mock run.
 
         self.telemetry.peak_vram_mb = max(self.telemetry.peak_vram_mb, peak_vram)
         self.telemetry.total_active_seconds += elapsed
@@ -434,27 +442,55 @@ class TTSWorker:
         return ready_payload
 
     def _write_wav_clip(self, clip_path: Path, res_obj: Any, speed: float = 1.0) -> float:
-        """Writes 48kHz mono 16-bit PCM WAV file."""
+        """Persist ACTUAL VieNeu waveform for production; mock is opt-in only."""
         clip_path.parent.mkdir(parents=True, exist_ok=True)
-        raw_dur = 2.0
-        if isinstance(res_obj, dict):
-            raw_dur = float(res_obj.get("duration_sec", 2.0))
-        elif hasattr(res_obj, "duration"):
-            raw_dur = float(res_obj.duration)
+        if not (0.5 <= float(speed) <= 2.0):
+            raise ValueError("TTS speed must be between 0.5 and 2.0.")
 
-        effective_dur = max(0.5, raw_dur / (speed if speed > 0 else 1.0))
-        sample_rate = 48000
-        num_samples = int(effective_dur * sample_rate)
+        if not self.mock_mode:
+            if self.engine is None or not callable(getattr(self.engine, "save", None)):
+                raise RuntimeError("VieNeu neural audio save is unavailable; no silent fallback allowed.")
+            raw_path = clip_path.with_name(f".{clip_path.stem}.neural.tmp.wav")
+            speed_path = clip_path.with_name(f".{clip_path.stem}.speed.tmp.wav")
+            try:
+                self.engine.save(res_obj, str(raw_path))
+                if not raw_path.is_file() or raw_path.stat().st_size <= 44:
+                    raise RuntimeError(f"VieNeu produced empty WAV at {raw_path}")
+                output_path = raw_path
+                if abs(float(speed) - 1.0) > 0.001:
+                    cmd = [
+                        "ffmpeg", "-y", "-i", str(raw_path),
+                        "-filter:a", f"atempo={float(speed):.4f}",
+                        "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(speed_path),
+                    ]
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+                    output_path = speed_path
 
-        # Synthesize sine tone or silence buffer
+                with wave.open(str(output_path), "rb") as wf:
+                    if wf.getnchannels() != 1 or wf.getsampwidth() != 2:
+                        raise RuntimeError("VieNeu output must be 16-bit mono PCM WAV.")
+                    duration = wf.getnframes() / float(wf.getframerate())
+                    if duration <= 0:
+                        raise RuntimeError("VieNeu produced zero-duration audio.")
+                    # Catch the previous regression: success-shaped all-zero speech.
+                    preview_pcm = wf.readframes(min(wf.getnframes(), wf.getframerate()))
+                    if preview_pcm and not any(preview_pcm):
+                        raise RuntimeError("VieNeu returned silent PCM; refusing production output.")
+                os.replace(output_path, clip_path)
+                return duration
+            finally:
+                raw_path.unlink(missing_ok=True)
+                speed_path.unlink(missing_ok=True)
+
+        # Explicit simulation-only test path. Never used in production jobs.
+        raw_dur = float(res_obj.get("duration_sec", 2.0)) if isinstance(res_obj, dict) else 2.0
+        effective_dur = max(0.5, raw_dur / float(speed))
+        num_samples = int(effective_dur * 48000)
         with wave.open(str(clip_path), "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            # Generate soft tone for audio verification
-            audio_bytes = bytearray(num_samples * 2)
-            wf.writeframes(audio_bytes)
-
+            wf.setframerate(48000)
+            wf.writeframes(bytes(num_samples * 2))
         return effective_dur
 
     def _concat_wav_clips(self, clip_paths: List[str], output_path: Path) -> None:
@@ -522,20 +558,20 @@ class RenderWorker:
     def _probe_encoder(self) -> Tuple[str, List[str]]:
         """Probes hardware NVENC encoder; falls back to libx264 ultrafast."""
         if self.mock_mode:
-            return "h264_nvenc", ["-gpu", str(self.gpu_id), "-preset", "p4", "-tune", "ll"]
+            return "h264_nvenc", ["-gpu", "0", "-preset", "p4", "-tune", "ll"]
 
         try:
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:d=0.1",
                 "-vf", "format=yuv420p",
-                "-c:v", "h264_nvenc", "-gpu", str(self.gpu_id), "-preset", "p4", "-f", "null", "-"
+                "-c:v", "h264_nvenc", "-gpu", "0", "-preset", "p4", "-f", "null", "-"
             ]
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = str(self.gpu_id)
             res = subprocess.run(cmd, capture_output=True, text=True, env=env)
             if res.returncode == 0:
                 logger.info(f"[RenderWorker] NVENC probe passed: hardware h264_nvenc active on GPU {self.gpu_id}.")
-                return "h264_nvenc", ["-gpu", str(self.gpu_id), "-preset", "p4", "-tune", "ll", "-rc", "vbr", "-cq", "20"]
+                return "h264_nvenc", ["-gpu", "0", "-preset", "p4", "-tune", "ll", "-rc", "vbr", "-cq", "20"]
         except Exception:
             pass
 
@@ -639,9 +675,8 @@ class RenderWorker:
             try:
                 peak_vram = float(torch.cuda.max_memory_allocated(self.gpu_id)) / (1024.0 * 1024.0)
             except Exception:
-                peak_vram = 1850.0
-        else:
-            peak_vram = 1850.0  # Empirical benchmark estimate on T4 NVENC
+                peak_vram = 0.0
+        # PyTorch does not account for NVENC encoder memory; report only what was measured.
 
         self.telemetry.peak_vram_mb = max(self.telemetry.peak_vram_mb, peak_vram)
         self.telemetry.total_active_seconds += elapsed
@@ -698,7 +733,13 @@ class RenderWorker:
         burn_subs: bool = False,
         srt_path: Optional[Path] = None,
     ) -> None:
-        """Encodes final chapter video with FFmpeg."""
+        """Experimental mock encoder only until the canonical panel compositor is integrated."""
+        if not self.mock_mode:
+            raise RuntimeError(
+                "BLOCKED: V4 Dual-T4 RenderWorker does not yet turn VisualPlan/panels "
+                "into real video frames. Refusing to export a black video as production. "
+                "Integrate the verified panel renderer before enabling this service."
+            )
         out_mp4.parent.mkdir(parents=True, exist_ok=True)
         has_audio = speech_master.exists() and speech_master.stat().st_size > 44
 
@@ -728,8 +769,10 @@ class RenderWorker:
 
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
-        except Exception:
-            # Fallback direct generation with minimum valid MP4 container
+        except Exception as exc:
+            if not self.mock_mode:
+                raise RuntimeError("FFmpeg encoding failed; no MP4 placeholder is permitted.") from exc
+            # An explicitly labeled mock-only artifact, not playable production media.
             self._write_minimal_mp4(out_mp4)
 
     def _write_minimal_mp4(self, out_path: Path) -> None:
