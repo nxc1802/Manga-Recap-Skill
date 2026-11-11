@@ -35,6 +35,7 @@ class TestDefect1CleanupTempFiles:
     def test_cleanup_temp_files_execution(self, tmp_path, monkeypatch):
         # Configure storage dir to tmp_path
         from src.core.config import config
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "data" / "projects")
 
         proj_dir = tmp_path / "data" / "projects" / "test_proj"
@@ -75,6 +76,7 @@ class TestDefect1CleanupTempFiles:
 
     def test_cleanup_temp_files_accepts_keep_temp_argument(self, tmp_path, monkeypatch):
         from src.core.config import config
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "data" / "projects")
 
         proj_dir = tmp_path / "data" / "projects" / "test_proj"

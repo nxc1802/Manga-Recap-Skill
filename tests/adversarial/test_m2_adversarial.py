@@ -51,6 +51,7 @@ class TestDefect1CleanupTempFilesAdversarial:
 
     def test_cleanup_temp_files_removes_known_intermediates_preserves_finals(self, tmp_path, monkeypatch):
         """Verifies intermediate scratch files are wiped while raw panels, clips, and finals survive."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
 
         proj_name = "adversarial_proj"
@@ -129,12 +130,14 @@ class TestDefect1CleanupTempFilesAdversarial:
 
     def test_cleanup_temp_files_nonexistent_directory_safety(self, tmp_path, monkeypatch):
         """Verifies calling cleanup on nonexistent chapter or project does not raise unhandled errors."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
         cleaned = pipeline.cleanup_temp_files(chapter="99999", project="ghost_project")
         assert cleaned == []
 
     def test_cleanup_temp_files_permission_error_graceful_recovery(self, tmp_path, monkeypatch):
         """Verifies that an unlink error on one file does not halt cleanup of remaining files."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
 
         proj_dir = tmp_path / "projects" / "p_perm"
