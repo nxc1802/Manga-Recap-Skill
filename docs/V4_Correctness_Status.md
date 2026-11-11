@@ -54,7 +54,7 @@ python -m pytest -q --disable-warnings \
   tests/unit/test_schemas.py
 ```
 
-Focused result at the latest source checkpoint: **154 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The final committed-source full regression result is recorded in `docs/verification/v4_correctness_checks_2026-11-11.json`; a non-green result blocks acceptance.
+Focused result at the latest source checkpoint: **155 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The final committed-source full regression result is recorded in `docs/verification/v4_correctness_checks_2026-11-11.json`; a non-green result blocks acceptance.
 
 Earlier repository-wide runs were red, including tests that assert flag-based approval bypass, source-string details of the removed cloud renderer, status-only approval, mock production synthesis and fake/header-only artifact acceptance. Some failures also predate this work. These failures are retained and must be reviewed/migrated; they are not suppressed with skip/xfail or reported as passing verification.
 
@@ -72,7 +72,7 @@ real neural TTS
 -> final Chapter 1 promotion / later chapter production
 ```
 
-`visual-plan --regenerate` preserves the prior plan under a content-addressed stale filename. Existing authored plans are validated and preserved, rather than silently replaced with one shot per evidence panel. Changing source, narration, voice, setup, plan, audio, thumbnail or BGM invalidates approval. Final Chapter 1 promotes the exact reviewed preview bytes at the configured target resolution; there is no unreviewed high-resolution reframing after approval.
+`visual-plan --regenerate` preserves the prior plan under a content-addressed stale filename. Existing authored plans are validated and preserved, rather than silently replaced with one shot per evidence panel. Changing reviewed Chapter 1 source, narration, voice, setup, plan, audio, thumbnail or BGM invalidates approval. Unrelated chapter registration/bookkeeping does not. A replaced Chapter 1 final also blocks approval; generating a changed preview preserves the old final under a content-addressed stale filename. Final Chapter 1 promotes the exact reviewed preview bytes at the configured target resolution; there is no unreviewed high-resolution reframing after approval.
 
 Canonical production currently supports auto/landscape-fit framing. Unsupported portrait settings fail validation. Cloud per-chapter execution produces Chapter 1 preview or later chapters final. Chapter 1 final promotion is local after download/review; `render --kaggle` rejects a contradictory quality selection. Encoder bytes need not match; the source/shot/timeline contract must match.
 

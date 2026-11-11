@@ -118,6 +118,13 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
             partial.replace(output)
         report = validate_final_artifact(output, subtitles, audio_paths, plan, script, manifest, chapter_num, chapter_dir=chapter)
         atomic_write_json(chapter / "artifact_validation.json", report)
+        if quality == "preview" and str(chapter_num) == "1":
+            final_artifact = video_dir / "final.mp4"
+            from src.render.artifact_validation import fingerprint
+            if final_artifact.exists() and fingerprint(final_artifact) != report["video"]["sha256"]:
+                # Preserve the prior final while requiring review of the new
+                # preview; never leave an old final masquerading as current.
+                final_artifact.replace(video_dir / f"final.stale.{fingerprint(final_artifact)[:16]}.mp4")
         update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.COMPLETED,
             artifacts=[str(output.relative_to(chapter)), str(subtitles.relative_to(chapter)), "visual_plan.json", "artifact_validation.json"])
         from src.core.storage import acquire_lock, load_chapter_metadata
@@ -147,6 +154,11 @@ def validate_existing_chapter(project_dir, chapter_num, quality="final", video_p
         target_height=settings["target_height"], fps=settings["fps"], motion_enabled=settings["render_pan_mode"] == "animation")
     if expected != plan:
         raise CliValidationError("Cached VisualPlan is stale")
+    if str(chapter_num) == "1" and quality == "final":
+        from src.render.artifact_validation import fingerprint
+        approval = require_preview_approval(root)
+        if fingerprint(video_path or chapter / "video" / "final.mp4") != approval.artifact_hash:
+            raise CliValidationError("Chapter 1 final differs from the exact human-reviewed artifact")
     return validate_final_artifact(video_path or chapter / "video" / f"{quality}.mp4",
         chapter / "subtitles" / f"{quality}.srt", [resolve_audio(chapter, seg) for seg in script.segments],
         plan, script, manifest, chapter_num, chapter_dir=chapter)

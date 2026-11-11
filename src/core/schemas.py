@@ -357,6 +357,8 @@ class ProjectConfig(BaseModel):
     """Schema for data/projects/<project_slug>/project.json."""
     model_config = ConfigDict(extra="ignore")
 
+    setup_revision: Optional[int] = Field(default=None, ge=1)
+    setup_snapshot_hash: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     project_id: str
     slug: str
     title: str

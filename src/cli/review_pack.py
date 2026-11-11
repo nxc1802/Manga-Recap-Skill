@@ -582,6 +582,7 @@ def handle_review_pack(args: argparse.Namespace) -> Dict[str, Any]:
         from src.core.human_review import review_fingerprint
         from src.render.artifact_validation import fingerprint
         data["review_binding"] = {
+            "artifact_path": "video/preview.mp4",
             "config_fingerprint": review_fingerprint(project_dir),
             "artifact_hash": fingerprint(chap_dir / "video" / "preview.mp4"),
         }

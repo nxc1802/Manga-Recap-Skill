@@ -601,3 +601,12 @@ def test_explicit_no_bgm_clears_prior_project_values(tmp_path):
     settings = read_json(tmp_path / "project.json")["audio_settings"]
     assert settings["bgm_path"] is None and settings["bgm_volume"] == 0 and settings["voice_volume"] == 1
     require_series_setup("series", project_dir=tmp_path)
+
+
+def test_project_model_round_trip_preserves_setup_pair(tmp_path):
+    from src.core.schemas import ProjectConfig
+    record_series_setup("series", _make_valid_answers_dict(), project_dir=tmp_path)
+    model = ProjectConfig.model_validate(read_json(tmp_path / "project.json"))
+    model.chapters.append("2")
+    atomic_write_json(tmp_path / "project.json", model)
+    assert require_series_setup("series", project_dir=tmp_path).setup_revision == model.setup_revision

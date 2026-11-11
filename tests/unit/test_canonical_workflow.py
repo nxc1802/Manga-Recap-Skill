@@ -63,8 +63,18 @@ def test_reference_renderer_validates_then_human_gate(unit_project):
     video_hash = fingerprint(result["video_path"])
     approval = approve_preview(root, "unit fixture", config_hash, video_hash)
     assert require_preview_approval(root) == approval
+    project_data = read_json(root / "project.json")
+    project_data["chapters"].append("2")
+    project_data["updated_at"] = "2030-01-01T00:00:00Z"
+    atomic_write_json(root / "project.json", project_data)
+    assert require_preview_approval(root) == approval
     final = render_chapter(root, "1", quality="final")
     assert fingerprint(final["video_path"]) == video_hash
+    from src.render.chapter_renderer import validate_existing_chapter
+    validate_existing_chapter(root, "1")
+    Path(final["video_path"]).write_bytes(b"unreviewed replacement")
+    with pytest.raises(CliValidationError, match="final"):
+        validate_existing_chapter(root, "1")
     # Any source/config/media change invalidates approval; optional old flags do not help.
     script = read_json(chapter / "script.json")
     script["segments"][0]["narrator_text"] = "changed"

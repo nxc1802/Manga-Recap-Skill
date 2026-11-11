@@ -102,7 +102,12 @@ def review_fingerprint(project_dir):
     if bgm:
         path = Path(bgm)
         external.append(("bgm", fingerprint(path if path.is_absolute() else root / path)))
-    records = [(str(path.relative_to(root)), fingerprint(path)) for path in required if path.is_file()]
+    # Chapter registration and bookkeeping timestamps do not change the
+    # reviewed render. Bind the relevant project contract, not unrelated state.
+    relevant = {key: project.get(key) for key in ("slug", "source_url", "language", "render_settings", "audio_settings", "script_pacing", "setup_revision", "setup_snapshot_hash")}
+    project_hash = hashlib.sha256(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    records = [(str(path.relative_to(root)), project_hash if path == root / "project.json" else fingerprint(path))
+               for path in required if path.is_file()]
     if any(not path.is_file() for path in required):
         raise CliValidationError("Human approval requires all source/config/review inputs")
     return hashlib.sha256(json.dumps(records + external, sort_keys=True).encode()).hexdigest()
@@ -120,6 +125,9 @@ def require_preview_approval(project_dir):
         artifact = chapter / approval.artifact_path
         if fingerprint(artifact) != approval.artifact_hash:
             raise ValueError("Reviewed artifact has changed")
+        final_artifact = chapter / "video" / "final.mp4"
+        if final_artifact.exists() and fingerprint(final_artifact) != approval.artifact_hash:
+            raise ValueError("Chapter 1 final artifact differs from the human-reviewed preview")
         validate_preview_package(root)
         if approval.config_fingerprint != review_fingerprint(root) or fingerprint(artifact) != approval.artifact_hash:
             raise ValueError("Review inputs changed during validation")
