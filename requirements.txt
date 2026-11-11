@@ -16,5 +16,8 @@ beautifulsoup4
 vieneu>=3.8.3
 
 
+# Hugging Face private archive and verified restore (V4)
+huggingface_hub>=0.26.0
+
 # Testing & Quality Assurance
 pytest
