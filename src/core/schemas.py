@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -74,6 +74,7 @@ class CheckpointStatus(str, Enum):
 class CameraMotionType(str, Enum):
     """Cinematic camera motion modes supported by Video Engine V2."""
     STATIC = "static"
+    SLOW_PAN_DOWN = "slow_pan_down"
     STATIC_FOCUS = "static_focus"
     PAN_LEFT = "pan_left"
     PAN_RIGHT = "pan_right"
@@ -420,10 +421,11 @@ class ChapterMetadata(BaseModel):
 
 class ScriptSegment(BaseModel):
     """An individual narration utterance mapped to visual panels."""
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     seq_id: str = Field(..., description="Unique segment sequence string, e.g. '001', '002_1'")
     panel_ids: List[str] = Field(default_factory=list, description="Referenced panel filenames or IDs")
+    evidence_panel_ids: List[str] = Field(default_factory=list, description="Source evidence, independent of rendering shots")
     narrator_text: str = Field(..., min_length=1, description="Vietnamese narration text")
     character: Optional[str] = Field(default=None, description="Character speaker name or None for narrator")
     emotion: Optional[str] = Field(default="neutral", description="Emotion intent: neutral, dramatic, sad, excited, etc.")
@@ -440,6 +442,18 @@ class ScriptSegment(BaseModel):
     fingerprint: Optional[str] = Field(default=None, description="SHA-256 fingerprint of (text + voice + speed + emotion + cue + engine)")
     status: str = Field(default="pending", description="Segment status: pending, synthesized, verified, needs_review")
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_evidence(cls, value):
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        old, new = data.get("panel_ids"), data.get("evidence_panel_ids")
+        if old is not None and new is not None and old != new:
+            raise ValueError("panel_ids conflicts with evidence_panel_ids")
+        data["panel_ids"] = data["evidence_panel_ids"] = new if new is not None else (old or [])
+        return data
+
     def is_manual_voice(self) -> bool:
         """Returns True if voice_id was explicitly set by the Agent rather than auto-populated by TTS."""
         if self.voice_source == "manual":
@@ -451,12 +465,15 @@ class ScriptSegment(BaseModel):
     @field_validator("seq_id")
     @classmethod
     def clean_seq_id(cls, v: str) -> str:
-        return str(v).strip()
+        value = str(v).strip()
+        if not value or value in {".", ".."} or any(c in value for c in ("/", "\\", "\x00")):
+            raise ValueError("seq_id must be a non-empty, path-safe opaque identifier")
+        return value
 
 
 class RecapScript(BaseModel):
     """Schema for data/projects/<project_slug>/chapters/<chapter_num>/script.json."""
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     project_slug: str = Field(default="")
     chapter_number: str = Field(default="1")
@@ -466,7 +483,7 @@ class RecapScript(BaseModel):
     segments: List[ScriptSegment] = Field(default_factory=list)
     total_duration_seconds: float = Field(default=0.0, ge=0.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    schema_version: str = "3.0.0"
+    schema_version: Literal["3.0.0", "4.1.0"] = "4.1.0"
 
     @model_validator(mode="after")
     def validate_unique_seq_ids(self) -> RecapScript:
@@ -588,6 +605,7 @@ class PanelItem(BaseModel):
     aspect_ratio: float = Field(gt=0.0)
     sha256: str
     status: PanelStatus = PanelStatus.ACTIVE
+    evidence_metadata: Dict[str, Any] = Field(default_factory=dict)
     ocr_text_en: Optional[str] = None
     notes: Optional[str] = None
 

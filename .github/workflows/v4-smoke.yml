@@ -24,8 +24,16 @@ jobs:
         run: git diff --check HEAD~1 HEAD
       - name: Install lightweight test dependencies
         run: pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx beautifulsoup4 python-dotenv huggingface_hub
+      - name: Install media validators
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Check frozen canonical contracts
+        run: PYTHONPATH=. python scripts/freeze_contracts.py --check
+      - name: Run canonical correctness checks (L1 and L2 only)
+        run: |
+          pytest -q tests/unit/test_series_setup.py tests/unit/test_visual_policy.py tests/unit/test_artifact_correctness.py tests/unit/test_canonical_workflow.py tests/unit/cloud/test_canonical_cloud.py tests/unit/test_tts_engine.py tests/unit/test_schemas.py
       - name: Run focused V4 contract tests
         run: |
           pytest -q tests/unit/test_series_setup.py tests/unit/test_hf_archive.py tests/unit/test_safe_cleanup.py tests/unit/test_kaggle_dual_t4.py
       - name: Run entire test suite for regression review
+        if: always()
         run: pytest -q --disable-warnings --maxfail=20

@@ -1046,6 +1046,8 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
 
 def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
     """Top-level dispatch router for `manga-recap youtube` subcommands."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("youtube", args)
     yt_action = getattr(args, "youtube_action", "metadata")
     if yt_action in ("metadata", "prepare"):
         return handle_youtube_metadata(args)

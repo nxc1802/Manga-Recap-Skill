@@ -1,0 +1,61 @@
+{
+  "$defs": {
+    "ReleaseState": {
+      "enum": [
+        "DRAFT",
+        "SETUP_VALID",
+        "SOURCE_READY",
+        "SCRIPT_READY",
+        "AUDIO_VALID",
+        "VISUAL_PLAN_VALID",
+        "RENDER_VALID",
+        "TECHNICALLY_VALID",
+        "HUMAN_APPROVED",
+        "PRODUCTION_READY",
+        "UPLOADED",
+        "YOUTUBE_VERIFIED",
+        "ARCHIVED",
+        "ARCHIVE_VERIFIED",
+        "RESTORE_VERIFIED",
+        "CLEANUP_ALLOWED"
+      ],
+      "title": "ReleaseState",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.1.0",
+      "default": "4.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "chapter_number": {
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/ReleaseState"
+    },
+    "evidence_hashes": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Evidence Hashes",
+      "type": "object"
+    }
+  },
+  "required": [
+    "project_slug",
+    "chapter_number",
+    "state",
+    "evidence_hashes"
+  ],
+  "title": "ReleaseRecord",
+  "type": "object"
+}

@@ -38,6 +38,8 @@ from src.core.utils import get_project_data_dir
 
 def handle_segment(args: argparse.Namespace) -> Dict[str, Any]:
     """Segments raw chapter images into panels and generates contact sheets."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("segment", args)
     project_slug = getattr(args, "project", "")
     chapter_num = getattr(args, "chapter", None)
     target_width = getattr(args, "target_width", 1080)

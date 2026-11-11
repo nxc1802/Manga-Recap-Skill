@@ -21,6 +21,17 @@ from src.core.storage import (
 from src.core.utils import get_project_data_dir
 
 
+def verified_completion(project_dir, chapter_num, claimed):
+    if not claimed:
+        return False, None
+    try:
+        from src.render.chapter_renderer import validate_existing_chapter
+        validate_existing_chapter(project_dir, chapter_num)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
 def handle_status(args: argparse.Namespace) -> Dict[str, Any]:
     """Queries project or chapter execution status and checkpoint state."""
     project_slug = getattr(args, "project", "")
@@ -78,7 +89,10 @@ def handle_status(args: argparse.Namespace) -> Dict[str, Any]:
             or (resumable_stage is None and meta.overall_status != CheckpointStatus.FAILED)
         )
 
+        is_complete, artifact_error = verified_completion(project_dir, chapter_arg, is_complete)
         return {
+            "artifact_valid": is_complete,
+            "artifact_error": artifact_error,
             "project_slug": project_slug,
             "chapter_number": str(chapter_arg),
             "overall_status": meta.overall_status.value,
@@ -101,12 +115,16 @@ def handle_status(args: argparse.Namespace) -> Dict[str, Any]:
                         c_data = read_json(c_json)
                         c_meta = ChapterMetadata.model_validate(c_data)
                         c_resumable = get_resumable_stage(chap_subdir)
+                        complete, artifact_error = verified_completion(project_dir, c_name,
+                            c_meta.overall_status == CheckpointStatus.COMPLETED or c_resumable is None)
                         chapter_summaries.append({
+                            "artifact_valid": complete,
+                            "artifact_error": artifact_error,
                             "chapter_number": c_name,
                             "overall_status": c_meta.overall_status.value,
                             "current_stage": c_meta.current_stage.value if c_meta.current_stage else None,
                             "resumable_stage": c_resumable.value if c_resumable else None,
-                            "is_complete": c_meta.overall_status == CheckpointStatus.COMPLETED or c_resumable is None,
+                            "is_complete": complete,
                         })
                     except Exception:
                         chapter_summaries.append({

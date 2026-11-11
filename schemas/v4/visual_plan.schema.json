@@ -1,0 +1,238 @@
+{
+  "$defs": {
+    "ProductionMotion": {
+      "enum": [
+        "static",
+        "slow_pan_down",
+        "static_focus"
+      ],
+      "title": "ProductionMotion",
+      "type": "string"
+    },
+    "Region": {
+      "additionalProperties": false,
+      "properties": {
+        "x_min": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "X Min",
+          "type": "number"
+        },
+        "y_min": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Y Min",
+          "type": "number"
+        },
+        "x_max": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "X Max",
+          "type": "number"
+        },
+        "y_max": {
+          "default": 1,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Y Max",
+          "type": "number"
+        }
+      },
+      "title": "Region",
+      "type": "object"
+    },
+    "Shot": {
+      "additionalProperties": false,
+      "properties": {
+        "shot_id": {
+          "minLength": 1,
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "segment_id": {
+          "minLength": 1,
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "source_panel_id": {
+          "minLength": 1,
+          "title": "Source Panel Id",
+          "type": "string"
+        },
+        "substitute_panel_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Substitute Panel Id"
+        },
+        "source_box": {
+          "$ref": "#/$defs/Region"
+        },
+        "focus_regions": {
+          "items": {
+            "$ref": "#/$defs/Region"
+          },
+          "title": "Focus Regions",
+          "type": "array"
+        },
+        "avoid_regions": {
+          "items": {
+            "$ref": "#/$defs/Region"
+          },
+          "title": "Avoid Regions",
+          "type": "array"
+        },
+        "visual_role": {
+          "$ref": "#/$defs/VisualRole",
+          "default": "show"
+        },
+        "visual_omit_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Visual Omit Reason"
+        },
+        "substitution_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Substitution Reason"
+        },
+        "motion_type": {
+          "$ref": "#/$defs/ProductionMotion",
+          "default": "static"
+        },
+        "scroll_fraction_per_second": {
+          "default": 0,
+          "maximum": 0.12,
+          "minimum": 0,
+          "title": "Scroll Fraction Per Second",
+          "type": "number"
+        },
+        "duration_sec": {
+          "exclusiveMinimum": 0,
+          "title": "Duration Sec",
+          "type": "number"
+        }
+      },
+      "required": [
+        "shot_id",
+        "segment_id",
+        "source_panel_id",
+        "duration_sec"
+      ],
+      "title": "Shot",
+      "type": "object"
+    },
+    "VisualRole": {
+      "enum": [
+        "show",
+        "context_only",
+        "omit_visual"
+      ],
+      "title": "VisualRole",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.1.0",
+      "default": "4.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "chapter_number": {
+      "minLength": 1,
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "input_fingerprint": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Input Fingerprint"
+    },
+    "motion_enabled": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Motion Enabled"
+    },
+    "shots": {
+      "items": {
+        "$ref": "#/$defs/Shot"
+      },
+      "minItems": 1,
+      "title": "Shots",
+      "type": "array"
+    },
+    "target_width": {
+      "default": 1920,
+      "exclusiveMinimum": 0,
+      "multipleOf": 2,
+      "title": "Target Width",
+      "type": "integer"
+    },
+    "target_height": {
+      "default": 1080,
+      "exclusiveMinimum": 0,
+      "multipleOf": 2,
+      "title": "Target Height",
+      "type": "integer"
+    },
+    "fps": {
+      "default": 30,
+      "maximum": 60,
+      "minimum": 1,
+      "title": "Fps",
+      "type": "integer"
+    },
+    "total_duration_sec": {
+      "exclusiveMinimum": 0,
+      "title": "Total Duration Sec",
+      "type": "number"
+    }
+  },
+  "required": [
+    "chapter_number",
+    "shots",
+    "total_duration_sec"
+  ],
+  "title": "VisualPlan",
+  "type": "object"
+}

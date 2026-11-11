@@ -1,5 +1,7 @@
 # Manga Recap Agentic Skill V3
 
+> V4 correctness work is **draft**, with real chapter and live Kaggle gates pending. See [current evidence and blockers](docs/V4_Correctness_Status.md). Unit fixtures and test counts are not production verification.
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Architecture](https://img.shields.io/badge/architecture-Agent--Native%20Decoupled-green.svg)](docs/V4_Correctness_Improvement_Plan.md)
 [![Audio](https://img.shields.io/badge/TTS-VieNeu--TTS%20v3%20Turbo%20Local-orange.svg)](docs/lab/index.html)

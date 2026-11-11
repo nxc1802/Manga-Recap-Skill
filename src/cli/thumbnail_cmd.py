@@ -57,6 +57,8 @@ def _resolve_panel_path(chap_dir: Path, panel_ref: Optional[str]) -> Optional[Pa
 
 def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
     """Handles the 'thumbnail' CLI subcommand."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("thumbnail", args)
     project_slug = getattr(args, "project", "")
     if not project_slug:
         raise CliValidationError("Project slug is required (-p/--project).")
@@ -104,15 +106,14 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
         }
 
     # 2. Composition Mode
-    # Auto-resolve top candidates if --auto flag is provided without specific panels
-    if getattr(args, "auto", False) and not center_arg:
-        candidates = scan_thumbnail_candidates(panels_dir, limit=3)
-        if candidates:
-            center_arg = candidates[0]["panel_id"]
-            if len(candidates) > 1:
-                left_arg = candidates[1]["panel_id"]
-            if len(candidates) > 2:
-                right_arg = candidates[2]["panel_id"]
+    from src.core.series_setup import require_series_setup, _normalize_bool
+    setup = require_series_setup(project_slug)
+    if _normalize_bool(setup.answers["Q07"].user_answer) is not True:
+        raise CliValidationError("Thumbnail composition requires explicit Q07 enablement")
+    if getattr(args, "auto", False):
+        raise CliValidationError("Select source panels explicitly; --auto cannot satisfy the thumbnail detail gate")
+    if getattr(args, "upload", False):
+        raise CliValidationError("Use the YouTube publishing flow with explicit channel selection; thumbnail --upload is disabled")
 
     left_path = _resolve_panel_path(chap_dir, left_arg)
     center_path = _resolve_panel_path(chap_dir, center_arg)
@@ -127,11 +128,19 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
     title = getattr(args, "title", None)
     subtitle = getattr(args, "subtitle", None)
     badge = getattr(args, "badge", None)
-    if badge is None and has_text:
-        badge = f"TẬP {chapter_num} | MANGA RECAP"
 
     font_hint = getattr(args, "font", None)
-    color_preset = getattr(args, "color_preset", "yellow_black")
+    color_preset = getattr(args, "color_preset", None)
+    if has_text and (not title or not color_preset):
+        raise CliValidationError("Choose --title and --color-preset explicitly, or --no-text")
+    from src.core.storage import load_manifest
+    from src.render.visual_policy import evidence_path
+    manifest = load_manifest(chap_dir)
+    approved_paths = {evidence_path(chap_dir, panel).resolve() for panel in manifest.panels}
+    for selected in (left_path, center_path, right_path):
+        if selected and selected.resolve() not in approved_paths:
+            raise CliValidationError("Thumbnail source must be verified chapter evidence")
+
     stroke_width = getattr(args, "stroke_width", 6)
 
     # Target output paths
@@ -156,13 +165,23 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
         subtitle=subtitle,
         badge=badge,
         font_hint=font_hint,
-        color_preset=color_preset,
+        color_preset=color_preset or "yellow_black",
         stroke_width=stroke_width,
         output_path=final_thumb_p,
     )
 
     # Sync copy to chapter internal dir
     shutil.copy2(final_thumb_p, chap_thumb_p)
+    from src.core.storage import atomic_write_json
+    from src.render.artifact_validation import fingerprint
+    atomic_write_json(chap_dir / "thumbnail_selection.json", {
+        "schema_version": "4.1.0", "selection_source": "explicit_cli_arguments",
+        "panels": {str(path.resolve().relative_to(chap_dir.resolve())): fingerprint(path)
+                   for path in (left_path, center_path, right_path) if path},
+        "title": title, "subtitle": subtitle, "badge": badge,
+        "has_text": has_text, "color_preset": color_preset, "font": font_hint,
+        "artifact_sha256": fingerprint(chap_thumb_p),
+    })
 
     upload_result = None
     if getattr(args, "upload", False):

@@ -104,6 +104,8 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
       allowing subsequent chapters to proceed without crashing the process.
     - Single-Chapter Retry: --retry-chapter resumes only specified chapter.
     """
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("batch", args)
     project_slug = getattr(args, "project", "")
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required for batch processing.")
@@ -194,6 +196,8 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 with contextlib.suppress(Exception):
                     meta = load_chapter_metadata(chap_dir)
                     if meta.overall_status == CheckpointStatus.COMPLETED:
+                        from src.render.chapter_renderer import validate_existing_chapter
+                        validate_existing_chapter(project_dir, chap_num)
                         cached_chaps.append(str(chap_num))
                         vid_path = chap_dir / "video" / f"chapter_{chap_num}_final.mp4"
                         if not vid_path.exists():
@@ -246,7 +250,11 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.RUNNING)
                 update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
 
-            if getattr(args, "kaggle", False):
+            if getattr(args, "kaggle", False) and str(chap_num) == "1":
+                # Full-series production promotes the reviewed chapter-one file;
+                # it must never replace that review with a newly generated preview.
+                render_res = handle_render(argparse.Namespace(project=project_slug, chapter="1", quality="final"))
+            elif getattr(args, "kaggle", False):
                 logger.info(f"[Batch] Offloading Chapter {chap_num} to Kaggle Cloud GPU (TTS + Hardware NVENC)...")
                 from src.cloud.kaggle_service import KaggleCloudService
                 service = KaggleCloudService()
@@ -290,9 +298,9 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     hw_accel=getattr(args, "hw_accel", None),
                     workers=getattr(args, "render_workers", getattr(args, "workers", None)),
                     bgm=getattr(args, "bgm", None),
-                    burn_subtitles=getattr(args, "burn_subtitles", True),
-                    animation=getattr(args, "animation", True),
-                    video_mode=getattr(args, "video_mode", "auto"),
+                    burn_subtitles=getattr(args, "burn_subtitles", None),
+                    animation=getattr(args, "animation", None),
+                    video_mode=getattr(args, "video_mode", None),
                     force=force,
                     skip_preview=skip_preview,
                     approved=True,
@@ -390,7 +398,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 logger.error(f"[Batch] Compilation failed: {comp_err}")
                 compile_result = {"error": str(comp_err)}
 
-    all_succeeded = len(failed_chaps) == 0
+    all_succeeded = len(failed_chaps) == 0 and not (compile_result and compile_result.get("error"))
     return {
         "success": all_succeeded,
         "project_slug": project_slug,

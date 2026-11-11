@@ -215,3 +215,53 @@ def test_in_memory_wav_encoding_and_caching(tmp_path):
     assert cached[1] == csum
 
 
+
+
+def test_neural_adapter_uses_native_sdk_sample_rate(tmp_path):
+    """Unit SDK fixture only: verifies rate handling, not real neural synthesis."""
+    import numpy as np
+    from src.tts.engine import NeuralTTSBackend
+    from src.render.artifact_validation import validate_audio
+    backend = object.__new__(NeuralTTSBackend)
+    backend._infer_lock = __import__("threading").Lock()
+    backend.total_inference_seconds = 0.0
+    backend.utterance_count = 0
+
+    class FixtureSDK:
+        def infer(self, **_):
+            return {"native_signal": True}  # Deliberately not a numpy waveform.
+        def save(self, result, path):
+            assert result == {"native_signal": True}
+            with wave.open(str(path), "wb") as stream:
+                stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(24000)
+                stream.writeframes((np.sin(np.arange(2400)/10)*2000).astype("<i2").tobytes())
+
+    backend._sdk = FixtureSDK()
+    path = tmp_path / "normalized.wav"
+    duration = backend.synthesize("unit", "Ngọc Huyền", path)
+    report = validate_audio(path)
+    assert report["sample_rate"] == 48000
+    assert duration == pytest.approx(0.1, abs=0.001)
+    assert not list(tmp_path.glob("*.native.wav"))
+
+
+def test_neural_zero_pcm_never_replaces_existing_output(tmp_path):
+    """A failed neural backend cannot overwrite an existing valid utterance."""
+    from src.tts.engine import VieNeuEngine
+    from src.render.artifact_validation import ArtifactValidationError
+    engine = object.__new__(VieNeuEngine)
+
+    class InvalidBackend:
+        def synthesize(self, output_path, **_):
+            with wave.open(str(output_path), "wb") as stream:
+                stream.setnchannels(1); stream.setsampwidth(2); stream.setframerate(48000)
+                stream.writeframes(bytes(9600))
+            return 0.1
+
+    engine.backend = InvalidBackend()
+    path = tmp_path / "preserved.wav"
+    path.write_bytes(b"existing sentinel, never a production artifact")
+    original = path.read_bytes()
+    with pytest.raises(ArtifactValidationError):
+        engine.synthesize_utterance("unit", "Ngọc Huyền", path)
+    assert path.read_bytes() == original

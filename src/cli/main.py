@@ -72,6 +72,17 @@ def build_parser() -> JsonAwareArgumentParser:
 
     subparsers = parser.add_subparsers(dest="subcommand", title="subcommands", required=True)
 
+    p_plan = subparsers.add_parser("visual-plan", help="Generate or regenerate canonical shots from source/audio evidence", parents=[common_parent])
+    p_plan.add_argument("-p", "--project", required=True)
+    p_plan.add_argument("-c", "--chapter", required=True)
+    p_plan.add_argument("--regenerate", action="store_true")
+
+    p_review = subparsers.add_parser("review-approve", help="Record explicit human approval of an exact preview", parents=[common_parent])
+    p_review.add_argument("-p", "--project", required=True)
+    p_review.add_argument("--reviewer", required=True)
+    p_review.add_argument("--config-fingerprint", required=True)
+    p_review.add_argument("--artifact-hash", required=True)
+
     # 1. inspect
     p_inspect = subparsers.add_parser("inspect", help="Inspect project or chapter assets and metrics", parents=[common_parent])
     p_inspect.add_argument("-p", "--project", required=True, help="Project slug")
@@ -142,10 +153,10 @@ def build_parser() -> JsonAwareArgumentParser:
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
     p_ren.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
-    p_ren.add_argument("--skip-review", action="store_true", help="Skip human review gate verification (deprecated for final render)")
-    p_ren.add_argument("--skip-preview", action="store_true", help="Skip Review Gate 2 preview requirement and render final 1080p directly")
-    p_ren.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
-    p_ren.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder images/silence if assets are missing (testing only)")
+    p_ren.add_argument("--skip-review", action="store_true", help="Deprecated compatibility flag; never bypasses approval")
+    p_ren.add_argument("--skip-preview", action="store_true", help="Compatibility flag; never bypasses Chapter 1 approval")
+    p_ren.add_argument("--approved", action="store_true", help="Compatibility flag; approval must be recorded with review-approve")
+    p_ren.add_argument("--allow-placeholders", action="store_true", help="Deprecated; production rejects placeholder artifacts")
     p_ren.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
     p_ren.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
     p_ren.add_argument("--hw-accel", choices=["none", "videotoolbox", "auto"], default=None, help="Hardware acceleration encoder")
@@ -160,7 +171,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_com.add_argument("-p", "--project", required=True, help="Project slug")
     p_com.add_argument("--chapters", default=None, help="Comma-separated chapter numbers")
     p_com.add_argument("-o", "--output", default=None, help="Output final video path")
-    p_com.add_argument("--approved", action="store_true", help="Explicitly approve Review Gate 1 (Voice) and Gate 2 (Preview) for automated/programmatic runs")
+    p_com.add_argument("--approved", action="store_true", help="Compatibility flag; approval must be recorded with review-approve")
     p_com.add_argument("--extract-audio", action=argparse.BooleanOptionalAction, default=True, help="Extract master WAV")
 
     # 9. batch
@@ -176,9 +187,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("--voice", default=None, help="Voice name override")
     p_bat.add_argument("--speed", type=float, default=None, help="TTS speed override")
     p_bat.add_argument("--bgm", default=None, help="BGM audio file path")
-    p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video mode")
-    p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles")
-    p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video mode")
+    p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles")
+    p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
     p_bat.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Maximum subtitle lines per cue")
     p_bat.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle base font size at 1280px")
     p_bat.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy")
@@ -231,9 +242,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers (default: 2)")
     p_prod.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
     p_prod.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality (default: final)")
-    p_prod.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video framing mode")
-    p_prod.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=True, help="Burn subtitles directly onto video frames")
-    p_prod.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable cinematic camera motion animations")
+    p_prod.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video framing mode")
+    p_prod.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles directly onto video frames")
+    p_prod.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
     p_prod.add_argument("--bgm", default=None, help="Background music audio file path")
     p_prod.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
     p_prod.add_argument("--export-bundle", action=argparse.BooleanOptionalAction, default=True, help="Stage complete export bundle (default: True)")
@@ -241,9 +252,9 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--force", action="store_true", help="Force re-execution of completed stages")
     p_prod.add_argument("--voice", default=None, help="Voice override")
     p_prod.add_argument("--speed", type=float, default=None, help="Speed override")
-    p_prod.add_argument("--subtitle-lines", type=int, default=1, choices=[1, 2], help="Subtitle max lines")
-    p_prod.add_argument("--subtitle-font-size", type=int, default=26, help="Subtitle font size")
-    p_prod.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default="sentence-aware", help="Subtitle chunking strategy")
+    p_prod.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Subtitle max lines")
+    p_prod.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle font size")
+    p_prod.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy")
 
     # 14. cloud
     p_cld = subparsers.add_parser("cloud", help="Kaggle/Remote Cloud GPU runner for extreme speed", parents=[common_parent])
@@ -304,7 +315,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_th.add_argument("--badge", default=None, help="Top-left badge text override (e.g. 'TẬP 1 | MANGA RECAP')")
     p_th.add_argument("--no-text", action="store_true", help="Render pure artwork thumbnail without any typography overlay")
     p_th.add_argument("--font", default=None, help="Custom TrueType/OpenType font path override")
-    p_th.add_argument("--color-preset", choices=["yellow_black", "red_white", "cyan_black", "gold_luxury", "white_clean"], default="yellow_black", help="Color palette preset")
+    p_th.add_argument("--color-preset", choices=["yellow_black", "red_white", "cyan_black", "gold_luxury", "white_clean"], default=None, help="Color palette preset")
     p_th.add_argument("--stroke-width", type=int, default=6, help="Text outer stroke width in pixels")
     p_th.add_argument("--output", default=None, help="Custom destination image file path")
     p_th.add_argument("--upload", action="store_true", help="Update thumbnail on YouTube for this chapter immediately")
@@ -330,7 +341,31 @@ def build_parser() -> JsonAwareArgumentParser:
 
 
 def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy(subcommand, args)
+    result = _dispatch_subcommand(subcommand, args)
+    if isinstance(result, dict) and (result.get("status") == "error" or result.get("success") is False):
+        message = str(result.get("error") or result.get("failed") or "Required command work failed")
+        code = result.get("exit_code", 1)
+        if code == 2:
+            raise CliValidationError(message, data=result)
+        if code == 4:
+            raise DependencyNotFoundError(message)
+        if code == 3:
+            raise OSError(message)
+        raise RuntimeError(message)
+    return result
+
+
+def _dispatch_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, Any]:
     """Dispatches parsed arguments to command implementations."""
+    if subcommand == "visual-plan":
+        from src.cli.visual_plan_cmd import handle_visual_plan
+        return handle_visual_plan(args)
+    if subcommand == "review-approve":
+        from src.core.human_review import approve_preview
+        from src.core.storage import get_project_dir
+        return approve_preview(get_project_dir(args.project), args.reviewer, args.config_fingerprint, args.artifact_hash).model_dump(mode="json")
     if subcommand == "inspect":
         from src.cli.inspect_cmd import handle_inspect
         return handle_inspect(args)
@@ -404,7 +439,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "thumbnail", "archive", "setup"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "thumbnail", "archive", "setup"
         }:
             detected_subcommand = arg
             break

@@ -15,6 +15,8 @@ from src.core.logger import logger
 
 def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
     """Handles manga-recap cloud commands."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("cloud", args)
     subaction = getattr(args, "cloud_action", "run")
 
     service = KaggleCloudService()

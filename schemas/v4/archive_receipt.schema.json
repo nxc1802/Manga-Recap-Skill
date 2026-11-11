@@ -1,0 +1,135 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.0.0",
+      "default": "4.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "receipt_type": {
+      "const": "huggingface_archive",
+      "default": "huggingface_archive",
+      "title": "Receipt Type",
+      "type": "string"
+    },
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "repo_id": {
+      "title": "Repo Id",
+      "type": "string"
+    },
+    "commit_sha": {
+      "pattern": "^[a-f0-9]{40}$",
+      "title": "Commit Sha",
+      "type": "string"
+    },
+    "remote_url": {
+      "title": "Remote Url",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "verified_file_count": {
+      "minimum": 0,
+      "title": "Verified File Count",
+      "type": "integer"
+    },
+    "total_bytes": {
+      "minimum": 0,
+      "title": "Total Bytes",
+      "type": "integer"
+    },
+    "manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "uploaded",
+        "verified"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "verification_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verification Revision"
+    },
+    "last_verified_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Verified At"
+    },
+    "restore_verified_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restore Verified At"
+    },
+    "restored_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restored Revision"
+    },
+    "restored_verified_files": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restored Verified Files"
+    }
+  },
+  "required": [
+    "project_slug",
+    "repo_id",
+    "commit_sha",
+    "remote_url",
+    "created_at",
+    "verified_file_count",
+    "total_bytes",
+    "manifest_sha256",
+    "status"
+  ],
+  "title": "ArchiveReceipt",
+  "type": "object"
+}

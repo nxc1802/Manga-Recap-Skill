@@ -38,6 +38,8 @@ from src.cli.youtube_cmd import format_seconds_to_timestamp
 
 def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
     """Concatenates multiple chapter videos into a continuous full recap video."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("compile", args)
     if not shutil.which("ffmpeg"):
         raise DependencyNotFoundError("FFmpeg executable not found on system PATH. Please install FFmpeg.")
 
@@ -120,6 +122,8 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
             )
 
     for c_num, vid_path in chapter_videos.items():
+        from src.render.chapter_renderer import validate_existing_chapter
+        validate_existing_chapter(project_dir, c_num, video_path=vid_path)
         if "preview" in vid_path.name.lower() and "final" not in vid_path.name.lower():
             raise StorageFileNotFoundError(
                 f"Chapter {c_num} video '{vid_path.name}' is a preview video. "

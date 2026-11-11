@@ -1,0 +1,469 @@
+{
+  "$defs": {
+    "CameraMotionType": {
+      "description": "Cinematic camera motion modes supported by Video Engine V2.",
+      "enum": [
+        "static",
+        "slow_pan_down",
+        "static_focus",
+        "pan_left",
+        "pan_right",
+        "pan_up",
+        "pan_down",
+        "zoom_in",
+        "zoom_out",
+        "focus_crop",
+        "vertical_scroll",
+        "content_aware_scroll",
+        "subject_pan"
+      ],
+      "title": "CameraMotionType",
+      "type": "string"
+    },
+    "FocusBox": {
+      "additionalProperties": false,
+      "description": "Normalized bounding box [x_min, y_min, x_max, y_max] in 0.0 - 1.0 range.\nSupports backward-compatibility coordinate conversions (focus_x, focus_y, crop_scale).",
+      "properties": {
+        "x_min": {
+          "default": 0.0,
+          "description": "Normalized left coordinate (0.0 - 1.0)",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X Min",
+          "type": "number"
+        },
+        "y_min": {
+          "default": 0.0,
+          "description": "Normalized top coordinate (0.0 - 1.0)",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y Min",
+          "type": "number"
+        },
+        "x_max": {
+          "default": 1.0,
+          "description": "Normalized right coordinate (0.0 - 1.0)",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "X Max",
+          "type": "number"
+        },
+        "y_max": {
+          "default": 1.0,
+          "description": "Normalized bottom coordinate (0.0 - 1.0)",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Y Max",
+          "type": "number"
+        }
+      },
+      "title": "FocusBox",
+      "type": "object"
+    },
+    "ScriptSegment": {
+      "additionalProperties": false,
+      "description": "An individual narration utterance mapped to visual panels.",
+      "properties": {
+        "seq_id": {
+          "description": "Unique segment sequence string, e.g. '001', '002_1'",
+          "title": "Seq Id",
+          "type": "string"
+        },
+        "panel_ids": {
+          "description": "Referenced panel filenames or IDs",
+          "items": {
+            "type": "string"
+          },
+          "title": "Panel Ids",
+          "type": "array"
+        },
+        "evidence_panel_ids": {
+          "description": "Source evidence, independent of rendering shots",
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Panel Ids",
+          "type": "array"
+        },
+        "narrator_text": {
+          "description": "Vietnamese narration text",
+          "minLength": 1,
+          "title": "Narrator Text",
+          "type": "string"
+        },
+        "character": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Character speaker name or None for narrator",
+          "title": "Character"
+        },
+        "emotion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "neutral",
+          "description": "Emotion intent: neutral, dramatic, sad, excited, etc.",
+          "title": "Emotion"
+        },
+        "emotion_cue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Audible cue: [cười], [thở dài], [hắng giọng], or None",
+          "title": "Emotion Cue"
+        },
+        "voice_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "VieNeu preset voice ID explicitly assigned to segment",
+          "title": "Voice Id"
+        },
+        "synthesized_voice": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Voice ID used during last TTS synthesis",
+          "title": "Synthesized Voice"
+        },
+        "voice_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "'manual' if set by Agent, 'tts' if auto-saved by TTS, 'approved' if from approval",
+          "title": "Voice Source"
+        },
+        "camera_motion": {
+          "$ref": "#/$defs/CameraMotionType",
+          "default": "static"
+        },
+        "focus_box": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FocusBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "shots": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/VisualShot"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Detailed multi-shot plan for segment",
+          "title": "Shots"
+        },
+        "duration": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Measured waveform duration in seconds",
+          "title": "Duration"
+        },
+        "audio_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative path to synthesized utterance WAV",
+          "title": "Audio Path"
+        },
+        "checksum": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SHA-256 fingerprint of utterance audio/text",
+          "title": "Checksum"
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "SHA-256 fingerprint of (text + voice + speed + emotion + cue + engine)",
+          "title": "Fingerprint"
+        },
+        "status": {
+          "default": "pending",
+          "description": "Segment status: pending, synthesized, verified, needs_review",
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "seq_id",
+        "narrator_text"
+      ],
+      "title": "ScriptSegment",
+      "type": "object"
+    },
+    "SourceKind": {
+      "enum": [
+        "panel",
+        "raw_region",
+        "stitched"
+      ],
+      "title": "SourceKind",
+      "type": "string"
+    },
+    "SourceRegion": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SourceKind",
+          "default": "panel"
+        },
+        "panel_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Panel Id"
+        },
+        "image_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Id"
+        },
+        "sub_box": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sub Box"
+        }
+      },
+      "title": "SourceRegion",
+      "type": "object"
+    },
+    "VisualShot": {
+      "properties": {
+        "shot_id": {
+          "default": "01",
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceRegion"
+        },
+        "focus_box": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FocusBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subject"
+        },
+        "motion": {
+          "$ref": "#/$defs/CameraMotionType",
+          "default": "static_focus"
+        },
+        "duration_ratio": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Duration Ratio",
+          "type": "number"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "title": "VisualShot",
+      "type": "object"
+    },
+    "VoiceStrategy": {
+      "description": "Narration and voice assignment strategy.",
+      "enum": [
+        "single_narrator",
+        "emotion_aware",
+        "narrator_and_characters"
+      ],
+      "title": "VoiceStrategy",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Schema for data/projects/<project_slug>/chapters/<chapter_num>/script.json.",
+  "properties": {
+    "project_slug": {
+      "default": "",
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "chapter_number": {
+      "default": "1",
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "title": {
+      "default": "Untitled Chapter",
+      "title": "Title",
+      "type": "string"
+    },
+    "voice_strategy": {
+      "$ref": "#/$defs/VoiceStrategy",
+      "default": "single_narrator"
+    },
+    "default_voice": {
+      "default": "Ngọc Huyền",
+      "title": "Default Voice",
+      "type": "string"
+    },
+    "segments": {
+      "items": {
+        "$ref": "#/$defs/ScriptSegment"
+      },
+      "title": "Segments",
+      "type": "array"
+    },
+    "total_duration_seconds": {
+      "default": 0.0,
+      "minimum": 0.0,
+      "title": "Total Duration Seconds",
+      "type": "number"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": "4.1.0",
+      "enum": [
+        "3.0.0",
+        "4.1.0"
+      ],
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "title": "RecapScript",
+  "type": "object"
+}

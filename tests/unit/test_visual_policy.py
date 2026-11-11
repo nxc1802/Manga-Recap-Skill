@@ -1,386 +1,160 @@
-"""
-tests/unit/test_visual_policy.py
-Comprehensive unit test suite for Canonical Visual Policy Engine (PR-02 V4).
-Tests VisualRole, Shot, VisualPlan, tall panel decomposition (0.65 <= W/H <= 2.0),
-blank/text-only band detection, approved shot substitution, and canonical plan generation.
-"""
-
-import json
+"""Canonical V4 correctness contracts. Fixtures are unit inputs, never production evidence."""
 from pathlib import Path
-from PIL import Image
+import copy
 import numpy as np
 import pytest
-
-from src.core.schemas import (
-    CameraMotionType,
-    FocusBox,
-    PanelItem,
-    PanelManifest,
-    PanelStatus,
-    RecapScript,
-    ScriptSegment,
-)
-from src.render.visual_policy import (
-    Shot,
-    VisualPlan,
-    VisualRole,
-    decompose_tall_panel,
-    detect_omit_visual_band,
-    generate_visual_plan,
-    is_tall_panel,
-)
+from PIL import Image
+from pydantic import ValidationError
+from src.core.schemas import PanelItem, PanelManifest, ScriptSegment, RecapScript, CameraMotionType
+from src.core.visual_contract import Shot, VisualPlan, Region, ProductionMotion
+from src.core.storage import calculate_sha256
+from src.render.visual_policy import is_tall_panel, decompose_tall_panel, generate_visual_plan
+from src.render.visual_plan_renderer import render_frame, frame_schedule
 
 
-class TestVisualPolicyModels:
-    """Tests for VisualRole, Shot, and VisualPlan data structures and validation."""
-
-    def test_visual_role_enum_values(self):
-        assert VisualRole.SHOW == "show"
-        assert VisualRole.CONTEXT_ONLY == "context_only"
-        assert VisualRole.OMIT_VISUAL == "omit_visual"
-
-    def test_shot_instantiation_defaults(self):
-        shot = Shot(
-            shot_id="shot_001",
-            source_panel_id="panel_001",
-        )
-        assert shot.shot_id == "shot_001"
-        assert shot.source_panel_id == "panel_001"
-        assert shot.visual_role == VisualRole.SHOW
-        assert shot.visual_omit_reason is None
-        assert shot.substitute_panel_id is None
-        assert shot.motion_type == CameraMotionType.STATIC
-        assert shot.speed_px_per_sec == 0.0
-        assert shot.duration_sec == 0.0
-        assert shot.source_box.x_min == 0.0
-        assert shot.source_box.y_max == 1.0
-
-    def test_shot_omit_visual_with_reason_and_substitute(self):
-        shot = Shot(
-            shot_id="shot_002",
-            source_panel_id="panel_002",
-            visual_role=VisualRole.OMIT_VISUAL,
-            visual_omit_reason="blank_band",
-            substitute_panel_id="panel_001",
-            duration_sec=2.5,
-        )
-        assert shot.visual_role == VisualRole.OMIT_VISUAL
-        assert shot.visual_omit_reason == "blank_band"
-        assert shot.substitute_panel_id == "panel_001"
-        assert shot.duration_sec == 2.5
-
-    def test_visual_plan_save_and_load_roundtrip(self, tmp_path):
-        shot1 = Shot(
-            shot_id="shot_001",
-            source_panel_id="panel_001",
-            visual_role=VisualRole.SHOW,
-            source_box=FocusBox(x_min=0.0, y_min=0.0, x_max=1.0, y_max=0.55),
-            duration_sec=3.0,
-            segment_id="001",
-        )
-        shot2 = Shot(
-            shot_id="shot_002",
-            source_panel_id="panel_001",
-            visual_role=VisualRole.SHOW,
-            source_box=FocusBox(x_min=0.0, y_min=0.45, x_max=1.0, y_max=1.0),
-            duration_sec=3.0,
-            segment_id="001",
-        )
-        plan = VisualPlan(
-            chapter_number="1",
-            shots=[shot1, shot2],
-            panel_to_shots_map={"panel_001": ["shot_001", "shot_002"]},
-            total_duration_sec=6.0,
-        )
-
-        plan_file = tmp_path / "visual_plan.json"
-        saved_p = plan.save(plan_file)
-        assert saved_p.exists()
-
-        loaded_plan = VisualPlan.load(plan_file)
-        assert loaded_plan.chapter_number == "1"
-        assert len(loaded_plan.shots) == 2
-        assert loaded_plan.total_duration_sec == 6.0
-        assert loaded_plan.panel_to_shots_map["panel_001"] == ["shot_001", "shot_002"]
-
-        # Helper method lookups
-        seg_shots = loaded_plan.get_shots_for_segment("001")
-        assert len(seg_shots) == 2
-        panel_shots = loaded_plan.get_shots_for_panel("panel_001")
-        assert len(panel_shots) == 2
+@pytest.fixture
+def evidence(tmp_path):
+    (tmp_path / "panels").mkdir()
+    panels = []
+    for i, height in enumerate((200, 500, 200), 1):
+        path = tmp_path / "panels" / f"p{i}.png"
+        pixels = np.tile(np.arange(200, dtype=np.uint8), (height, 1))
+        Image.fromarray(pixels).convert("RGB").save(path)
+        panels.append(PanelItem(panel_id=f"p{i}", sequence_number=i, filename=path.name,
+            relative_path=f"panels/{path.name}", source_image="page1.png", crop_box=(0, 0, 200, height),
+            width=200, height=height, aspect_ratio=200/height, sha256=calculate_sha256(path),
+            evidence_metadata={"text_detection_uncertain": False}))
+    manifest = PanelManifest(project_slug="unit", chapter_number="1", panels=panels)
+    script = RecapScript(project_slug="unit", chapter_number="1", segments=[
+        ScriptSegment(seq_id="a", evidence_panel_ids=["p1", "p2"], narrator_text="unit narration", duration=2)])
+    return tmp_path, manifest, script
 
 
-class TestTallPanelDecomposition:
-    """Tests for tall panel detection and bounded sub-panel slicing (0.65 <= W/H <= 2.0)."""
-
-    def test_is_tall_panel_threshold(self):
-        # 1080x1080 (AR = 1.0, H/W = 1.0) -> Not tall
-        assert not is_tall_panel(1080, 1080, threshold_h_over_w=2.0)
-        # 1080x2160 (AR = 0.5, H/W = 2.0) -> Not tall (at boundary)
-        assert not is_tall_panel(1080, 2160, threshold_h_over_w=2.0)
-        # 1080x2161 (H/W > 2.0) -> Tall
-        assert is_tall_panel(1080, 2161, threshold_h_over_w=2.0)
-        # 1080x3500 (H/W = 3.24) -> Tall
-        assert is_tall_panel(1080, 3500, threshold_h_over_w=2.0)
-
-    def test_decompose_normal_panel_returns_full_box(self):
-        boxes = decompose_tall_panel("panel_001", width=1080, height=1500)
-        assert len(boxes) == 1
-        assert boxes[0].x_min == 0.0
-        assert boxes[0].y_min == 0.0
-        assert boxes[0].x_max == 1.0
-        assert boxes[0].y_max == 1.0
-
-    def test_decompose_tall_panel_aspect_ratio_bounds(self):
-        # Test varying tall heights (2.4x, 3.0x, 4.0x width)
-        for h_mult in [2.4, 3.0, 4.0]:
-            width = 1080
-            height = int(round(width * h_mult))
-            boxes = decompose_tall_panel("tall_panel", width=width, height=height)
-
-            # Must have at least 2 slices
-            assert len(boxes) >= 2, f"Failed for h_mult={h_mult}"
-
-            # Check each slice properties
-            for i, box in enumerate(boxes):
-                sub_w_px = width * (box.x_max - box.x_min)
-                sub_h_px = height * (box.y_max - box.y_min)
-                sub_ar = sub_w_px / sub_h_px
-
-                # Requirement: 0.65 <= W/H <= 2.0
-                assert 0.65 <= sub_ar <= 2.0, (
-                    f"Slice {i} aspect ratio {sub_ar:.3f} outside [0.65, 2.0] for H/W={h_mult}"
-                )
-
-                # FocusBox constraints: w >= 0.35, h >= 0.05
-                assert (box.x_max - box.x_min) >= 0.35
-                assert (box.y_max - box.y_min) >= 0.05
-
-            # Verify strictly monotonic top-to-bottom reading progression
-            for i in range(len(boxes) - 1):
-                assert boxes[i + 1].y_min > boxes[i].y_min, "Slices must strictly progress downward"
-                assert boxes[i + 1].y_max > boxes[i].y_max, "Slices must strictly progress downward"
-                # Verify overlap between consecutive slices (no gap)
-                assert boxes[i].y_max > boxes[i + 1].y_min, (
-                    f"Missing overlap between slice {i} and {i+1}"
-                )
-
-            # First slice starts at top, last slice ends at bottom
-            assert boxes[0].y_min == 0.0
-            assert boxes[-1].y_max == 1.0
+@pytest.mark.parametrize("ratio,tall", [(2.39, False), (2.4, False), (2.41, True), (1000, True)])
+def test_frozen_tall_boundary_and_monotonic_decomposition(ratio, tall):
+    assert is_tall_panel(100, ratio * 100) is tall
+    boxes = decompose_tall_panel("p", 100, ratio * 100)
+    assert boxes[0].y_min == 0
+    assert boxes[-1].y_max == pytest.approx(1)
+    assert all(a.y_min < b.y_min for a, b in zip(boxes, boxes[1:]))
+    assert all(a.y_max >= b.y_min for a, b in zip(boxes, boxes[1:]))
+    assert (len(boxes) > 1) is tall
 
 
-class TestDetectOmitVisualBand:
-    """Tests for classifying blank bands, tiny slivers, and text-only content."""
-
-    def test_detect_blank_white_band(self, tmp_path):
-        # Solid white image (variance = 0)
-        img_p = tmp_path / "blank_white.jpg"
-        im = Image.new("RGB", (1080, 500), (255, 255, 255))
-        im.save(img_p)
-
-        is_omit, reason = detect_omit_visual_band(img_p)
-        assert is_omit is True
-        assert reason == "blank_band"
-
-    def test_detect_blank_black_band(self, tmp_path):
-        # Solid black image (variance = 0)
-        img_p = tmp_path / "blank_black.jpg"
-        im = Image.new("RGB", (1080, 500), (0, 0, 0))
-        im.save(img_p)
-
-        is_omit, reason = detect_omit_visual_band(img_p)
-        assert is_omit is True
-        assert reason == "blank_band"
-
-    def test_detect_sliver_below_80px(self, tmp_path):
-        # High-contrast 40px sliver
-        img_p = tmp_path / "sliver.jpg"
-        arr = np.zeros((40, 1080, 3), dtype=np.uint8)
-        arr[:20, :, :] = 255
-        im = Image.fromarray(arr)
-        im.save(img_p)
-
-        is_omit, reason = detect_omit_visual_band(img_p)
-        assert is_omit is True
-        assert reason == "sliver"
-
-    def test_detect_manifest_skipped_panel(self):
-        panel = PanelItem(
-            panel_id="panel_005",
-            sequence_number=5,
-            filename="panel_005.jpg",
-            relative_path="panels/panel_005.jpg",
-            source_image="raw.jpg",
-            crop_box=(0, 0, 1080, 200),
-            width=1080,
-            height=200,
-            aspect_ratio=5.4,
-            sha256="dummy",
-            status=PanelStatus.SKIP,
-        )
-        is_omit, reason = detect_omit_visual_band(panel_item=panel)
-        assert is_omit is True
-        assert reason == "blank_band"
-
-    def test_active_artwork_not_omitted(self, tmp_path):
-        # Rich varied artwork
-        img_p = tmp_path / "artwork.jpg"
-        rng = np.random.default_rng(42)
-        arr = rng.integers(30, 220, (1080, 1080, 3), dtype=np.uint8)
-        im = Image.fromarray(arr)
-        im.save(img_p)
-
-        panel = PanelItem(
-            panel_id="panel_001",
-            sequence_number=1,
-            filename="panel_001.jpg",
-            relative_path="panels/panel_001.jpg",
-            source_image="raw.jpg",
-            crop_box=(0, 0, 1080, 1080),
-            width=1080,
-            height=1080,
-            aspect_ratio=1.0,
-            sha256="dummy",
-            status=PanelStatus.ACTIVE,
-        )
-        is_omit, reason = detect_omit_visual_band(img_p, panel_item=panel)
-        assert is_omit is False
-        assert reason is None
+@pytest.mark.parametrize("motion", [m.value for m in CameraMotionType if m.value not in {p.value for p in ProductionMotion}] + ["jitter", "PAN_UP"])
+def test_legacy_motion_is_rejected(motion):
+    with pytest.raises(ValidationError):
+        Shot(shot_id="x", segment_id="a", source_panel_id="p", duration_sec=1, motion_type=motion)
 
 
-class TestGenerateVisualPlan:
-    """End-to-end canonical visual plan generation test with tall panels and omit_visual."""
+def test_narration_evidence_independent_of_shots(evidence):
+    root, manifest, script = evidence
+    plan = generate_visual_plan(root, manifest, script, target_width=320, target_height=180)
+    assert script.segments[0].evidence_panel_ids == ["p1", "p2"]
+    assert len(plan.shots) > 2  # tall evidence maps to multiple render shots
+    assert sum(s.duration_sec for s in plan.shots) == pytest.approx(2)
+    assert plan == generate_visual_plan(root, manifest, script, target_width=320, target_height=180)
+    plan.save(root / "plan.json")
+    assert VisualPlan.load(root / "plan.json") == plan
 
-    def test_generate_visual_plan_decomposition_and_substitution(self, tmp_path):
-        chap_dir = tmp_path / "chapters" / "1"
-        panels_dir = chap_dir / "panels"
-        panels_dir.mkdir(parents=True, exist_ok=True)
 
-        # Panel 1: Normal artwork (1080x1200) -> approved visual
-        p1 = panels_dir / "panel_001.jpg"
-        arr1 = np.random.default_rng(1).integers(20, 200, (1200, 1080, 3), dtype=np.uint8)
-        Image.fromarray(arr1).save(p1)
+@pytest.mark.parametrize("damage", ["missing", "hash", "dimension", "unknown", "review", "duration", "no_evidence", "legacy_motion"])
+def test_no_missing_evidence_or_implicit_fallback(evidence, damage):
+    root, manifest, script = evidence
+    panel, segment = manifest.panels[0], script.segments[0]
+    if damage == "missing": (root / panel.relative_path).unlink()
+    elif damage == "hash": panel.sha256 = "0" * 64
+    elif damage == "dimension": panel.width = 999
+    elif damage == "unknown": segment.evidence_panel_ids = ["absent"]
+    elif damage == "review": segment.narrator_text = "[CAN_XAC_MINH: text]"
+    elif damage == "duration": segment.duration = None
+    elif damage == "no_evidence": segment.evidence_panel_ids = []
+    else: segment.camera_motion = CameraMotionType.PAN_UP
+    with pytest.raises((ValueError, ValidationError)):
+        generate_visual_plan(root, manifest, script)
 
-        # Panel 2: Tall panel (1080x2800, H/W = 2.59 > 2.0)
-        p2 = panels_dir / "panel_002.jpg"
-        arr2 = np.random.default_rng(2).integers(20, 200, (2800, 1080, 3), dtype=np.uint8)
-        Image.fromarray(arr2).save(p2)
 
-        # Panel 3: Blank band (1080x300, solid white) -> omit_visual
-        p3 = panels_dir / "panel_003.jpg"
-        Image.new("RGB", (1080, 300), (255, 255, 255)).save(p3)
+def test_substitute_prefers_same_segment_and_records_reason(evidence):
+    root, manifest, script = evidence
+    manifest.panels[0].notes = "text_only"
+    plan = generate_visual_plan(root, manifest, script)
+    shot = plan.shots[0]
+    assert shot.substitute_panel_id == "p2"
+    assert shot.substitution_reason == "same_segment"
+    assert shot.source_panel_id == "p1"
+    assert shot.source_box == Region()
 
-        manifest = PanelManifest(
-            project_slug="test_proj",
-            chapter_number="1",
-            total_panels=3,
-            panels=[
-                PanelItem(
-                    panel_id="panel_001",
-                    sequence_number=1,
-                    filename="panel_001.jpg",
-                    relative_path="panels/panel_001.jpg",
-                    source_image="page_1.jpg",
-                    crop_box=(0, 0, 1080, 1200),
-                    width=1080,
-                    height=1200,
-                    aspect_ratio=0.9,
-                    sha256="h1",
-                    status=PanelStatus.ACTIVE,
-                ),
-                PanelItem(
-                    panel_id="panel_002",
-                    sequence_number=2,
-                    filename="panel_002.jpg",
-                    relative_path="panels/panel_002.jpg",
-                    source_image="page_1.jpg",
-                    crop_box=(0, 1200, 1080, 4000),
-                    width=1080,
-                    height=2800,
-                    aspect_ratio=0.386,
-                    sha256="h2",
-                    status=PanelStatus.ACTIVE,
-                ),
-                PanelItem(
-                    panel_id="panel_003",
-                    sequence_number=3,
-                    filename="panel_003.jpg",
-                    relative_path="panels/panel_003.jpg",
-                    source_image="page_2.jpg",
-                    crop_box=(0, 0, 1080, 300),
-                    width=1080,
-                    height=300,
-                    aspect_ratio=3.6,
-                    sha256="h3",
-                    status=PanelStatus.ACTIVE,
-                ),
-            ],
-        )
 
-        script = RecapScript(
-            project_slug="test_proj",
-            chapter_number="1",
-            title="Episode 1",
-            segments=[
-                ScriptSegment(
-                    seq_id="001",
-                    panel_ids=["panel_001.jpg"],
-                    narrator_text="Mở đầu câu chuyện tại kinh thành.",
-                    camera_motion=CameraMotionType.STATIC,
-                    duration=2.0,
-                ),
-                ScriptSegment(
-                    seq_id="002",
-                    panel_ids=["panel_002.jpg"],
-                    narrator_text="Đại hiệp tung mình từ trên vách núi xuống vực thẳm.",
-                    camera_motion=CameraMotionType.PAN_DOWN,
-                    duration=6.0,
-                ),
-                ScriptSegment(
-                    seq_id="003",
-                    panel_ids=["panel_003.jpg"],
-                    narrator_text="Không ai có thể ngờ tới kết cục này.",
-                    camera_motion=CameraMotionType.STATIC,
-                    duration=2.5,
-                ),
-            ],
-            total_duration_seconds=10.5,
-        )
+def test_no_arbitrary_first_panel_substitution(evidence):
+    root, manifest, script = evidence
+    for panel in manifest.panels:
+        panel.notes = "text_only"
+    with pytest.raises(ValueError, match="No evidenced visual substitute"):
+        generate_visual_plan(root, manifest, script)
 
-        plan = generate_visual_plan(
-            chap_dir=chap_dir,
-            manifest=manifest,
-            script=script,
-            target_width=1920,
-            target_height=1080,
-            fps=30,
-        )
 
-        assert plan.chapter_number == "1"
-        assert plan.target_width == 1920
-        assert plan.target_height == 1080
+def test_uncertain_text_is_conservative_full_static(evidence):
+    root, manifest, script = evidence
+    manifest.panels[1].evidence_metadata = {"text_detection_uncertain": True}
+    plan = generate_visual_plan(root, manifest, script)
+    assert len(plan.get_shots_for_panel("p2")) == 1
+    assert plan.get_shots_for_panel("p2")[0].source_box == Region()
 
-        # Segment 1: single panel_001 shot
-        shots_seg1 = plan.get_shots_for_segment("001")
-        assert len(shots_seg1) == 1
-        assert shots_seg1[0].source_panel_id == "panel_001"
-        assert shots_seg1[0].visual_role == VisualRole.SHOW
 
-        # Segment 2: tall panel_002 auto-split into at least 2 sub-shots
-        shots_seg2 = plan.get_shots_for_segment("002")
-        assert len(shots_seg2) >= 2
-        for s in shots_seg2:
-            assert s.source_panel_id == "panel_002"
-            assert s.visual_role == VisualRole.SHOW
-            # Speed capped at <= 120 px/s
-            assert s.speed_px_per_sec <= 120.0
+def test_avoid_region_never_aggressive_crop(evidence):
+    root, manifest, script = evidence
+    manifest.panels[0].evidence_metadata = dict(text_detection_uncertain=False,
+        avoid_regions=[dict(x_min=0, y_min=0, x_max=0.5, y_max=0.5)],
+        focus_regions=[dict(x_min=0.5, y_min=0.5, x_max=1, y_max=1)])
+    shot = generate_visual_plan(root, manifest, script).shots[0]
+    assert shot.source_box == Region(x_min=0.5, y_min=0.5)
+    assert shot.motion_type == ProductionMotion.STATIC_FOCUS
 
-        # Segment 3: blank panel_003 classified as OMIT_VISUAL with substitution
-        shots_seg3 = plan.get_shots_for_segment("003")
-        assert len(shots_seg3) == 1
-        assert shots_seg3[0].source_panel_id == "panel_003"
-        assert shots_seg3[0].visual_role == VisualRole.OMIT_VISUAL
-        assert shots_seg3[0].visual_omit_reason == "blank_band"
-        # Must substitute an approved panel (e.g. panel_001)
-        assert shots_seg3[0].substitute_panel_id in ("panel_001", "panel_002")
+
+def test_normalized_motion_is_scale_invariant():
+    shot = Shot(shot_id="s", segment_id="a", source_panel_id="p", duration_sec=2,
+                motion_type="slow_pan_down", scroll_fraction_per_second=0.12)
+    plan = VisualPlan(chapter_number="1", shots=[shot], total_duration_sec=2, target_width=200, target_height=100)
+    image = Image.fromarray(np.tile(np.arange(500, dtype=np.uint16)[:,None] % 256, (1, 200)).astype("uint8")).convert("RGB")
+    a = np.array(render_frame(image, shot, plan, 0))
+    b = np.array(render_frame(image, shot, plan, 1))
+    assert not np.array_equal(a, b)
+    with pytest.raises(ValidationError):
+        Shot(**{**shot.model_dump(), "scroll_fraction_per_second": 0.12001})
+
+
+def test_frame_quantization_has_no_cumulative_drift():
+    shots = [Shot(shot_id=str(i), segment_id="a", source_panel_id="p", duration_sec=0.123) for i in range(100)]
+    plan = VisualPlan(chapter_number="1", shots=shots, total_duration_sec=12.3)
+    assert sum(count for _, count in frame_schedule(plan)) == round(12.3 * plan.fps)
+
+
+@pytest.mark.parametrize("change", [dict(total_duration_sec=3), dict(shots=[]), dict(fps=0), dict(target_width=321), dict(schema_version="3.0.0")])
+def test_invalid_plan_rejected(change):
+    data = dict(chapter_number="1", shots=[dict(shot_id="s", segment_id="a", source_panel_id="p", duration_sec=1)], total_duration_sec=1)
+    with pytest.raises(ValidationError):
+        VisualPlan(**{**data, **change})
+
+
+def test_evidence_legacy_alias_conflict_rejected():
+    with pytest.raises(ValidationError, match="conflicts"):
+        ScriptSegment(seq_id="a", narrator_text="x", panel_ids=["p1"], evidence_panel_ids=["p2"])
+
+
+def test_authored_visual_plan_can_omit_evidence_without_losing_provenance(evidence):
+    from src.render.visual_policy import resolve_visual_plan
+    root, manifest, script = evidence
+    baseline = generate_visual_plan(root, manifest, script, target_width=320, target_height=180)
+    # Narration still cites p1+p2; the authored visual sequence intentionally
+    # holds p1 for the full narration instead of showing every evidence panel.
+    data = baseline.model_dump(mode="json")
+    data["shots"] = [dict(data["shots"][0], duration_sec=2)]
+    authored = VisualPlan.model_validate(data)
+    authored.save(root / "visual_plan.json")
+    resolved = resolve_visual_plan(root, manifest, script, target_width=320, target_height=180, fps=30, motion_enabled=None)
+    assert resolved == authored
+    assert script.segments[0].evidence_panel_ids == ["p1", "p2"]
+    assert [s.source_panel_id for s in resolved.shots] == ["p1"]
+    script.segments[0].narrator_text = "new narration"
+    with pytest.raises(ValueError, match="stale"):
+        resolve_visual_plan(root, manifest, script, target_width=320, target_height=180, fps=30, motion_enabled=None)

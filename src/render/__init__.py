@@ -1,34 +1,20 @@
-"""
-src/render package.
-Cinematic Video Engine V2 for Manga Recap Agentic Skill.
-"""
+"""Lazy render exports: importing schemas/validators must not initialize engines."""
+from importlib import import_module
 
-from src.render.audio_mixer import AudioMixer, SpeechTimelineEntry
-from src.render.camera import CameraMotionGenerator
-from src.render.subtitle import (
-    SubtitleBlock,
-    SubtitleCue,
-    SubtitleGenerator,
-    format_srt_time,
-    parse_srt_time,
-    sanitize_subtitle_text,
-)
-from src.render.validator import FFprobeValidator, StreamValidator
-from src.render.video_engine import VideoEngine, VideoMode, video_engine
+_EXPORTS = {
+    "VideoEngine": "video_engine", "video_engine": "video_engine", "VideoMode": "video_engine",
+    "CameraMotionGenerator": "camera",
+    "SubtitleGenerator": "subtitle", "SubtitleCue": "subtitle", "SubtitleBlock": "subtitle",
+    "format_srt_time": "subtitle", "parse_srt_time": "subtitle", "sanitize_subtitle_text": "subtitle",
+    "AudioMixer": "audio_mixer", "SpeechTimelineEntry": "audio_mixer",
+    "FFprobeValidator": "validator", "StreamValidator": "validator",
+}
+__all__ = list(_EXPORTS)
 
-__all__ = [
-    "VideoEngine",
-    "video_engine",
-    "VideoMode",
-    "CameraMotionGenerator",
-    "SubtitleGenerator",
-    "SubtitleCue",
-    "SubtitleBlock",
-    "format_srt_time",
-    "parse_srt_time",
-    "sanitize_subtitle_text",
-    "AudioMixer",
-    "SpeechTimelineEntry",
-    "FFprobeValidator",
-    "StreamValidator",
-]
+
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    value = getattr(import_module(f"src.render.{_EXPORTS[name]}"), name)
+    globals()[name] = value
+    return value

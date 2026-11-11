@@ -364,20 +364,34 @@ class NeuralTTSBackend(BaseTTSBackend):
         self.total_inference_seconds += (time.monotonic() - t_infer_0)
         self.utterance_count += 1
 
-        # File packaging and speed adjustment run OUTSIDE the infer lock!
-        target_speed = max(0.5, min(2.0, float(speed)))
-        if abs(target_speed - 1.0) <= 0.01:
-            wav_bytes, dur, checksum = _encode_wav_16bit_pcm(audio_data, 48000)
-            output_path.write_bytes(wav_bytes)
-            self._last_checksum = checksum
-            _cache_audio_metrics(output_path, dur, checksum)
-            return dur
-        else:
-            pcm_bytes = (np.clip(audio_data, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
-            dur, checksum = _apply_speed_to_file(pcm_bytes, target_speed, output_path, 48000)
-            self._last_checksum = checksum
-            _cache_audio_metrics(output_path, dur, checksum)
-            return dur
+        # The SDK owns the native waveform/container contract. Never stamp an
+        # assumed sample rate onto an opaque inference result.
+        raw_path = output_path.with_name(f".{output_path.stem}.native.wav")
+        try:
+            with self._infer_lock:
+                self._sdk.save(audio_data, str(raw_path))
+            from src.render.artifact_validation import validate_audio
+            validate_audio(raw_path)
+            with wave.open(str(raw_path), "rb") as source:
+                native_format = (source.getframerate(), source.getnchannels(), source.getsampwidth())
+            target_speed = float(speed)
+            if not math.isfinite(target_speed) or not 0.5 <= target_speed <= 2.0:
+                raise ValueError("Neural TTS speed must be explicit and in 0.5..2.0")
+            if native_format == (48000, 1, 2) and abs(target_speed - 1.0) <= 1e-8:
+                shutil.copyfile(raw_path, output_path)
+            else:
+                cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(raw_path)]
+                if abs(target_speed - 1.0) > 1e-8:
+                    cmd += ["-af", f"atempo={target_speed}"]
+                cmd += ["-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(output_path)]
+                result = subprocess.run(cmd, capture_output=True, timeout=120)
+                if result.returncode:
+                    raise RuntimeError(f"Native TTS audio normalization failed: {result.stderr.decode(errors='replace')[-2000:]}")
+            report = validate_audio(output_path)
+            _cache_audio_metrics(output_path, report["duration"], report["sha256"])
+            return report["duration"]
+        finally:
+            raw_path.unlink(missing_ok=True)
 
     def _apply_speed(self, wav_path: Path, speed: float) -> None:
         """Applies pitch-preserving time stretching via ffmpeg atempo filter."""
@@ -537,10 +551,11 @@ class VieNeuEngine:
             if not tmp_path.exists() or tmp_path.stat().st_size <= 44:
                 raise RuntimeError(f"TTS synthesis produced invalid or empty file at {tmp_path}")
 
+            if self.mode == EngineMode.NEURAL.value:
+                from src.render.artifact_validation import validate_audio
+                dur = validate_audio(tmp_path)["duration"]
             tmp_path.replace(output_path)
-            checksum = getattr(self.backend, "_last_checksum", None)
-            if not checksum:
-                checksum = calculate_sha256(output_path)
+            checksum = calculate_sha256(output_path)
             _cache_audio_metrics(output_path, dur, checksum)
             return dur, checksum, False
         except Exception:

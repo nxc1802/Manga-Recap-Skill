@@ -27,6 +27,8 @@ def handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
     Subcommand handler for 'manga-recap produce'.
     Runs a self-contained, single-session cloud production job across multiple chapters.
     """
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("produce", args)
     project_slug = getattr(args, "project", "")
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required for produce command.")
@@ -54,6 +56,14 @@ def handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
             "Please specify chapters via --chapters or ingest chapters first."
         )
 
+    from src.core.storage import read_json
+    project_settings = read_json(project_dir / "project.json")
+    render = project_settings["render_settings"]
+    subtitle = render["subtitle"]
+    def explicit_or_inherit(name, value):
+        supplied = getattr(args, name, None)
+        return value if supplied is None else supplied
+
     # Build config
     config = ProductionJobConfig(
         project_slug=project_slug,
@@ -63,19 +73,19 @@ def handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
         tts_workers=getattr(args, "tts_workers", 2) or 2,
         render_workers=getattr(args, "render_workers", 2) or 2,
         quality=getattr(args, "quality", "final") or "final",
-        video_mode=getattr(args, "video_mode", "auto") or "auto",
-        burn_subtitles=getattr(args, "burn_subtitles", True) if getattr(args, "burn_subtitles", None) is not None else True,
-        animation=getattr(args, "animation", True) if getattr(args, "animation", None) is not None else True,
-        bgm_path=getattr(args, "bgm", None),
+        video_mode=explicit_or_inherit("video_mode", render["video_mode"]),
+        burn_subtitles=explicit_or_inherit("burn_subtitles", render["burn_subtitles"]),
+        animation=explicit_or_inherit("animation", render["render_pan_mode"] == "animation"),
+        bgm_path=explicit_or_inherit("bgm", project_settings["audio_settings"]["bgm_path"]),
         compile=getattr(args, "compile", True) if getattr(args, "compile", None) is not None else True,
         export_bundle=getattr(args, "export_bundle", True) if getattr(args, "export_bundle", None) is not None else True,
         cleanup_intermediates=getattr(args, "cleanup", False),
         force=getattr(args, "force", False),
         voice_override=getattr(args, "voice", None),
         speed_override=getattr(args, "speed", None),
-        subtitle_lines=getattr(args, "subtitle_lines", 1),
-        subtitle_font_size=getattr(args, "subtitle_font_size", 26),
-        subtitle_chunking=getattr(args, "subtitle_chunking", "sentence-aware"),
+        subtitle_lines=explicit_or_inherit("subtitle_lines", subtitle["max_lines"]),
+        subtitle_font_size=explicit_or_inherit("subtitle_font_size", subtitle["font_size"]),
+        subtitle_chunking=explicit_or_inherit("subtitle_chunking", subtitle["chunking"]),
     )
 
     job_file_arg = getattr(args, "job_file", None)

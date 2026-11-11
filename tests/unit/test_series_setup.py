@@ -500,3 +500,104 @@ class TestFailClosedPipelineGates:
         resp = json.loads(captured.out)
         assert resp["status"] == "success"
         assert resp["data"]["raw_images_count"] == 2
+
+
+@pytest.mark.parametrize("command", ["crawl", "segment", "tts", "render", "compile", "batch", "produce", "cloud", "youtube", "thumbnail", "archive", "clean"])
+def test_router_blocks_before_dispatch_without_setup(command, tmp_path, monkeypatch):
+    from src.cli.main import execute_subcommand
+    monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
+    with pytest.raises(CliValidationError, match="Strict Form Gate"):
+        execute_subcommand(command, argparse.Namespace(project="unconfigured"))
+
+
+@pytest.mark.parametrize("fault", ["before_first", "after_first", "after_second"])
+def test_setup_interrupted_commit_fails_closed_or_is_complete(fault, tmp_path, monkeypatch):
+    import src.core.storage as storage
+    from src.core.storage import StorageWriteError
+    project = tmp_path / "series"
+    record_series_setup("series", _make_valid_answers_dict(), project_dir=project)
+    original = storage.os.replace
+    calls = 0
+
+    def interrupt(src, dst):
+        nonlocal calls
+        calls += 1
+        if fault == "before_first" and calls == 1:
+            raise OSError("crash before publication")
+        original(src, dst)
+        if fault == "after_first" and calls == 1:
+            raise OSError("crash after setup publication")
+        if fault == "after_second" and calls == 2:
+            raise OSError("crash after project publication")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(storage.os, "replace", interrupt)
+        with pytest.raises(StorageWriteError):
+            record_series_setup("series", _make_valid_answers_dict(), project_dir=project)
+    if fault == "after_first":
+        with pytest.raises(CliValidationError, match="revision mismatch"):
+            require_series_setup("series", project_dir=project)
+    else:
+        assert require_series_setup("series", project_dir=project).setup_revision == (1 if fault == "before_first" else 2)
+
+
+@pytest.mark.parametrize("damage", ["project_missing", "project_corrupt", "answers_corrupt", "revision", "hash", "slug", "voice"])
+def test_setup_pair_integrity(damage, tmp_path):
+    project = tmp_path / "series"
+    record_series_setup("series", _make_valid_answers_dict(), project_dir=project)
+    path = project / "project.json"
+    if damage == "project_missing":
+        path.unlink()
+    elif damage == "project_corrupt":
+        path.write_text("{")
+    elif damage == "answers_corrupt":
+        (project / "series_setup_answers.json").write_text("{")
+    else:
+        data = read_json(path)
+        if damage == "revision":
+            data["setup_revision"] += 1
+        elif damage == "hash":
+            data["setup_snapshot_hash"] = "0" * 64
+        elif damage == "slug":
+            data["slug"] = "other"
+        else:
+            data["audio_settings"]["default_voice"] = "wrong"
+        atomic_write_json(path, data)
+    with pytest.raises(CliValidationError):
+        require_series_setup("series", project_dir=project)
+
+
+def test_every_registered_command_has_explicit_execution_policy():
+    from src.core.execution_policy import COMMAND_REQUIREMENTS, NON_PRODUCTION_COMMANDS
+    parser = build_parser()
+    commands = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction)).choices
+    assert set(commands) == set(COMMAND_REQUIREMENTS) | NON_PRODUCTION_COMMANDS
+
+
+def test_unknown_command_policy_fails_closed():
+    from src.core.execution_policy import enforce_execution_policy
+    with pytest.raises(CliValidationError, match="No execution policy"):
+        enforce_execution_policy("future-production-command", argparse.Namespace())
+
+
+def test_nested_handler_error_does_not_become_success(monkeypatch):
+    import src.cli.main as cli
+    monkeypatch.setattr(cli, "_dispatch_subcommand", lambda *_: {"status": "error", "exit_code": 2, "error": "required evidence absent"})
+    with pytest.raises(CliValidationError, match="required evidence absent"):
+        cli.execute_subcommand("status", argparse.Namespace())
+
+
+def test_tts_fingerprint_preserves_full_speed_precision():
+    from src.core.storage import calculate_utterance_fingerprint
+    assert calculate_utterance_fingerprint("x", "voice", 1.001) != calculate_utterance_fingerprint("x", "voice", 1.004)
+
+
+def test_explicit_no_bgm_clears_prior_project_values(tmp_path):
+    answers = _make_valid_answers_dict()
+    record_series_setup("series", answers, project_dir=tmp_path)
+    assert read_json(tmp_path / "project.json")["audio_settings"]["bgm_path"]
+    answers["Q10"]["user_answer"] = {"none": True}
+    record_series_setup("series", answers, project_dir=tmp_path)
+    settings = read_json(tmp_path / "project.json")["audio_settings"]
+    assert settings["bgm_path"] is None and settings["bgm_volume"] == 0 and settings["voice_volume"] == 1
+    require_series_setup("series", project_dir=tmp_path)

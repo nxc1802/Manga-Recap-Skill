@@ -28,7 +28,9 @@ from src.core.schemas import (
     utc_iso_now,
 )
 from src.core.storage import (
+    FileLock,
     atomic_write_json,
+    atomic_write_json_pair,
     get_project_dir,
     read_json,
 )
@@ -143,7 +145,7 @@ class SeriesSetupAnswers(BaseModel):
     """Persistent cryptographic record of the 10-question series setup."""
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = SETUP_SCHEMA_VERSION
+    schema_version: Literal["4.0.0"] = SETUP_SCHEMA_VERSION
     project_slug: str
     setup_revision: int = Field(default=1, ge=1)
     created_at: str
@@ -151,7 +153,7 @@ class SeriesSetupAnswers(BaseModel):
     user_confirmed_at: str
     reviewer: str = Field(default="user", min_length=1)
     answers: Dict[str, SetupAnswerItem]
-    snapshot_hash: str
+    snapshot_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     legacy_migrated: bool = False
     migration_notes: Optional[str] = None
 
@@ -430,7 +432,14 @@ def validate_complete_setup(
     return len(errors) == 0, errors
 
 
-def require_series_setup(
+def require_series_setup(project_slug: str, project_dir: Optional[Path] = None,
+                         allow_legacy: bool = False) -> SeriesSetupAnswers:
+    proj_dir = project_dir or get_project_dir(project_slug)
+    with FileLock(proj_dir / "series_setup_answers.json"):
+        return _require_series_setup_unlocked(project_slug, proj_dir, allow_legacy)
+
+
+def _require_series_setup_unlocked(
     project_slug: str,
     project_dir: Optional[Path] = None,
     allow_legacy: bool = False,
@@ -461,6 +470,23 @@ def require_series_setup(
                 details=errors,
                 data={"project_slug": project_slug, "valid": False, "errors": errors},
             )
+        try:
+            project = read_json(proj_dir / "project.json")
+            ProjectConfig.model_validate(project)
+            if answers_obj.project_slug != project_slug or project.get("slug") != project_slug:
+                raise ValueError("setup/project identity mismatch")
+            if project.get("schema_version") != answers_obj.schema_version:
+                raise ValueError("setup/project schema version mismatch")
+            if project.get("setup_revision") != answers_obj.setup_revision:
+                raise ValueError("setup_revision mismatch (interrupted setup transaction)")
+            if project.get("setup_snapshot_hash") != answers_obj.snapshot_hash:
+                raise ValueError("setup snapshot mismatch")
+            expected = _build_project_json(proj_dir / "project.json", project_slug, answers_obj)
+            for key in ("source_url", "audio_settings", "render_settings"):
+                if project.get(key) != expected.get(key):
+                    raise ValueError(f"project {key} diverges from confirmed setup")
+        except Exception as exc:
+            raise CliValidationError(f"Strict Form Gate failed: {exc}") from exc
         return answers_obj
 
     if allow_legacy:
@@ -486,7 +512,14 @@ def require_series_setup(
     )
 
 
-def record_series_setup(
+def record_series_setup(project_slug: str, answers_data, reviewer: str = "user",
+                        project_dir: Optional[Path] = None) -> SeriesSetupAnswers:
+    proj_dir = project_dir or get_project_dir(project_slug)
+    with FileLock(proj_dir / "series_setup_answers.json"):
+        return _record_series_setup_unlocked(project_slug, answers_data, reviewer, proj_dir)
+
+
+def _record_series_setup_unlocked(
     project_slug: str,
     answers_data: Union[Dict[str, Any], SeriesSetupAnswers],
     reviewer: str = "user",
@@ -567,11 +600,9 @@ def record_series_setup(
             data={"project_slug": project_slug, "valid": False, "errors": errors},
         )
 
-    # Atomically write series_setup_answers.json
-    atomic_write_json(answers_file, setup_answers)
-
-    # Synchronize project.json atomically
-    _sync_project_json(project_json_file, project_slug, setup_answers)
+    project_payload = _build_project_json(project_json_file, project_slug, setup_answers)
+    atomic_write_json_pair(answers_file, setup_answers, project_json_file, project_payload)
+    _require_series_setup_unlocked(project_slug, proj_dir)
 
     logger.info(
         f"Successfully recorded series setup answers for '{project_slug}' (rev={setup_rev}, hash={snap_hash[:8]})."
@@ -579,18 +610,18 @@ def record_series_setup(
     return setup_answers
 
 
-def _sync_project_json(
+def _build_project_json(
     project_json_file: Path,
     project_slug: str,
     setup_answers: SeriesSetupAnswers,
-) -> None:
-    """Updates or creates project.json synchronized with setup answers and revision."""
+) -> Dict[str, Any]:
+    """Builds project settings without mutating storage."""
     cfg: Optional[ProjectConfig] = None
     if project_json_file.exists():
         try:
             cfg = ProjectConfig.model_validate(read_json(project_json_file))
-        except Exception:
-            cfg = None
+        except Exception as exc:
+            raise CliValidationError(f"Cannot synchronize corrupt project.json: {exc}") from exc
 
     if cfg is None:
         cfg = ProjectConfig(
@@ -647,6 +678,10 @@ def _sync_project_json(
     # Q10: BGM Settings
     q10 = answers["Q10"].user_answer
     if isinstance(q10, dict):
+        if q10.get("none") is True:
+            cfg.audio_settings.bgm_path = None
+            cfg.audio_settings.bgm_volume = 0.0
+            cfg.audio_settings.voice_volume = 1.0
         if q10.get("bgm_path"):
             cfg.audio_settings.bgm_path = str(q10["bgm_path"])
         if "bgm_volume" in q10:
@@ -658,13 +693,15 @@ def _sync_project_json(
     elif isinstance(q10, (bool, str)) and (_normalize_bool(q10) is False or str(q10).strip().lower() in ("không bgm", "none")):
         cfg.audio_settings.bgm_path = None
         cfg.audio_settings.bgm_volume = 0.0
+        cfg.audio_settings.voice_volume = 1.0
 
     # Stamp schema version & setup revision into raw dictionary
     cfg_dict = cfg.model_dump(mode="json")
     cfg_dict["setup_revision"] = setup_answers.setup_revision
     cfg_dict["schema_version"] = SETUP_SCHEMA_VERSION
 
-    atomic_write_json(project_json_file, cfg_dict)
+    cfg_dict["setup_snapshot_hash"] = setup_answers.snapshot_hash
+    return cfg_dict
 
 
 def _synthesize_legacy_answers(project_slug: str, p_data: Dict[str, Any]) -> SeriesSetupAnswers:
