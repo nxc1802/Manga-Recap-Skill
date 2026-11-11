@@ -54,7 +54,7 @@ The pipeline operates across 5 streamlined operational stages:
 
 - **Gate 0 (Video Config)**: Configured **ONCE** per series in `data/projects/<slug>/project.json`. All chapters automatically inherit resolution, video mode, subtitles, animation, voice, and BGM settings without repeated prompts.
 - **Gate 1 (Voice Strategy)**: Approved **ONCE** per series in `data/projects/<slug>/voice_selection.json` (or `characters.json`) and inherited across all chapters.
-- **Gate 2 (Preview Approval)**: Optional preview verification; bypassed via `--skip-preview` or in batch runs to enable direct final render. When bypassed, `chapter.json` explicitly records `human_review_status = "unreviewed"`. Never auto-marked as approved without actual human review.
+- **Gate 2 (Preview Approval)**: **V4 series policy:** Chapter 1 preview and explicit human approval are mandatory before full-series final production. After this approval, chapters 2+ may bypass repeated previews via `--skip-preview` (still marked `human_review_status = "unreviewed"`). The legacy CLI does not enforce this new policy yet; the Agent must block an unapproved Chapter 1 full-series job.
 - **Batch Mode**: Multi-chapter sequential processing via `manga-recap batch` with chapter failure isolation and single-chapter retry (`--retry-chapter`).
 
 ### Stage 0: STRICT FORM MODE — MANDATORY 10-QUESTION USER CONFIGURATION GATE
@@ -86,6 +86,8 @@ The pipeline operates across 5 streamlined operational stages:
 - Preserve the existing thumbnail selection, voice approval, preview approval, and YouTube channel confirmation gates. Never mark any human approval automatically.
 - Save the explicitly approved settings in `data/projects/<slug>/project.json` and a separate `series_setup_answers.json` audit record, with an exact set of question IDs `Q01`–`Q10`, user selections, timestamps and no secrets.
 - Any programmatic `--approved`, `--skip-preview`, `--kaggle`, or CLI default MUST NOT bypass this user-facing series configuration gate.
+
+> **Implementation boundary (V4):** The 10-item form is an enforceable **Agent instruction** in this branch, not yet a Python runtime validator. Existing CLI commands can still execute with internal defaults. The planned `SeriesSetupValidator`, canonical top-down animation policy, dual-T4 series job and HF archive are **not yet implemented**; see `docs/V4_Implementation_Plan.md`.
 
 ### Stage 1: Ingestion & Crawl
 Fetch raw webtoon page images or import local chapter scans into project storage.
@@ -156,7 +158,7 @@ manga-recap tts --project <project_slug> --chapter <chapter_num> --kaggle --json
 - Resumability: By default, re-running TTS resumes without re-synthesizing segments that already possess valid, verified audio matching the current voice. Pass `--force` to re-synthesize all chapter segments.
 
 ### Stage 7: Human Review Gate 1 (Voice Strategy)
-Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (Một giọng đọc thống nhất — Mặc định: `Ngọc Huyền`), tùy chọn hỗ trợ thẻ cảm xúc `emotion_aware` (`[cười]`, `[thở dài]`, `[hắng giọng]`):
+Xác nhận chiến lược lồng tiếng duy nhất: **`single_narrator`** (Một giọng đọc thống nhất — giọng đã được người dùng chọn rõ tại Q03), tùy chọn hỗ trợ thẻ cảm xúc `emotion_aware` (`[cười]`, `[thở dài]`, `[hắng giọng]`):
 1. Direct the user to listen to voice samples or review `data/benchmarks/vieneu_v3_turbo/review/index.html`.
 2. Record human approval into `data/projects/<project_slug>/voice_selection.json` once per series.
 
@@ -166,10 +168,10 @@ Render preview or final video clips with dynamic FFmpeg filterchains:
 # Preview render (for manual inspection)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality preview --json
 
-# Final 1080p render (use --skip-preview to bypass Gate 2 preview requirement)
+# Final 1080p render (ONLY after mandatory Chapter 1 preview approval for V4 series)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --json
 
-# Cloud GPU extreme-speed render (NVIDIA Hardware NVENC h264_nvenc single-pass)
+# Cloud GPU render (ONLY after mandatory Chapter 1 preview approval for V4 series)
 manga-recap render --project <project_slug> --chapter <chapter_num> --quality final --skip-preview --kaggle --json
 ```
 - Applies chosen camera motion (`static`, `pan_left`, `pan_right`, `pan_up`, `pan_down`, `zoom_in`, `zoom_out`, `focus_crop`, `vertical_scroll`).
@@ -178,7 +180,7 @@ manga-recap render --project <project_slug> --chapter <chapter_num> --quality fi
 - Cloud mode (`--kaggle`): Composites frames in parallel (8 workers), merges audio, and renders Full HD 1080p using NVIDIA NVENC hardware encoder in a single-pass concat demuxer (~76s for an 8-minute video). Automatically syncs `final.mp4`, `chapter_<num>.srt`, and `cloud_telemetry.json` back to local storage.
 
 ### Stage 9: Human Review Gate 2 (Video Preview Verification)
-Verify output video stream using `ffprobe` and human inspection at Review Gate 2 (optional, bypassed via `--skip-preview` or batch mode):
+Verify output video stream using `ffprobe` and human inspection at Review Gate 2. **Chapter 1 preview + explicit approval are mandatory for V4 series; later chapters may bypass repeated manual preview** (the existing CLI does not yet enforce the Chapter 1 exception):
 1. **Interactive Inspection**: Check audio-visual synchronization, Ken Burns motion, subtitle readability, and BGM ducking on `video/preview.mp4` or `video/final.mp4`.
 2. **Review Status Semantics**:
    - If preview is skipped (`--skip-preview` or batch mode): `technical_status = "completed"` is recorded, but `human_review_status` is strictly recorded as **`unreviewed`**. It is **NEVER** automatically marked as `approved`.
@@ -205,10 +207,10 @@ manga-recap review-pack --project <project_slug> --chapter <chapter_num> [--form
 ### Stage 10: Multi-Chapter Compilation & Batch Mode
 Process multiple chapters in unattended batch mode or assemble into a master feature recap:
 ```bash
-# 1. Unattended sequential multi-chapter batch mode (Local)
+# 1. Legacy V3 sequential multi-chapter batch mode (Local; run ONLY after Chapter 1 preview approval)
 manga-recap batch --project <project_slug> --chapters 1-5 --compile --json
 
-# 2. Extreme-speed Cloud GPU batch mode (Kaggle Tesla T4: TTS + NVENC per chapter)
+# 2. Legacy V3 cloud batch mode (chapter-by-chapter; NOT the planned V4 single-session dual-T4 job)
 manga-recap batch --project <project_slug> --chapters 1-5 --kaggle --compile --json
 
 # 3. Single-chapter retry without restarting completed chapters
@@ -235,8 +237,8 @@ manga-recap cloud run --project <project_slug> --chapter <chapter_num> --json
 5. **Zero Cloud API / Zero Database Rule Compliance**: Reasoning, scriptwriting, and OCR remain 100% native to the Agent. VieNeu-TTS runs offline within the Kaggle container. State persistence is strictly local JSON.
 
 ### Stage 10c: Thumbnail Composition & Interactive Selection Gate
-Quy trình tạo Thumbnail chuẩn YouTube (High-CTR) được thiết kế song song trong lúc chờ Server chạy TTS & Render:
-1. **Interactive Selection Gate**: Agent **BẮT BUỘC** hỏi người dùng 2 bước trước khi tạo thumbnail:
+Nếu và chỉ nếu người dùng chọn **Tạo thumbnail** ở Q07, thực hiện quy trình thumbnail sau trong lúc chờ TTS & Render. Nếu Q07 chọn Không tạo, không tạo hay hỏi thêm về thumbnail:
+1. **Conditional Interactive Selection Gate**: Khi Q07 = Tạo thumbnail, Agent **BẮT BUỘC** hỏi người dùng 2 bước trước khi tạo thumbnail:
    - **Chọn ảnh**: Quét và đề xuất danh sách 5–8 panel đẹp nhất qua CLI `manga-recap thumbnail --candidates`, hỏi người dùng chọn ảnh Trái - Giữa - Phải (hoặc 1 ảnh Hero chính).
    - **In chữ & Typography**: Hỏi người dùng có in chữ không? Nếu có thì in tiêu đề gì (gợi ý 2–3 hook 3–5 từ), màu sắc và font chữ ra sao.
 2. **Deterministic CLI Execution**:
