@@ -2683,13 +2683,10 @@ print("=" * 60)
     ) -> Tuple[bool, Optional[str]]:
         """
         Enforces human review gate on Chapter 1 prior to multi-chapter batch or series jobs.
-        If skip_preview is True, gate is bypassed.
-        If Chapter 1 is approved, returns (True, None).
+        Chapter 1 approval is mandatory for V4 series production.
+        --skip-preview is NOT permission to bypass editorial approval.
         Otherwise returns (False, error_message).
         """
-        if skip_preview:
-            return True, None
-
         chap1_dir = get_chapter_dir(project_slug, "1")
         chap1_meta_file = chap1_dir / "chapter.json"
         if not chap1_meta_file.exists():
@@ -2703,7 +2700,7 @@ print("=" * 60)
             return (
                 False,
                 f"Chapter 1 preview has not been approved (human_review_status='{hr_status}'). "
-                f"Approve Chapter 1 preview or pass --skip-preview to proceed.",
+                f"Obtain explicit Chapter 1 preview approval before series production.",
             )
         except Exception as e:
             return False, f"Error inspecting Chapter 1 preview approval: {e}"
@@ -2888,7 +2885,17 @@ print(f"📦 Final series bundle created at {{results_tar}} ({{results_tar.stat(
         if not ok:
             raise ValueError(err or "Chapter 1 preview has not been approved.")
 
-        # 2. Setup staging directory
+        # Fail closed: the current series worker does not upload its dataset,
+        # does not ship the src/ runtime into Kaggle, and still lacks a real
+        # panel-to-video compositor. Do not dispatch work that can yield
+        # missing/black output or pretend that the series was completed.
+        raise RuntimeError(
+            "V4 produce-series is not production-ready: dataset upload, "
+            "worker source packaging and panel-based rendering are incomplete. "
+            "Use the verified per-chapter cloud runner until integration tests pass."
+        )
+
+        # 2. Setup staging directory (currently disabled pending implementation)
         clean_slug = project_slug.replace("_", "-").lower()
         timestamp = int(time.time())
         kernel_slug = f"mr-{clean_slug}-series-{timestamp}"
