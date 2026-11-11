@@ -11,6 +11,7 @@ Tests:
 """
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import pytest
@@ -90,6 +91,15 @@ def cleanup_project(tmp_path, monkeypatch):
 
 def add_hf_receipt(proj_dir: Path, slug: str, status: str = "verified", commit: str = "sha_123456"):
     """Helper to write a mock archive_receipt.json."""
+    # A complete mocked archive verification + restore proof is necessary
+    # before cleanup. These are test receipts; they do not hit HF API.
+    manifest_path = proj_dir / "archive_manifest.json"
+    atomic_write_json(manifest_path, {
+        "schema_version": "4.0.0",
+        "project_slug": slug,
+        "files": [],
+    })
+    digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     receipt = {
         "schema_version": "4.0.0",
         "receipt_type": "huggingface_archive",
@@ -99,6 +109,12 @@ def add_hf_receipt(proj_dir: Path, slug: str, status: str = "verified", commit: 
         "remote_url": f"https://huggingface.co/datasets/Cuong2004/manga-recap-archive/tree/{commit}/series/{slug}",
         "created_at": "2026-11-10T20:00:00Z",
         "status": status,
+        "manifest_sha256": digest,
+        "verification_revision": commit,
+        "restored_revision": commit,
+        "last_verified_at": "2026-11-10T20:01:00Z",
+        "restore_verified_at": "2026-11-10T20:02:00Z",
+        "restored_verified_files": 0,
     }
     atomic_write_json(proj_dir / "archive_receipt.json", receipt)
 
