@@ -131,7 +131,6 @@ def ensure_archive_repo(api: HfApi, repo_id: str = DEFAULT_HF_REPO_ID) -> str:
             private=True,
             exist_ok=True,
         )
-        return repo_id
     except Exception as e:
         # Existing private repos may reject redundant create operations; probe
         # explicitly instead of silently accepting a public/wrong repository.
