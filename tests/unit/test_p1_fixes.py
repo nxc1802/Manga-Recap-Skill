@@ -17,6 +17,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 import wave
 from pathlib import Path
 
@@ -501,9 +502,11 @@ class TestFix09TimelineSyncAndShortClips:
 # 5. FIX-10: Cross-Platform Packaging & Clean Config
 # ==============================================================================
 class TestFix10PackagingAndCleanConfig:
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+
     def test_pyproject_toml_exists_and_declares_entrypoint(self):
         """Verifies pyproject.toml exists in root and registers manga-recap entrypoint."""
-        pyproject_path = Path("/Volumes/WorkSpace/Factory/Manga Review/pyproject.toml")
+        pyproject_path = self.REPO_ROOT / "pyproject.toml"
         assert pyproject_path.exists(), "pyproject.toml missing in project root"
         content = pyproject_path.read_text(encoding="utf-8")
         assert "build-backend = \"setuptools.build_meta\"" in content
@@ -519,15 +522,25 @@ class TestFix10PackagingAndCleanConfig:
 
     def test_setup_scripts_have_no_openrouter_api_key(self):
         """Verifies setup.sh and setup.bat do not reference OPENROUTER_API_KEY."""
-        sh_path = Path("/Volumes/WorkSpace/Factory/Manga Review/setup.sh")
-        bat_path = Path("/Volumes/WorkSpace/Factory/Manga Review/setup.bat")
+        sh_path = self.REPO_ROOT / "setup.sh"
+        bat_path = self.REPO_ROOT / "setup.bat"
         assert "OPENROUTER_API_KEY" not in sh_path.read_text(encoding="utf-8")
         assert "OPENROUTER_API_KEY" not in bat_path.read_text(encoding="utf-8")
 
     def test_manga_recap_cli_installed_and_callable(self):
         """Verifies manga-recap CLI executable runs and outputs valid help."""
-        cli_path = Path("/Volumes/WorkSpace/Factory/Manga Review/venv/bin/manga-recap")
-        assert cli_path.exists(), "venv/bin/manga-recap executable not found"
+        exe_dir = Path(sys.executable).parent
+        candidates = [
+            exe_dir / "manga-recap",
+            exe_dir / "manga-recap.exe",
+        ]
+        cli_path = next((p for p in candidates if p.exists()), None)
+        if cli_path is None:
+            which_cli = shutil.which("manga-recap")
+            cli_path = Path(which_cli) if which_cli else None
+        assert cli_path is not None and cli_path.exists(), (
+            f"manga-recap console entrypoint not found next to {sys.executable} or on PATH"
+        )
         res = subprocess.run([str(cli_path), "--version"], capture_output=True, text=True)
         assert res.returncode == 0
         assert "manga-recap 3.0.0" in res.stdout
