@@ -172,6 +172,7 @@ manga-recap youtube metadata --project <slug> --chapter <num> --json
 
 ### Bước 2: Cổng Hỏi Người Dùng Kênh Upload (Mandatory Human Channel Selection Gate)
 ⚠️ **QUY TẮC BẮT BUỘC DÀNH CHO AGENT:**
+Chỉ áp dụng Gate 3 khi Q08 của Strict Form đã được người dùng chọn **Upload**. Nếu Q08 = **Không upload**, không gọi CLI upload và không hỏi lại kênh. Nếu có upload, bắt buộc xác nhận lại kênh đã chọn, không tự lấy kênh mặc định.
 1. Trước khi thực hiện upload, Agent **BẮT BUỘC** phải kiểm tra danh sách kênh hiện có bằng lệnh:
    ```bash
    manga-recap youtube accounts --json
