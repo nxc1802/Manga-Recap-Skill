@@ -1,7 +1,7 @@
 # Manga Recap Agentic Skill V3
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Architecture](https://img.shields.io/badge/architecture-Agent--Native%20Decoupled-green.svg)](docs/plan.md)
+[![Architecture](https://img.shields.io/badge/architecture-Agent--Native%20Decoupled-green.svg)](docs/V4_Correctness_Improvement_Plan.md)
 [![Audio](https://img.shields.io/badge/TTS-VieNeu--TTS%20v3%20Turbo%20Local-orange.svg)](docs/lab/index.html)
 [![Storage](https://img.shields.io/badge/storage-Local%20Atomic%20JSON-purple.svg)](src/core/storage.py)
 [![Tests](https://img.shields.io/badge/tests-306%20passed-brightgreen.svg)](tests/)
