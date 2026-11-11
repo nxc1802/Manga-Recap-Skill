@@ -803,6 +803,7 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
 
     # Update metadata file with video_id and account
     try:
+        m_data = read_json(meta_file) if meta_file.exists() else {}
         m_data["video_id"] = video_id
         m_data["account"] = account_name_resolved
         atomic_write_json(meta_file, m_data)
@@ -824,6 +825,8 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         "privacy_status": privacy,
         "captions_uploaded": captions_uploaded,
         "thumbnail_uploaded": thumbnail_uploaded,
+        "captions_required": bool(not skip_captions and subtitle_path and subtitle_path.exists()),
+        "thumbnail_required": bool(thumbnail_path and Path(thumbnail_path).exists()),
         "uploaded_at": utc_iso_now(),
         "status": "uploaded",
     }
@@ -886,7 +889,27 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
             f"Please upload the video first using 'manga-recap youtube upload' or specify --video-id."
         )
 
-    target_account = getattr(args, "account", None)
+    # A successful videos.insert receipt is required; verifying an arbitrary ID
+    # must never manufacture a cleanup-eligible YouTube upload receipt.
+    upload_receipt_file = (
+        out_dir / "feature.youtube_receipt.json"
+        if is_feature else chap_dir / "youtube_receipt.json"
+    )
+    if not upload_receipt_file.exists():
+        raise CliValidationError(
+            "No YouTube upload receipt found for this chapter. "
+            "Verification alone cannot establish that this project uploaded the video."
+        )
+    upload_receipt = read_json(upload_receipt_file)
+    if (
+        upload_receipt.get("project_slug") != project_slug
+        or str(upload_receipt.get("chapter_number")) != str(chapter_num)
+        or upload_receipt.get("video_id") != video_id
+    ):
+        raise CliValidationError("YouTube video ID/project does not match the original upload receipt.")
+    target_account = getattr(args, "account", None) or upload_receipt.get("account")
+    if not target_account or target_account != upload_receipt.get("account"):
+        raise CliValidationError("YouTube verification must use the exact upload account.")
     acc_info = account_manager.get_account(target_account)
     account_name_resolved = acc_info.account_name
     try:
@@ -921,13 +944,18 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
     channel_title = snippet.get("channelTitle", "")
     channel_id = snippet.get("channelId", "")
 
-    if upload_status not in ("uploaded", "processed"):
+    if upload_status != "processed":
         rejection = v_status.get("rejectionReason", "unknown")
         raise CliValidationError(
             f"YouTube video {video_id} uploadStatus is not valid: '{upload_status}' (rejectionReason: {rejection})"
         )
 
-    req_privacy = getattr(args, "privacy", None)
+    expected_channel_id = upload_receipt.get("channel_id") or acc_info.channel_id
+    if expected_channel_id and channel_id != expected_channel_id:
+        raise CliValidationError(
+            f"YouTube channel mismatch: expected {expected_channel_id}, got {channel_id}."
+        )
+    req_privacy = upload_receipt.get("privacy_status")
     if req_privacy and privacy_status != req_privacy:
         raise CliValidationError(
             f"YouTube privacyStatus mismatch for video {video_id}: expected '{req_privacy}', found '{privacy_status}'"
@@ -937,7 +965,9 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
     try:
         cap_res = youtube.captions().list(part="snippet", videoId=video_id).execute()
         cap_items = cap_res.get("items", [])
-        has_captions = len(cap_items) > 0
+        has_captions = any(
+            it.get("snippet", {}).get("language") == "vi" for it in cap_items
+        )
     except Exception as e:
         logger.warning(f"Could not verify captions for video {video_id}: {e}")
 
@@ -948,6 +978,23 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
         or thumbnails.get("high")
         or thumbnails.get("default")
     )
+
+    # YouTube supplies default thumbnails for every video. The presence of
+    # snippet.thumbnails does NOT prove the requested custom image was uploaded.
+    if upload_receipt.get("captions_uploaded") and not has_captions:
+        raise CliValidationError(
+            f"Requested Vietnamese captions not verified for video {video_id}."
+        )
+    if upload_receipt.get("thumbnail_uploaded") and not has_thumbnail:
+        raise CliValidationError(
+            f"Requested thumbnail is missing from the video snippet for {video_id}."
+        )
+    # If a caption/thumbnail upload was attempted but failed, do not silently
+    # bless the upload as complete. A user can retry the missing attachment.
+    if upload_receipt.get("captions_required") and not upload_receipt.get("captions_uploaded"):
+        raise CliValidationError("Required captions upload failed; cleanup is not allowed.")
+    if upload_receipt.get("thumbnail_required") and not upload_receipt.get("thumbnail_uploaded"):
+        raise CliValidationError("Required custom thumbnail upload failed; cleanup is not allowed.")
 
     now_ts = utc_iso_now()
     receipt = {
@@ -963,7 +1010,12 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
         "upload_status": upload_status,
         "privacy_status": privacy_status,
         "has_captions": has_captions,
-        "has_custom_thumbnail": has_thumbnail,
+        "has_custom_thumbnail": bool(has_thumbnail and upload_receipt.get("thumbnail_uploaded")),
+        "captions_required": upload_receipt.get("captions_required", False),
+        "thumbnail_required": upload_receipt.get("thumbnail_required", False),
+        "captions_uploaded": upload_receipt.get("captions_uploaded", False),
+        "thumbnail_uploaded": upload_receipt.get("thumbnail_uploaded", False),
+        "uploaded_at": upload_receipt.get("uploaded_at"),
         "status": "verified",
         "verified_at": now_ts,
     }
