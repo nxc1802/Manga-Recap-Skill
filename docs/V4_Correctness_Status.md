@@ -54,7 +54,7 @@ python -m pytest -q --disable-warnings \
   tests/unit/test_schemas.py
 ```
 
-Focused result at the latest source checkpoint: **155 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The final committed-source full regression result is recorded in `docs/verification/v4_correctness_checks_2026-11-11.json`; a non-green result blocks acceptance.
+Focused result at the latest source checkpoint: **155 passed**. Syntax compilation, frozen schema drift check and patch whitespace check passed locally. GitHub CI has not been run for this local change. The full regression on source commit `6a16477d0ed6a16fcc39b94552aee07aed6322fb` returned **694 passed, 168 failed, 15 errors, 7 skipped** (exit 1). All focused modules also passed in that full run. The suite is **not green**, so acceptance remains blocked. See [machine-readable evidence](verification/v4_correctness_checks_2026-11-11.json) and the [failure inventory](verification/v4_regression_failures_2026-11-11.txt).
 
 Earlier repository-wide runs were red, including tests that assert flag-based approval bypass, source-string details of the removed cloud renderer, status-only approval, mock production synthesis and fake/header-only artifact acceptance. Some failures also predate this work. These failures are retained and must be reviewed/migrated; they are not suppressed with skip/xfail or reported as passing verification.
 
