@@ -41,11 +41,11 @@ Chuẩn mực tạo Thumbnail Manga Recap tối ưu tỷ lệ nhấp (High-CTR) 
 
 ### 2.1 Cổng Lựa Chọn & Tương Tác Bắt Buộc (Mandatory Thumbnail Interactive Gate)
 ⚠️ **QUY TẮC BẮT BUỘC DÀNH CHO AGENT:**
-Trước khi tiến hành tạo Thumbnail, Agent **BẮT BUỘC PHẢI HỎI NGƯỜI DÙNG 2 ĐIỀU**:
-1. **Lựa chọn 3 bức ảnh:**
+Chỉ khi người dùng đã chọn **Tạo thumbnail** ở Stage 0 Q07, và trước khi thực hiện tạo Thumbnail, Agent **BẮT BUỘC PHẢI HỎI NGƯỜI DÙNG 2 ĐIỀU**. Nếu Q07 = Không tạo thì bỏ qua hoàn toàn quy trình thumbnail:
+1. **Lựa chọn ảnh nguồn (3-panel hoặc 1-hero):**
    - Agent quét các panel nổi bật trong chapter/series, lập danh sách và **đề xuất 5 đến 10 hình ứng viên đặc sắc nhất** (gợi ý rõ vai trò Trái / Giữa / Phải).
-   - Agent hỏi người dùng: *"Bạn muốn chọn 3 bức ảnh nào (Bên Trái - Ở Giữa - Bên Phải)?"*
-   - Người dùng có toàn quyền chọn 3 ảnh từ danh sách đề xuất (hoặc chỉ định bất kỳ khung tranh nào họ muốn).
+   - Agent hỏi người dùng: *"Bạn muốn chọn 3 bức ảnh nào (Bên Trái - Ở Giữa - Bên Phải), hay chỉ chọn 1 ảnh Hero chính?"*
+   - Người dùng có toàn quyền chọn 3 ảnh hoặc 1 ảnh Hero từ danh sách đề xuất (hoặc chỉ định bất kỳ khung tranh nào họ muốn). Không được tự chọn bằng `--auto` khi chưa có lựa chọn rõ ràng.
 2. **Dòng chữ tiêu đề ngắn (Short Title / Hook):**
    - Agent gợi ý 2-3 câu tiêu đề ngắn giật tít (3 đến 5 từ).
    - Agent hỏi người dùng: *"Bạn muốn hiển thị dòng chữ tiêu đề ngắn (Short Title) nào ở phía dưới ảnh bìa?"*
