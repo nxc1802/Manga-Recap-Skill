@@ -153,44 +153,23 @@ def test_kernel_metadata_machine_shape_dispatch_chapter(tmp_path, monkeypatch, d
 
 
 def test_kernel_metadata_machine_shape_dispatch_series(tmp_path, monkeypatch, dummy_project):
-    """Verifies dispatch_series_job writes machine_shape='NvidiaTeslaT4' when gpu=True."""
+    """Reject unfinished series dispatch instead of starting unusable Kaggle jobs."""
     monkeypatch.setattr("src.cloud.kaggle_service.get_project_dir", lambda p: dummy_project)
-    monkeypatch.setattr("src.cloud.kaggle_service.get_chapter_dir", lambda p, c: dummy_project / "chapters" / c)
-    monkeypatch.setattr("src.cloud.kaggle_service.time.sleep", lambda s: None)
-
+    monkeypatch.setattr(
+        "src.cloud.kaggle_service.get_chapter_dir",
+        lambda p, ch: dummy_project / "chapters" / ch,
+    )
     service = KaggleCloudService(api_token="dummy")
     mock_api = MagicMock()
-    mock_api.kernels_push.return_value = MagicMock(ref="cuongnguyen1802/series-kernel")
-
-    ds_mock = MagicMock()
-    ds_mock.ref = "cuongnguyen1802/mr-test-series-payload"
-    ds_mock.current_version_number = 10
-    mock_api.dataset_list.return_value = [ds_mock]
-    mock_api.dataset_status.return_value = "ready"
-
-    f1 = MagicMock()
-    f1.name = "script.json"
-    mock_api.dataset_list_files.return_value.dataset_files = [f1]
-
     service._api = mock_api
-    service._username = "cuongnguyen1802"
+    service.check_chapter_1_preview_approval = MagicMock(return_value=(True, None))
 
-    res = service.dispatch_series_job(
-        project_slug="test_series",
-        chapters=["1", "2"],
-        gpu=True,
-        wait=False,
-        skip_preview=True,
-    )
-    assert res["status"] == "dispatched"
-
-    staging_dir = Path(res["staging_dir"])
-    metadata_file = staging_dir / "kernel-metadata.json"
-    assert metadata_file.exists()
-
-    meta = json.loads(metadata_file.read_text(encoding="utf-8"))
-    assert meta["enable_gpu"] is True
-    assert meta["machine_shape"] == "NvidiaTeslaT4"
+    with pytest.raises(RuntimeError, match="not production-ready"):
+        service.dispatch_series_job(
+            project_slug="test_series", chapters=["1", "2"],
+            gpu=True, wait=False, skip_preview=False,
+        )
+    mock_api.kernels_push.assert_not_called()
 
 
 # ==============================================================================
@@ -287,7 +266,7 @@ def test_chapter_1_preview_gate_rejection_and_approval(monkeypatch, dummy_projec
     Verifies Chapter 1 preview gate:
     - Rejects series job when Chapter 1 human_review_status != 'approved'
     - Allows series job when Chapter 1 is approved
-    - Allows series job when skip_preview=True
+    - Does not bypass human approval when skip_preview=True
     """
     monkeypatch.setattr("src.cloud.kaggle_service.get_project_dir", lambda p: dummy_project)
     monkeypatch.setattr("src.cloud.kaggle_service.get_chapter_dir", lambda p, c: dummy_project / "chapters" / c)
@@ -299,10 +278,10 @@ def test_chapter_1_preview_gate_rejection_and_approval(monkeypatch, dummy_projec
     assert ok is False
     assert "preview has not been approved" in err
 
-    # 2. skip_preview=True -> Allowed
+    # 2. skip_preview is not an approval bypass
     ok_skip, err_skip = service.check_chapter_1_preview_approval("test_series", skip_preview=True)
-    assert ok_skip is True
-    assert err_skip is None
+    assert ok_skip is False
+    assert "preview has not been approved" in err_skip
 
     # 3. Approve Chapter 1 -> Allowed
     c1_json = dummy_project / "chapters" / "1" / "chapter.json"
@@ -461,6 +440,7 @@ def test_cli_cloud_produce_series(dummy_project, monkeypatch):
 
     mock_service = MagicMock()
     mock_service.is_authenticated = True
+    mock_service.check_chapter_1_preview_approval.return_value = (True, None)
     mock_service.dispatch_series_job.return_value = {
         "status": "success",
         "project_slug": "test_series",
@@ -474,7 +454,7 @@ def test_cli_cloud_produce_series(dummy_project, monkeypatch):
             cloud_action="produce-series",
             project="test_series",
             chapters="1,2",
-            skip_preview=True,
+            skip_preview=False,
             compile=True,
             no_gpu=False,
         )
