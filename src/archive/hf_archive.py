@@ -133,8 +133,21 @@ def ensure_archive_repo(api: HfApi, repo_id: str = DEFAULT_HF_REPO_ID) -> str:
         )
         return repo_id
     except Exception as e:
-        logger.warning(f"Note on create_repo for {repo_id}: {e}")
-        return repo_id
+        # Existing private repos may reject redundant create operations; probe
+        # explicitly instead of silently accepting a public/wrong repository.
+        logger.info(f"Archive repo create request notice for {repo_id}: {e}")
+
+    try:
+        info = api.repo_info(repo_id=repo_id, repo_type="dataset")
+    except Exception as e:
+        raise CliValidationError(
+            f"Unable to verify archive repository {repo_id} visibility and access: {e}"
+        ) from e
+    if getattr(info, "private", None) is not True:
+        raise CliValidationError(
+            f"Archive repository {repo_id} is not confirmed PRIVATE; upload refused."
+        )
+    return repo_id
 
 
 def compute_file_sha256(filepath: Path) -> str:
@@ -153,6 +166,10 @@ def is_whitelisted_archive_path(rel_path: Path, project_root: Path) -> Tuple[boo
     Returns (is_allowed, role_or_rejection_reason).
     """
     posix_path = rel_path.as_posix()
+    # A whitelisted image filename may be a symlink to a secret file located
+    # INSIDE the project root; containment alone does not prevent data leaks.
+    if (project_root / rel_path).is_symlink():
+        return False, f"Symlink asset forbidden from archive: {posix_path}"
     abs_path = (project_root / rel_path).resolve()
 
     # 1. Symlink escape / Directory traversal check
