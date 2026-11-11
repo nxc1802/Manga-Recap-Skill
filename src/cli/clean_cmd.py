@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.cli.exit_codes import CliValidationError
@@ -55,6 +56,24 @@ def _check_two_receipt_gate(
             f"Run 'manga-recap archive verify' first."
         )
 
+    # Fail closed: push completion alone is not enough. A pinned remote
+    # verification and a full round-trip restore must both have passed.
+    if (
+        not archive_receipt.get("last_verified_at")
+        or not archive_receipt.get("restore_verified_at")
+        or archive_receipt.get("restored_revision") != archive_receipt.get("commit_sha")
+        or archive_receipt.get("verification_revision") != archive_receipt.get("commit_sha")
+    ):
+        raise CliValidationError(
+            "Two-Receipt Gate failed: archive must pass remote SHA-256 verification "
+            "and a full SHA-256 restore test at the same pinned revision before deletion."
+        )
+    manifest_file = project_dir / "archive_manifest.json"
+    if not manifest_file.is_file():
+        raise CliValidationError("Two-Receipt Gate failed: archive_manifest.json is missing.")
+    if hashlib.sha256(manifest_file.read_bytes()).hexdigest() != archive_receipt.get("manifest_sha256"):
+        raise CliValidationError("Two-Receipt Gate failed: archive manifest changed since verification.")
+
     youtube_waived = False
     setup_file = project_dir / "series_setup_answers.json"
     if setup_file.exists():
@@ -90,7 +109,10 @@ def _check_two_receipt_gate(
 
             try:
                 yt_data = read_json(yt_receipt_file)
-                if yt_data.get("status") not in ("verified", "uploaded") or not yt_data.get("video_id"):
+                if (yt_data.get("status") != "verified"
+                        or yt_data.get("upload_status") != "processed"
+                        or not yt_data.get("video_id")
+                        or not yt_data.get("verified_at")):
                     missing_yt_chapters.append(ch_num)
                 else:
                     youtube_records[ch_num] = {
@@ -210,6 +232,12 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
     archive_receipt: Optional[Dict[str, Any]] = None
     youtube_records: Dict[str, Any] = {}
 
+    if not dry_run and bypass_receipts:
+        raise CliValidationError(
+            "--bypass-receipts is forbidden for destructive cleanup. "
+            "Dry runs are always permitted without archive or YouTube receipts."
+        )
+
     if not dry_run:
         # Safety Barrier: --confirm-project must match project_slug unconditionally
         if confirm_project != project_slug:
@@ -218,13 +246,12 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
                 f"(got '{confirm_project}')."
             )
 
-        # Two-Receipt Gate: strictly enforced unless explicit bypass_receipts override
-        if not bypass_receipts:
-            archive_receipt, youtube_records = _check_two_receipt_gate(
-                project_slug=project_slug,
-                project_dir=project_dir,
-                target_chapters=target_chapters,
-            )
+        # Always verify both receipts before changing any local content.
+        archive_receipt, youtube_records = _check_two_receipt_gate(
+            project_slug=project_slug,
+            project_dir=project_dir,
+            target_chapters=target_chapters,
+        )
 
     cleaned_files: List[str] = []
     total_reclaimed_bytes = 0
