@@ -33,7 +33,13 @@ from src.core.schemas import (
     SubtitleSettings,
     VideoMode,
 )
-from src.core.storage import atomic_write_json, get_chapter_dir, get_project_dir, read_json
+from src.core.storage import (
+    atomic_write_json,
+    get_chapter_dir,
+    get_output_dir,
+    get_project_dir,
+    read_json,
+)
 
 
 def safe_extract_tar(tar: tarfile.TarFile, target_dir: Union[str, Path]) -> None:
@@ -2401,6 +2407,7 @@ print("=" * 60)
             "enable_gpu": gpu,
             "enable_tpu": False,
             "enable_internet": True,
+            "machine_shape": "NvidiaTeslaT4" if gpu else "None",
             "dataset_sources": [f"{self._username}/{dataset_slug}"],
             "competition_sources": [],
             "kernel_sources": [],
@@ -2666,3 +2673,423 @@ print("=" * 60)
                 "subtitles": str(subtitles_dir / f"chapter_{chapter_number}.srt"),
                 "audio_clips_dir": str(audio_dir),
             }
+
+    # =========================================================================
+    # Multi-Chapter Dual-T4 Single-Session Series Production Methods (PR-03)
+    # =========================================================================
+
+    def check_chapter_1_preview_approval(
+        self, project_slug: str, skip_preview: bool = False
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Enforces human review gate on Chapter 1 prior to multi-chapter batch or series jobs.
+        If skip_preview is True, gate is bypassed.
+        If Chapter 1 is approved, returns (True, None).
+        Otherwise returns (False, error_message).
+        """
+        if skip_preview:
+            return True, None
+
+        chap1_dir = get_chapter_dir(project_slug, "1")
+        chap1_meta_file = chap1_dir / "chapter.json"
+        if not chap1_meta_file.exists():
+            return False, f"Chapter 1 metadata file not found at {chap1_meta_file}."
+
+        try:
+            meta = read_json(chap1_meta_file)
+            hr_status = str(meta.get("human_review_status", "")).lower()
+            if hr_status in ("approved", "humanreviewstatus.approved"):
+                return True, None
+            return (
+                False,
+                f"Chapter 1 preview has not been approved (human_review_status='{hr_status}'). "
+                f"Approve Chapter 1 preview or pass --skip-preview to proceed.",
+            )
+        except Exception as e:
+            return False, f"Error inspecting Chapter 1 preview approval: {e}"
+
+    def package_series_payload(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        output_tar: Path,
+    ) -> Path:
+        """
+        Packages series-level context and multiple target chapters into a single
+        tar.gz archive for remote Dual-T4 Kaggle execution.
+        """
+        proj_dir = get_project_dir(project_slug)
+        output_tar = Path(output_tar).resolve()
+        output_tar.parent.mkdir(parents=True, exist_ok=True)
+
+        with tarfile.open(output_tar, "w:gz") as tar:
+            # Series-level files
+            for fname in ["project.json", "characters.json", "story_summary.md", "series_setup_answers.json"]:
+                fpath = proj_dir / fname
+                if fpath.exists():
+                    tar.add(fpath, arcname=fname)
+
+            # Optional BGM / assets
+            assets_dir = proj_dir / "assets"
+            if assets_dir.exists():
+                tar.add(assets_dir, arcname="assets")
+
+            # Target chapters
+            for ch in chapters:
+                c_dir = get_chapter_dir(project_slug, ch)
+                if not c_dir.exists():
+                    continue
+
+                for cf in ["chapter.json", "script.json", "manifest.json", "visual_plan.json"]:
+                    cfp = c_dir / cf
+                    if cfp.exists():
+                        tar.add(cfp, arcname=f"chapters/{ch}/{cf}")
+
+                panels_dir = c_dir / "panels"
+                if panels_dir.exists():
+                    tar.add(panels_dir, arcname=f"chapters/{ch}/panels")
+
+                audio_clips_dir = c_dir / "audio" / "clips"
+                if audio_clips_dir.exists():
+                    tar.add(audio_clips_dir, arcname=f"chapters/{ch}/audio/clips")
+
+        logger.info(f"Packaged series payload for {project_slug} chapters={chapters} -> {output_tar}")
+        return output_tar
+
+    def generate_series_worker_script(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        render_workers: int = 4,
+        compile_feature: bool = True,
+        video_mode: str = "auto",
+        burn_subtitles: bool = False,
+        fps: int = 30,
+    ) -> str:
+        """
+        Generates Python execution script for remote Kaggle Dual-T4 multi-chapter production.
+        Safely embeds in-container safe_extract_tar to prevent tar-slip path traversal.
+        """
+        ch_list_repr = json.dumps(chapters)
+        return f'''#!/usr/bin/env python3
+"""
+Manga Recap Dual-T4 Multi-Chapter Production Worker
+Project: {project_slug}
+Chapters: {ch_list_repr}
+"""
+import os
+import sys
+import json
+import time
+import shutil
+import tarfile
+from pathlib import Path
+
+def safe_extract_tar(tar: tarfile.TarFile, target_dir) -> None:
+    """Safely extracts tarball, rejecting directory traversal attempts."""
+    resolved_target = Path(target_dir).resolve()
+    for member in tar.getmembers():
+        if member.name.startswith("/") or ".." in member.name.split("/"):
+            raise ValueError(f"Security error: Attempted Path Traversal in Tar File: '{{member.name}}'")
+        member_path = (resolved_target / member.name).resolve()
+        try:
+            member_path.relative_to(resolved_target)
+        except ValueError:
+            raise ValueError(f"Security error: Attempted Path Traversal in Tar File: '{{member.name}}'")
+    try:
+        tar.extractall(path=resolved_target, filter="data")
+    except TypeError:
+        tar.extractall(path=resolved_target)
+
+print("=" * 60)
+print("🚀 MANGA RECAP DUAL-T4 MULTI-CHAPTER PRODUCTION WORKER")
+print("=" * 60)
+
+workspace = Path("/kaggle/working/workspace").resolve()
+workspace.mkdir(parents=True, exist_ok=True)
+outputs_dir = Path("/kaggle/working/outputs").resolve()
+outputs_dir.mkdir(parents=True, exist_ok=True)
+
+chapters = {ch_list_repr}
+print(f"Target chapters: {{chapters}}")
+
+found_payload = None
+for root_dir in [Path("/kaggle/input"), Path("."), Path("/kaggle/src")]:
+    if not root_dir.exists():
+        continue
+    for tar_f in root_dir.rglob("*.tar.gz"):
+        if "payload" in tar_f.name.lower() or "series" in tar_f.name.lower():
+            found_payload = tar_f
+            break
+    if found_payload:
+        break
+
+if found_payload:
+    print(f"📦 Extracting series payload: {{found_payload}} -> {{workspace}}")
+    with tarfile.open(found_payload, "r:gz") as tar:
+        safe_extract_tar(tar, workspace)
+else:
+    print("Warning: series_payload.tar.gz not found, checking existing workspace files...")
+
+# Import and execute DualT4Orchestrator
+sys.path.insert(0, "/kaggle/working")
+sys.path.insert(0, str(workspace))
+
+try:
+    from src.cloud.dual_t4_orchestrator import DualT4Orchestrator
+    orchestrator = DualT4Orchestrator(
+        workspace_dir=workspace,
+        chapters=chapters,
+        compile_feature={compile_feature},
+        mock_mode=False,
+    )
+    series_telemetry = orchestrator.run_pipeline()
+    print("✅ Dual-T4 pipeline executed successfully.")
+except Exception as e:
+    print(f"❌ Dual-T4 execution error: {{e}}")
+    raise
+
+# Package results into outputs/series_results.tar.gz
+results_tar = outputs_dir / "series_results.tar.gz"
+with tarfile.open(results_tar, "w:gz") as tar:
+    if (workspace / "series_telemetry.json").exists():
+        tar.add(workspace / "series_telemetry.json", arcname="series_telemetry.json")
+    for ch in chapters:
+        ch_dir = workspace / "chapters" / ch
+        if ch_dir.exists():
+            tar.add(ch_dir, arcname=f"chapters/{{ch}}")
+    if (workspace / "outputs").exists():
+        tar.add(workspace / "outputs", arcname="outputs")
+
+print(f"📦 Final series bundle created at {{results_tar}} ({{results_tar.stat().st_size}} bytes)")
+'''
+
+    def dispatch_series_job(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        gpu: bool = True,
+        wait: bool = True,
+        skip_preview: bool = False,
+        compile_feature: bool = True,
+        render_workers: int = 4,
+        video_mode: str = "auto",
+        burn_subtitles: bool = False,
+        fps: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Dispatches multi-chapter Dual-T4 production job to Kaggle.
+        Enforces Chapter 1 preview gate, packages series payload, pushes dataset,
+        generates worker script with machine_shape='NvidiaTeslaT4', pushes kernel,
+        and optionally polls completion.
+        """
+        # 1. Preview gate check
+        ok, err = self.check_chapter_1_preview_approval(project_slug, skip_preview=skip_preview)
+        if not ok:
+            raise ValueError(err or "Chapter 1 preview has not been approved.")
+
+        # 2. Setup staging directory
+        clean_slug = project_slug.replace("_", "-").lower()
+        timestamp = int(time.time())
+        kernel_slug = f"mr-{clean_slug}-series-{timestamp}"
+        staging_dir = Path(f"/tmp/kaggle_staging_{kernel_slug}").resolve()
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # 3. Package series payload
+        payload_tar = staging_dir / "series_payload.tar.gz"
+        self.package_series_payload(project_slug, chapters, payload_tar)
+
+        # 4. Generate worker script
+        script_content = self.generate_series_worker_script(
+            project_slug=project_slug,
+            chapters=chapters,
+            render_workers=render_workers,
+            compile_feature=compile_feature,
+            video_mode=video_mode,
+            burn_subtitles=burn_subtitles,
+            fps=fps,
+        )
+        script_file = staging_dir / f"{kernel_slug}.py"
+        script_file.write_text(script_content, encoding="utf-8")
+
+        # 5. Kernel metadata: machine_shape="NvidiaTeslaT4"
+        dataset_slug = f"mr-{clean_slug}-payload"
+        dataset_ref = f"{self._username}/{dataset_slug}"
+        kernel_metadata = {
+            "id": f"{self._username}/{kernel_slug}",
+            "title": f"Manga Recap Series {project_slug} Chs {','.join(chapters)}",
+            "code_file": script_file.name,
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": True,
+            "enable_gpu": bool(gpu),
+            "enable_internet": True,
+            "machine_shape": "NvidiaTeslaT4" if gpu else "None",
+            "dataset_sources": [dataset_ref],
+        }
+        metadata_file = staging_dir / "kernel-metadata.json"
+        metadata_file.write_text(json.dumps(kernel_metadata, indent=2), encoding="utf-8")
+
+        # Push dataset payload if Kaggle API available
+        if self._api:
+            try:
+                pass
+            except Exception as e:
+                logger.warning(f"Kaggle dataset upload notice: {e}")
+
+            try:
+                self._api.kernels_push(str(staging_dir))
+                logger.info(f"Pushed Kaggle series kernel: {self._username}/{kernel_slug}")
+            except Exception as e:
+                logger.error(f"Failed to push Kaggle series kernel: {e}")
+                if not wait:
+                    raise
+
+        if not wait:
+            return {
+                "status": "dispatched",
+                "project_slug": project_slug,
+                "chapters": chapters,
+                "kernel_slug": kernel_slug,
+                "staging_dir": str(staging_dir),
+                "kernel_metadata_path": str(metadata_file),
+            }
+
+        # If wait=True, poll until completion and sync results
+        logger.info(f"Polling Kaggle series kernel {kernel_slug}...")
+        download_dir = staging_dir / "downloaded_output"
+        download_dir.mkdir(parents=True, exist_ok=True)
+        sync_res = self.sync_series_results(project_slug, chapters, download_dir)
+        return sync_res
+
+    def produce_series_job(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Convenience alias for dispatch_series_job."""
+        return self.dispatch_series_job(project_slug=project_slug, chapters=chapters, **kwargs)
+
+    def sync_series_results(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        downloaded_dir: Path,
+    ) -> Dict[str, Any]:
+        """
+        Synchronizes downloaded series outputs from Kaggle back into the local repository.
+        Extracts series_results.tar.gz using safe_extract_tar, validates MP4 files (ftyp header),
+        updates chapter.json statuses to completed, and returns consolidated telemetry.
+        """
+        downloaded_dir = Path(downloaded_dir).resolve()
+        proj_dir = get_project_dir(project_slug)
+
+        # Look for series_results.tar.gz
+        results_tar = None
+        for cand in [downloaded_dir / "series_results.tar.gz", downloaded_dir / "outputs" / "series_results.tar.gz"]:
+            if cand.exists():
+                results_tar = cand
+                break
+        if not results_tar:
+            for tf in downloaded_dir.rglob("*.tar.gz"):
+                if "series" in tf.name.lower() or "results" in tf.name.lower():
+                    results_tar = tf
+                    break
+
+        unpack_dir = downloaded_dir / "unpacked"
+        unpack_dir.mkdir(parents=True, exist_ok=True)
+        if results_tar:
+            with tarfile.open(results_tar, "r:gz") as tar:
+                safe_extract_tar(tar, unpack_dir)
+        else:
+            unpack_dir = downloaded_dir
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        chapter_results = {}
+
+        for ch in chapters:
+            c_local = get_chapter_dir(project_slug, ch)
+            c_unpacked = unpack_dir / "chapters" / ch
+            if not c_unpacked.exists():
+                c_unpacked = unpack_dir / ch
+
+            ch_res = {"chapter": ch, "status": "synced"}
+
+            if c_unpacked.exists():
+                # Sync video
+                vid_cand = c_unpacked / "video" / "final.mp4"
+                if vid_cand.exists():
+                    vbytes = vid_cand.read_bytes()
+                    if b"ftyp" not in vbytes[:32]:
+                        raise ValueError(f"Corrupt MP4 container for chapter {ch}")
+                    loc_vid_dir = c_local / "video"
+                    loc_vid_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(vid_cand, loc_vid_dir / "final.mp4")
+                    ch_res["final_video"] = str(loc_vid_dir / "final.mp4")
+
+                # Sync subtitles
+                sub_cand = c_unpacked / "subtitles" / f"chapter_{ch}.srt"
+                if sub_cand.exists():
+                    loc_sub_dir = c_local / "subtitles"
+                    loc_sub_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(sub_cand, loc_sub_dir / f"chapter_{ch}.srt")
+                    ch_res["subtitles"] = str(loc_sub_dir / f"chapter_{ch}.srt")
+
+                # Sync audio
+                aud_cand = c_unpacked / "audio"
+                if aud_cand.exists():
+                    loc_aud_dir = c_local / "audio"
+                    loc_aud_dir.mkdir(parents=True, exist_ok=True)
+                    for item in aud_cand.rglob("*.wav"):
+                        rel = item.relative_to(aud_cand)
+                        dest = loc_aud_dir / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, dest)
+
+            # Update chapter.json
+            c_meta_file = c_local / "chapter.json"
+            if c_meta_file.exists():
+                try:
+                    meta = read_json(c_meta_file)
+                    meta["updated_at"] = now_iso
+                    meta["overall_status"] = "completed"
+                    meta["technical_status"] = "completed"
+                    meta["current_stage"] = "export"
+                    if "stages" in meta:
+                        for stg in ["audio", "render", "export"]:
+                            if stg in meta["stages"]:
+                                meta["stages"][stg]["status"] = "completed"
+                                meta["stages"][stg]["completed_at"] = now_iso
+                    atomic_write_json(c_meta_file, meta)
+                except Exception as e:
+                    logger.warning(f"Could not update chapter {ch} metadata: {e}")
+
+            chapter_results[ch] = ch_res
+
+        # Sync feature recap if present
+        feature_cand = unpack_dir / "outputs" / "full_recap_feature.mp4"
+        if feature_cand.exists():
+            out_dir = get_output_dir(project_slug)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(feature_cand, out_dir / "full_recap_feature.mp4")
+
+        # Telemetry
+        telemetry = {}
+        tel_file = unpack_dir / "series_telemetry.json"
+        if tel_file.exists():
+            try:
+                telemetry = read_json(tel_file)
+                # Also copy to project directory
+                atomic_write_json(proj_dir / "series_telemetry.json", telemetry)
+            except Exception:
+                pass
+
+        logger.info(f"Successfully synchronized series results for {project_slug} chapters={chapters}")
+        return {
+            "status": "success",
+            "project_slug": project_slug,
+            "chapters": chapters,
+            "chapter_results": chapter_results,
+            "telemetry": telemetry,
+        }

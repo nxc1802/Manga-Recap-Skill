@@ -195,10 +195,12 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
             try:
                 logger.info(f"Updating YouTube video '{video_id}' thumbnail via account '{account}'...")
                 service = get_authenticated_service(account=account)
-                from googleapiclient.http import MediaFileUpload
+                import importlib
+                media_mod = importlib.import_module("googleapiclient.http")
+                media_file_upload = getattr(media_mod, "MediaFileUpload")
                 service.thumbnails().set(
                     videoId=video_id,
-                    media_body=MediaFileUpload(str(final_thumb_p), mimetype="image/jpeg"),
+                    media_body=media_file_upload(str(final_thumb_p), mimetype="image/jpeg"),
                 ).execute()
                 upload_result = {"status": "success", "video_id": video_id}
                 logger.info(f"Successfully updated YouTube thumbnail for video {video_id}!")

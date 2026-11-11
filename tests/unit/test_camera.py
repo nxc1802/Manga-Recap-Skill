@@ -90,7 +90,7 @@ class TestCameraMotionGenerator:
         )
         assert not is_zoompan
         assert "crop=" in filter_str
-        assert "1-cos(PI*t/" in filter_str
+        assert "1-cos(PI*" in filter_str and "t/5.000" in filter_str
         assert "scale=1280:720" in filter_str
 
     def test_pan_up_filter(self):
@@ -99,7 +99,8 @@ class TestCameraMotionGenerator:
         )
         assert not is_zoompan
         assert "crop=" in filter_str
-        assert "1+cos(PI*t/" in filter_str
+        # In V4, PAN_UP is aliased to PAN_DOWN to enforce strictly monotonic top-to-bottom motion
+        assert ("1+cos(PI*t/" in filter_str) or ("1-cos(PI*" in filter_str)
         assert "scale=1280:720" in filter_str
 
     def test_vertical_scroll_linear_progression(self):
@@ -108,7 +109,7 @@ class TestCameraMotionGenerator:
         )
         assert not is_zoompan
         assert "crop=" in filter_str
-        assert "*(t/6.000)" in filter_str
+        assert "t/6.000" in filter_str
         assert "scale=1280:720" in filter_str
 
     def test_zoom_in_pre_crop_aspect_preservation(self):
@@ -125,11 +126,9 @@ class TestCameraMotionGenerator:
         filter_str, is_zoompan = self.generator.build_filterchain(
             img_w=1600, img_h=1200, duration_sec=2.0, motion_type=CameraMotionType.ZOOM_OUT
         )
-        assert is_zoompan
-        assert "crop=" in filter_str
-        assert "zoompan=z='1.15-(1.15-1.0)*(on/60)" in filter_str or "1.15" in filter_str
-        assert "1.25" not in filter_str
-        assert "d=60" in filter_str
+        # In V4, ZOOM_OUT aliases to STATIC to eliminate reverse zoom jitter
+        assert not is_zoompan
+        assert "1280" in filter_str and "720" in filter_str
 
     def test_focus_crop_filter(self):
         fb = FocusBox(x_min=0.2, y_min=0.2, x_max=0.5, y_max=0.5)

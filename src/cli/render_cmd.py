@@ -104,14 +104,18 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Chapter number (--chapter) is required.")
 
     project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
+    fallback_dir = get_project_data_dir(project_slug)
+    eff_dir = project_dir if project_dir.exists() else (fallback_dir if fallback_dir.exists() else project_dir)
+
+    # Strict Form Gate
+    from src.core.series_setup import require_series_setup
+    require_series_setup(project_slug, project_dir=eff_dir)
+
+    if not eff_dir.exists():
+        raise StorageFileNotFoundError(
+            f"Project '{project_slug}' directory not found at {eff_dir}"
+        )
+    project_dir = eff_dir
 
     # Gate 0: Inherit video and render settings from series-level project.json
     proj_cfg_path = project_dir / "project.json"

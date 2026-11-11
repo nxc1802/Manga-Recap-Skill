@@ -192,7 +192,7 @@ def build_parser() -> JsonAwareArgumentParser:
 
     # 10. youtube
     p_yt = subparsers.add_parser("youtube", help="YouTube metadata packaging, SEO, and video uploading", parents=[common_parent])
-    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "auth", "accounts"], help="YouTube action: 'metadata', 'upload', 'auth', or 'accounts'")
+    p_yt.add_argument("youtube_action", choices=["metadata", "prepare", "upload", "verify", "auth", "accounts"], help="YouTube action: 'metadata', 'upload', 'verify', 'auth', or 'accounts'")
     p_yt.add_argument("-p", "--project", default=None, help="Project slug")
     p_yt.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
     p_yt.add_argument("--account", default=None, help="Target YouTube account/channel name (default: active default account)")
@@ -210,12 +210,16 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default="private", help="Video privacy status (default: private)")
     p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path (default: auto-detected from output/<slug>/chapter_<num>_thumbnail.jpg)")
     p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
+    p_yt.add_argument("--video-id", default=None, help="Target YouTube video ID for verification")
 
     # 11. clean
     p_cln = subparsers.add_parser("clean", help="Safely clean intermediate caches and temporary clips", parents=[common_parent])
     p_cln.add_argument("-p", "--project", required=True, help="Project slug")
     p_cln.add_argument("-c", "--chapter", default=None, help="Specific chapter number (default: all completed chapters)")
-    p_cln.add_argument("--dry-run", action="store_true", help="Report reclaimable storage without unlinking files")
+    p_cln.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True, help="Dry-run simulation mode without unlinking files (default: True)")
+    p_cln.add_argument("--confirm-project", default=None, help="Explicit project slug confirmation required for actual deletion")
+    p_cln.add_argument("--bypass-receipts", action="store_true", help="Bypass two-receipt gate (testing/internal override only)")
+    p_cln.add_argument("--purge-raw", action="store_true", help="Also purge raw pages and panel crops after archive verification")
 
     # 13. produce
     p_prod = subparsers.add_parser("produce", help="Single-session cloud production runner (Kaggle/Colab)", parents=[common_parent])
@@ -243,12 +247,40 @@ def build_parser() -> JsonAwareArgumentParser:
 
     # 14. cloud
     p_cld = subparsers.add_parser("cloud", help="Kaggle/Remote Cloud GPU runner for extreme speed", parents=[common_parent])
-    p_cld.add_argument("cloud_action", choices=["run", "info", "pull"], default="run", nargs="?", help="Action (run, info, pull)")
-    p_cld.add_argument("-p", "--project", default=None, help="Project slug")
-    p_cld.add_argument("-c", "--chapter", default=None, help="Chapter number")
-    p_cld.add_argument("--provider", choices=["kaggle"], default="kaggle", help="Cloud provider (default: kaggle)")
-    p_cld.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
-    p_cld.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
+    cloud_subs = p_cld.add_subparsers(dest="cloud_action", title="cloud actions")
+
+    p_cld_run = cloud_subs.add_parser("run", help="Run cloud production for a single chapter", parents=[common_parent])
+    p_cld_run.add_argument("-p", "--project", default=None, help="Project slug")
+    p_cld_run.add_argument("-c", "--chapter", default=None, help="Chapter number")
+    p_cld_run.add_argument("--chapters", default=None, help="Comma-separated or range list of chapters")
+    p_cld_run.add_argument("--provider", choices=["kaggle"], default="kaggle", help="Cloud provider (default: kaggle)")
+    p_cld_run.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
+    p_cld_run.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
+
+    p_cld_info = cloud_subs.add_parser("info", help="Get cloud provider information and authentication status", parents=[common_parent])
+    p_cld_info.add_argument("--provider", choices=["kaggle"], default="kaggle")
+
+    p_cld_pull = cloud_subs.add_parser("pull", help="Pull results from cloud kernel", parents=[common_parent])
+    p_cld_pull.add_argument("-p", "--project", default=None)
+    p_cld_pull.add_argument("-c", "--chapter", default=None)
+
+    p_cld_series = cloud_subs.add_parser(
+        "produce-series",
+        aliases=["produce_series"],
+        help="Run Kaggle Dual-T4 single-session multi-chapter production",
+        parents=[common_parent],
+    )
+    p_cld_series.add_argument("-p", "--project", required=True, help="Project slug")
+    p_cld_series.add_argument("-c", "--chapters", required=True, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
+    p_cld_series.add_argument("--skip-preview", action="store_true", default=False, help="Skip Chapter 1 preview approval gate check")
+    p_cld_series.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
+    p_cld_series.add_argument("--voice", default=None, help="Voice override")
+    p_cld_series.add_argument("--speed", type=float, default=None, help="Speed override")
+    p_cld_series.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video framing mode")
+    p_cld_series.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=False, help="Burn subtitles directly onto video frames")
+    p_cld_series.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable camera motion animations")
+    p_cld_series.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
+    p_cld_series.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
 
     # 15. review-pack
     p_rp = subparsers.add_parser("review-pack", aliases=["review_pack"], help="Generate lightweight static human review pack", parents=[common_parent])
@@ -277,6 +309,22 @@ def build_parser() -> JsonAwareArgumentParser:
     p_th.add_argument("--output", default=None, help="Custom destination image file path")
     p_th.add_argument("--upload", action="store_true", help="Update thumbnail on YouTube for this chapter immediately")
     p_th.add_argument("--account", default="default", help="YouTube account alias if uploading")
+
+    # 17. archive
+    p_arc = subparsers.add_parser("archive", help="Private Hugging Face Dataset archival and restoration", parents=[common_parent])
+    p_arc.add_argument("archive_action", choices=["push", "verify", "restore"], help="Archive action: 'push', 'verify', or 'restore'")
+    p_arc.add_argument("-p", "--project", required=True, help="Project slug")
+    p_arc.add_argument("--repo-id", default=None, help="Hugging Face Dataset repo ID (default: Cuong2004/manga-recap-archive)")
+    p_arc.add_argument("--token", default=None, help="Hugging Face API token override")
+    p_arc.add_argument("--revision", default=None, help="Git commit SHA or branch for verify/restore")
+    p_arc.add_argument("--target-dir", default=None, help="Local sandbox destination directory for restore")
+
+    # 18. setup
+    p_stp = subparsers.add_parser("setup", help="Strict Form 10-question user configuration gate and lifecycle management", parents=[common_parent])
+    p_stp.add_argument("setup_action", choices=["validate", "record", "show", "migrate"], help="Setup action: 'validate', 'record', 'show', or 'migrate'")
+    p_stp.add_argument("-p", "--project", required=True, help="Project slug")
+    p_stp.add_argument("--answers-json", "--answers", dest="answers_json", default=None, help="Path to answers JSON file or inline JSON string")
+    p_stp.add_argument("--reviewer", default="user", help="Reviewer identifier (default: user)")
 
     return parser
 
@@ -331,6 +379,12 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
     elif subcommand == "thumbnail":
         from src.cli.thumbnail_cmd import handle_thumbnail
         return handle_thumbnail(args)
+    elif subcommand == "archive":
+        from src.cli.archive_cmd import handle_archive
+        return handle_archive(args)
+    elif subcommand == "setup":
+        from src.cli.setup_cmd import handle_setup
+        return handle_setup(args)
     else:
         raise ValueError(f"Unknown subcommand: {subcommand}")
 
@@ -350,7 +404,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "thumbnail"
+            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "thumbnail", "archive", "setup"
         }:
             detected_subcommand = arg
             break

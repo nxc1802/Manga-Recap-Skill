@@ -30,7 +30,7 @@ def test_clean_cmd_skips_unverified_chapters(tmp_path, monkeypatch):
     clip.parent.mkdir(parents=True, exist_ok=True)
     clip.write_bytes(b"RIFF" + b"\x00" * 100)
 
-    args = argparse.Namespace(project=slug, chapter=None, dry_run=False)
+    args = argparse.Namespace(project=slug, chapter=None, dry_run=False, confirm_project=slug, bypass_receipts=True)
     res = handle_clean(args)
 
     assert res["cleaned_files_count"] == 0
@@ -77,7 +77,7 @@ def test_clean_cmd_reclaims_intermediates_when_output_verified(tmp_path, monkeyp
     assert a_clip.exists()
 
     # Actual cleanup
-    args_real = argparse.Namespace(project=slug, chapter=1, dry_run=False)
+    args_real = argparse.Namespace(project=slug, chapter=1, dry_run=False, confirm_project=slug, bypass_receipts=True)
     res_real = handle_clean(args_real)
     assert res_real["dry_run"] is False
     assert res_real["cleaned_files_count"] >= 4

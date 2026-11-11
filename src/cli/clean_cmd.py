@@ -3,20 +3,177 @@ src/cli/clean_cmd.py
 Subcommand handler: manga-recap clean
 Safely eliminates intermediate TTS utterance audio clips, intermediate video clips,
 raw video concats, and obsolete renders after final output is verified.
+Enforces the Two-Receipt Safe Cleanup Protocol and writes a persistent tombstone.json.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.cli.exit_codes import CliValidationError
+from src.core.logger import logger
+from src.core.schemas import utc_iso_now
 from src.core.storage import (
+    atomic_write_json,
     format_chapter_filename,
     get_output_dir,
     get_project_dir,
+    read_json,
 )
+
+
+def _check_two_receipt_gate(
+    project_slug: str,
+    project_dir: Path,
+    target_chapters: List[str],
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Enforces the Two-Receipt Safe Cleanup Gate:
+    1. Hugging Face archive_receipt.json must exist with verified status and commit SHA.
+    2. YouTube youtube_receipt.json must exist for all target chapters (unless waived in Q08).
+
+    Returns (archive_receipt_data, youtube_records_map).
+    """
+    archive_receipt_file = project_dir / "archive_receipt.json"
+    if not archive_receipt_file.exists():
+        raise CliValidationError(
+            f"Two-Receipt Gate failed: Hugging Face archive receipt missing for '{project_slug}'. "
+            f"Please run 'manga-recap archive push' and 'manga-recap archive verify' before deleting local assets."
+        )
+
+    try:
+        archive_receipt = read_json(archive_receipt_file)
+    except Exception as e:
+        raise CliValidationError(f"Two-Receipt Gate failed: Corrupt archive_receipt.json: {e}") from e
+
+    if archive_receipt.get("status") != "verified" or not archive_receipt.get("commit_sha"):
+        raise CliValidationError(
+            f"Two-Receipt Gate failed: Hugging Face archive receipt is unverified (status: {archive_receipt.get('status')}). "
+            f"Run 'manga-recap archive verify' first."
+        )
+
+    youtube_waived = False
+    setup_file = project_dir / "series_setup_answers.json"
+    if setup_file.exists():
+        try:
+            s_data = read_json(setup_file)
+            q08 = s_data.get("answers", {}).get("Q08", {})
+            u_ans = q08.get("user_answer") if isinstance(q08, dict) else q08
+            if isinstance(u_ans, str) and u_ans.strip().lower() in ("không upload", "khong upload", "none", "no"):
+                youtube_waived = True
+            elif isinstance(u_ans, bool) and not u_ans:
+                youtube_waived = True
+            elif isinstance(u_ans, dict) and u_ans.get("no_upload"):
+                youtube_waived = True
+        except Exception:
+            pass
+
+    youtube_records: Dict[str, Any] = {}
+    if not youtube_waived:
+        chapters_dir = project_dir / "chapters"
+        missing_yt_chapters: List[str] = []
+        for ch_num in target_chapters:
+            chap_dir = chapters_dir / ch_num
+            yt_receipt_file = chap_dir / "youtube_receipt.json"
+            if not yt_receipt_file.exists():
+                out_dir = get_output_dir(project_slug)
+                staged_name = format_chapter_filename(ch_num, ext="youtube_receipt.json", padded=True)
+                if (out_dir / staged_name).exists():
+                    yt_receipt_file = out_dir / staged_name
+
+            if not yt_receipt_file.exists():
+                missing_yt_chapters.append(ch_num)
+                continue
+
+            try:
+                yt_data = read_json(yt_receipt_file)
+                if yt_data.get("status") not in ("verified", "uploaded") or not yt_data.get("video_id"):
+                    missing_yt_chapters.append(ch_num)
+                else:
+                    youtube_records[ch_num] = {
+                        "video_id": yt_data.get("video_id"),
+                        "video_url": yt_data.get("video_url"),
+                        "privacy_status": yt_data.get("privacy_status"),
+                    }
+            except Exception:
+                missing_yt_chapters.append(ch_num)
+
+        if missing_yt_chapters:
+            raise CliValidationError(
+                f"Two-Receipt Gate failed: Missing or unverified YouTube receipt for chapter(s): {', '.join(missing_yt_chapters)}. "
+                f"Run 'manga-recap youtube verify' first, or configure Q08 as 'Không upload'."
+            )
+
+    return archive_receipt, youtube_records
+
+
+def _build_tombstone(
+    project_slug: str,
+    archive_receipt: Optional[Dict[str, Any]],
+    youtube_records: Dict[str, Any],
+    total_reclaimed_bytes: int,
+    cleaned_files_count: int,
+) -> bytes:
+    """
+    Constructs and serializes tombstone.json payload with strict size enforcement (< 2048 bytes).
+    Compactly maps {chapter_number: video_id} and applies progressive compression/truncation
+    if total chapter count causes the JSON payload to approach or exceed 2 KB.
+    """
+    compact_yt: Dict[str, str] = {}
+    for ch, val in youtube_records.items():
+        if isinstance(val, dict):
+            vid = val.get("video_id") or ""
+        else:
+            vid = str(val or "")
+        if vid:
+            compact_yt[str(ch)] = vid
+
+    tombstone_data: Dict[str, Any] = {
+        "tombstone_version": "4.0.0",
+        "project_slug": project_slug,
+        "archive_timestamp": archive_receipt.get("created_at") if archive_receipt else None,
+        "cleanup_timestamp": utc_iso_now(),
+        "hf_repo_id": archive_receipt.get("repo_id") if archive_receipt else None,
+        "hf_commit_sha": archive_receipt.get("commit_sha") if archive_receipt else None,
+        "hf_remote_url": archive_receipt.get("remote_url") if archive_receipt else None,
+        "youtube_videos": compact_yt,
+        "reclaimed_bytes": total_reclaimed_bytes,
+        "cleaned_files_count": cleaned_files_count,
+    }
+
+    # Level 1: Formatted indentation (indent=2)
+    formatted_bytes = json.dumps(tombstone_data, indent=2).encode("utf-8")
+    if len(formatted_bytes) < 2048:
+        return formatted_bytes
+
+    # Level 2: Minification without whitespace
+    minified_bytes = json.dumps(tombstone_data, separators=(",", ":")).encode("utf-8")
+    if len(minified_bytes) < 2048:
+        return minified_bytes
+
+    # Level 3: Progressive truncation for very large chapter series (e.g. 100+ chapters)
+    total_yt_count = len(compact_yt)
+    tombstone_data["youtube_videos_total"] = total_yt_count
+    tombstone_data["youtube_videos_truncated"] = True
+
+    sorted_keys = sorted(compact_yt.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    truncated_yt = dict(compact_yt)
+
+    for k in reversed(sorted_keys):
+        if len(json.dumps(tombstone_data, separators=(",", ":")).encode("utf-8")) < 2000:
+            break
+        truncated_yt.pop(k, None)
+        tombstone_data["youtube_videos"] = truncated_yt
+
+    final_bytes = json.dumps(tombstone_data, separators=(",", ":")).encode("utf-8")
+    if len(final_bytes) >= 2048:
+        tombstone_data["youtube_videos"] = {}
+        final_bytes = json.dumps(tombstone_data, separators=(",", ":")).encode("utf-8")
+
+    return final_bytes
 
 
 def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
@@ -25,8 +182,11 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
     if not project_slug:
         raise CliValidationError("Project slug is required.")
 
-    dry_run = getattr(args, "dry_run", False)
+    dry_run = getattr(args, "dry_run", True)
     chapter_arg = getattr(args, "chapter", None)
+    confirm_project = getattr(args, "confirm_project", None)
+    bypass_receipts = getattr(args, "bypass_receipts", False)
+    purge_raw = getattr(args, "purge_raw", False)
 
     project_dir = get_project_dir(project_slug)
     if not project_dir.exists():
@@ -46,6 +206,25 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
             target_chapters.sort(key=lambda x: int(x))
         except ValueError:
             target_chapters.sort()
+
+    archive_receipt: Optional[Dict[str, Any]] = None
+    youtube_records: Dict[str, Any] = {}
+
+    if not dry_run:
+        # Safety Barrier: --confirm-project must match project_slug unconditionally
+        if confirm_project != project_slug:
+            raise CliValidationError(
+                f"Safety barrier failed: --confirm-project '{project_slug}' is required for actual deletion "
+                f"(got '{confirm_project}')."
+            )
+
+        # Two-Receipt Gate: strictly enforced unless explicit bypass_receipts override
+        if not bypass_receipts:
+            archive_receipt, youtube_records = _check_two_receipt_gate(
+                project_slug=project_slug,
+                project_dir=project_dir,
+                target_chapters=target_chapters,
+            )
 
     cleaned_files: List[str] = []
     total_reclaimed_bytes = 0
@@ -112,6 +291,13 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
                 if p.is_file() and "raw" not in p.parts and "panels" not in p.parts:
                     ch_files_to_delete.append(p)
 
+        # 7. Optional purge of raw pages and panel crops after archive verification
+        if purge_raw and (archive_receipt or (project_dir / "archive_receipt.json").exists()):
+            for pattern in ("raw/*", "panels/*"):
+                for p in chap_dir.glob(pattern):
+                    if p.is_file():
+                        ch_files_to_delete.append(p)
+
         for f in set(ch_files_to_delete):
             if f.exists():
                 size = f.stat().st_size
@@ -171,6 +357,38 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
     reclaimed_mb = round(total_reclaimed_bytes / (1024 * 1024), 2)
     reclaimed_gb = round(total_reclaimed_bytes / (1024 * 1024 * 1024), 3)
 
+    tombstone_created = False
+    if not dry_run:
+        # Collect any additional youtube receipts that were present in chapters
+        for ch_num in target_chapters:
+            if ch_num not in youtube_records:
+                chap_dir = chapters_dir / ch_num
+                rec_f = chap_dir / "youtube_receipt.json"
+                if rec_f.exists():
+                    try:
+                        yd = read_json(rec_f)
+                        if yd.get("video_id"):
+                            youtube_records[ch_num] = {
+                                "video_id": yd.get("video_id"),
+                                "video_url": yd.get("video_url"),
+                                "privacy_status": yd.get("privacy_status"),
+                            }
+                    except Exception:
+                        pass
+
+        tombstone_bytes = _build_tombstone(
+            project_slug=project_slug,
+            archive_receipt=archive_receipt,
+            youtube_records=youtube_records,
+            total_reclaimed_bytes=total_reclaimed_bytes,
+            cleaned_files_count=len(cleaned_files),
+        )
+
+        tombstone_file = project_dir / "tombstone.json"
+        tombstone_file.write_bytes(tombstone_bytes)
+        tombstone_created = True
+        logger.info(f"Preserved persistent tombstone ({len(tombstone_bytes)} bytes): {tombstone_file}")
+
     return {
         "project_slug": project_slug,
         "dry_run": dry_run,
@@ -180,4 +398,5 @@ def handle_clean(args: argparse.Namespace) -> Dict[str, Any]:
         "reclaimed_bytes": total_reclaimed_bytes,
         "reclaimed_mb": reclaimed_mb,
         "reclaimed_gb": reclaimed_gb,
+        "tombstone_created": tombstone_created,
     }

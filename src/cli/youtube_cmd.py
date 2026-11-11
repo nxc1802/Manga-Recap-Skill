@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.cli.exit_codes import CliValidationError
 from src.core.logger import logger
-from src.core.schemas import ChapterMarker, FeatureTimeline, YouTubeMetadata
+from src.core.schemas import ChapterMarker, FeatureTimeline, YouTubeMetadata, utc_iso_now
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
@@ -801,6 +801,39 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Failed to upload custom thumbnail: {e}")
 
+    # Update metadata file with video_id and account
+    try:
+        m_data["video_id"] = video_id
+        m_data["account"] = account_name_resolved
+        atomic_write_json(meta_file, m_data)
+    except Exception as e:
+        logger.warning(f"Failed to update metadata with video_id: {e}")
+
+    # Emit immutable youtube_receipt.json
+    receipt_data = {
+        "schema_version": "4.0.0",
+        "receipt_type": "youtube_upload",
+        "project_slug": project_slug,
+        "chapter_number": str(chapter_num),
+        "video_id": video_id,
+        "video_url": video_url,
+        "account": account_name_resolved,
+        "channel_title": channel_title,
+        "channel_id": channel_id,
+        "title": title,
+        "privacy_status": privacy,
+        "captions_uploaded": captions_uploaded,
+        "thumbnail_uploaded": thumbnail_uploaded,
+        "uploaded_at": utc_iso_now(),
+        "status": "uploaded",
+    }
+    receipt_file = (
+        out_dir / "feature.youtube_receipt.json"
+        if str(chapter_num).lower() in ("feature", "all", "compilation", "full")
+        else chap_dir / "youtube_receipt.json"
+    )
+    atomic_write_json(receipt_file, receipt_data)
+
     return {
         "status": "success",
         "video_id": video_id,
@@ -812,6 +845,150 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         "privacy_status": privacy,
         "captions_uploaded": captions_uploaded,
         "thumbnail_uploaded": thumbnail_uploaded,
+        "receipt_path": str(receipt_file),
+    }
+
+
+def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Verifies YouTube post-upload status, privacy policy, closed captions, and thumbnail.
+    Queries videos.list and captions.list, then emits immutable youtube_receipt.json.
+    """
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", "1")
+    if not project_slug:
+        raise CliValidationError("Project slug (--project) is required for verification.")
+
+    is_feature = str(chapter_num).lower() in ("feature", "all", "compilation", "full")
+    chap_dir = get_chapter_dir(project_slug, chapter_num)
+    out_dir = get_output_dir(project_slug)
+
+    video_id = getattr(args, "video_id", None)
+    if not video_id:
+        meta_file = out_dir / "feature.youtube.json" if is_feature else chap_dir / "youtube_metadata.json"
+        receipt_file = out_dir / "feature.youtube_receipt.json" if is_feature else chap_dir / "youtube_receipt.json"
+        if receipt_file.exists():
+            try:
+                r_data = read_json(receipt_file)
+                video_id = r_data.get("video_id")
+            except Exception:
+                pass
+        if not video_id and meta_file.exists():
+            try:
+                m_data = read_json(meta_file)
+                video_id = m_data.get("video_id")
+            except Exception:
+                pass
+
+    if not video_id:
+        raise CliValidationError(
+            f"No video ID found for project '{project_slug}' chapter {chapter_num}. "
+            f"Please upload the video first using 'manga-recap youtube upload' or specify --video-id."
+        )
+
+    target_account = getattr(args, "account", None)
+    acc_info = account_manager.get_account(target_account)
+    account_name_resolved = acc_info.account_name
+    try:
+        creds = get_youtube_oauth_credentials(account_name=target_account)
+    except TypeError:
+        creds = get_youtube_oauth_credentials()
+
+    try:
+        import importlib
+        discovery_mod = importlib.import_module("googleapiclient.discovery")
+        build = discovery_mod.build
+    except ImportError as e:
+        raise DependencyNotFoundError("Missing googleapiclient. Install with: pip install google-api-python-client") from e
+
+    youtube = build("youtube", "v3", credentials=creds)
+    logger.info(f"Querying YouTube Data API for video {video_id}...")
+    try:
+        video_res = youtube.videos().list(part="snippet,status,contentDetails", id=video_id).execute()
+    except Exception as e:
+        raise CliValidationError(f"Failed to query YouTube Data API for video {video_id}: {e}") from e
+
+    items = video_res.get("items", [])
+    if not items:
+        raise CliValidationError(f"Video ID '{video_id}' not found on YouTube for account '{account_name_resolved}'.")
+
+    v_item = items[0]
+    snippet = v_item.get("snippet", {})
+    v_status = v_item.get("status", {})
+    upload_status = v_status.get("uploadStatus", "")
+    privacy_status = v_status.get("privacyStatus", "")
+    title = snippet.get("title", "")
+    channel_title = snippet.get("channelTitle", "")
+    channel_id = snippet.get("channelId", "")
+
+    if upload_status not in ("uploaded", "processed"):
+        rejection = v_status.get("rejectionReason", "unknown")
+        raise CliValidationError(
+            f"YouTube video {video_id} uploadStatus is not valid: '{upload_status}' (rejectionReason: {rejection})"
+        )
+
+    req_privacy = getattr(args, "privacy", None)
+    if req_privacy and privacy_status != req_privacy:
+        raise CliValidationError(
+            f"YouTube privacyStatus mismatch for video {video_id}: expected '{req_privacy}', found '{privacy_status}'"
+        )
+
+    has_captions = False
+    try:
+        cap_res = youtube.captions().list(part="snippet", videoId=video_id).execute()
+        cap_items = cap_res.get("items", [])
+        has_captions = len(cap_items) > 0
+    except Exception as e:
+        logger.warning(f"Could not verify captions for video {video_id}: {e}")
+
+    thumbnails = snippet.get("thumbnails", {})
+    has_thumbnail = bool(
+        thumbnails.get("maxres")
+        or thumbnails.get("standard")
+        or thumbnails.get("high")
+        or thumbnails.get("default")
+    )
+
+    now_ts = utc_iso_now()
+    receipt = {
+        "schema_version": "4.0.0",
+        "receipt_type": "youtube_verification",
+        "project_slug": project_slug,
+        "chapter_number": str(chapter_num),
+        "video_id": video_id,
+        "video_url": f"https://www.youtube.com/watch?v={video_id}",
+        "account": account_name_resolved,
+        "channel_title": channel_title,
+        "channel_id": channel_id,
+        "upload_status": upload_status,
+        "privacy_status": privacy_status,
+        "has_captions": has_captions,
+        "has_custom_thumbnail": has_thumbnail,
+        "status": "verified",
+        "verified_at": now_ts,
+    }
+
+    receipt_file = out_dir / "feature.youtube_receipt.json" if is_feature else chap_dir / "youtube_receipt.json"
+    receipt_file.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(receipt_file, receipt)
+
+    if not is_feature and out_dir.exists():
+        staged_name = format_chapter_filename(chapter_num, ext="youtube_receipt.json", padded=True)
+        atomic_write_json(out_dir / staged_name, receipt)
+
+    logger.info(f"YouTube verification successful for video {video_id}! Emitted receipt: {receipt_file}")
+    return {
+        "status": "success",
+        "verified": True,
+        "project_slug": project_slug,
+        "chapter_number": str(chapter_num),
+        "video_id": video_id,
+        "video_url": f"https://www.youtube.com/watch?v={video_id}",
+        "upload_status": upload_status,
+        "privacy_status": privacy_status,
+        "has_captions": has_captions,
+        "has_custom_thumbnail": has_thumbnail,
+        "receipt_path": str(receipt_file),
     }
 
 
@@ -822,10 +999,15 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_metadata(args)
     if yt_action == "upload":
         return handle_youtube_upload(args)
+    if yt_action == "verify":
+        return handle_youtube_verify(args)
     if yt_action == "auth":
         return handle_youtube_auth(args)
     if yt_action in ("accounts", "account"):
         return handle_youtube_accounts(args)
 
-    raise CliValidationError(f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, auth, accounts.")
+    raise CliValidationError(
+        f"Unknown YouTube action '{yt_action}'. Available actions: metadata, upload, verify, auth, accounts."
+    )
+
 

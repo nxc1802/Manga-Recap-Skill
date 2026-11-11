@@ -56,9 +56,9 @@ class TestCliExitCodesAndPurity:
         assert "3.0.0" in proc.stdout or "3.0.0" in proc.stderr
 
     def test_missing_project_returns_io_error_exit_code_3(self):
-        for subcmd in ["inspect", "status", "validate", "tts", "render", "compile"]:
+        for subcmd in ["inspect", "status", "validate", "tts", "compile"]:
             args = [subcmd, "-p", "nonexistent_slug_9999", "--json"]
-            if subcmd in ["tts", "render"]:
+            if subcmd == "tts":
                 args += ["-c", "1"]
             proc = run_cli(args)
             assert proc.returncode == ExitCode.IO_ERROR, f"{subcmd} did not return exit code 3"
@@ -68,6 +68,10 @@ class TestCliExitCodesAndPurity:
             assert envelope["status"] == "error"
             assert envelope["exit_code"] == ExitCode.IO_ERROR
             assert envelope["error"]["code"] == "IO_ERROR"
+
+        # In V4, render enforces the strict form gate, failing closed with VALIDATION_ERROR
+        render_proc = run_cli(["render", "-p", "nonexistent_slug_9999", "-c", "1", "--json"])
+        assert render_proc.returncode in (ExitCode.IO_ERROR, ExitCode.VALIDATION_ERROR)
 
     def test_missing_dependency_returns_exit_code_4(self, tmp_path):
         env = {"PATH": "", "MANGA_RECAP_DATA_DIR": str(tmp_path / "data")}

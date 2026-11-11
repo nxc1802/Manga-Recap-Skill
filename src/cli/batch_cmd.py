@@ -109,14 +109,18 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Project slug (--project) is required for batch processing.")
 
     project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
+    fallback_dir = get_project_data_dir(project_slug)
+    eff_dir = project_dir if project_dir.exists() else (fallback_dir if fallback_dir.exists() else project_dir)
+
+    # Strict Form Gate
+    from src.core.series_setup import require_series_setup
+    require_series_setup(project_slug, project_dir=eff_dir)
+
+    if not eff_dir.exists():
+        raise StorageFileNotFoundError(
+            f"Project '{project_slug}' directory not found at {eff_dir}"
+        )
+    project_dir = eff_dir
 
     proj_json_path = project_dir / "project.json"
     if not proj_json_path.exists():

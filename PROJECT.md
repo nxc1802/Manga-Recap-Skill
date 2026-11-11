@@ -1,81 +1,88 @@
-# Project: Manga-Recap-Skill V3 Pipeline Correctness Hardening
+# Project: Manga-Recap-Skill V4 Production Rollout
 
 ## Architecture
-- **Cognition & Vision**: Agent-Native execution (visual inspection, script writing, review approvals).
-- **Deterministic Tooling**: Python CLI offline pipeline (`crawl`, `segment`, `script/validate`, `tts`, `render`, `compile`).
-- **Data Persistence**: Local atomic JSON files (`data/projects/<slug>/`). Zero Supabase, zero external DBs.
-- **TTS Engine**: Local offline VieNeu-TTS v3 Turbo. Zero cloud TTS APIs.
-- **Rendering & Video**: Local FFmpeg pipeline with Ken Burns motion, subtitle muxing, and master audio sync.
+- **Cognition & Vision**: Agent-Native execution (visual OCR inspection, character consistency, storytelling recap scripting, camera direction). Zero cloud LLM/VLM APIs in Python core.
+- **Series Setup & Runtime Governance**: Strict Form Mode enforcing 10 explicit user answers (Q01–Q10) via `ask_question`. Zero implicit defaults. Cryptographic snapshot validation via `series_setup_answers.json`.
+- **Motion & Framing Engine**: Canonical `VisualPlan` and `Shot` engine. Strictly monotonic top-to-bottom motion (`y(t+dt) >= y(t)`), velocity capped (`<= 120 px/s`), zero reverse rubber-banding. Subject-centric focus boxes prioritizing characters over speech bubbles. Tall panel auto-splitting (`H/W > 2.0`).
+- **Cloud Execution**: One-Session Kaggle Dual-T4 Engine (`machine_shape="NvidiaTeslaT4"`). GPU 0 dedicated to VieNeu-TTS v3 Turbo batch synthesis (PyTorch CUDA device 0); GPU 1 dedicated to FFmpeg hardware NVENC encoding (`cuda` device 1). Single payload upload -> single Kaggle execution -> single bundle download. Chapter 1 preview gate mandatory before batch run.
+- **Data Persistence & Archive**: Self-contained local JSON (`data/projects/<slug>/`). Offsite private Hugging Face Dataset Archive (`Cuong2004/manga-recap-archive`) with recursive SHA-256 manifest and verified sandbox restore. Safe local cleanup permitted ONLY after both YouTube publication and HF archive restore are verified.
 
 ## Feature Inventory
 | # | Feature | Description | Milestone | Source |
 |---|---------|-------------|-----------|--------|
-| 1 | FIX-01: Full TTS Fingerprinting & Resume | SHA-256 fingerprint of (text, voice, speed, emotion, cue, engine) and checksum match before audio reuse | M1 | ORIGINAL_REQUEST §R1 |
-| 2 | FIX-02: Crawler Exception Handling | Eliminate `except Exception: pass`, fail checkpoint on network/anti-bot error or 0 images | M1 | ORIGINAL_REQUEST §R1 |
-| 3 | FIX-03: Sliding Window Stride & Coverage | Fix stride off-by-one, formula for 1–20 panels, validate 100% panel coverage without duplicates | M1 | ORIGINAL_REQUEST §R1 |
-| 4 | FIX-04: Review Gates Enforcement | Require Voice Approval (Gate 1) & Preview Approval (Gate 2) before final render; remove bypass, add `--approved` | M1 | ORIGINAL_REQUEST §R1 |
-| 5 | FIX-05: CLI Arguments & Forwarding Sync | Forward `--video-mode` to render engine, wire `--force` in segment, 48kHz audio in compile | M1 | ORIGINAL_REQUEST §R1 |
-| 6 | FIX-06: Checkpoint Lifecycle Standard | `pending` -> `running` -> `completed`/`failed`/`needs_review`; remove dead `FINALIZE`; handle crashes | M2 | ORIGINAL_REQUEST §R2 |
-| 7 | FIX-07: Artifact Invalidation Cascades | Script/voice edits invalidate audio/subtitles/video; audio edit invalidates video; compile prefers final | M2 | ORIGINAL_REQUEST §R2 |
-| 8 | FIX-08: Strict Schema Validation | Unique `seq_id`, missing panels treated as errors, verify audio checksums, validate FocusBox bounds | M2 | ORIGINAL_REQUEST §R2 |
-| 9 | FIX-09: Timeline Sync (<= 150ms) | Remove 0.5s clamping desync, save exact WAV durations to script, accurate SRT alignment | M2 | ORIGINAL_REQUEST §R2 |
-| 10 | FIX-10: Cross-Platform Packaging | Add `pyproject.toml` with `manga-recap` CLI entrypoint; clean cloud API keys from setup scripts | M2 | ORIGINAL_REQUEST §R2 |
-| 11 | Phase 3: Comprehensive Regression Tests | Author unit/regression tests covering FIX-01..10, 100% pass on all 313+ existing tests | M3 | ORIGINAL_REQUEST §R3 |
-| 12 | Phase 4: Real E2E Chapter Verification | Real chapter test with neural TTS on Webtoons URL, verify anti-bot handling and timeline sync | M4 | ORIGINAL_REQUEST §R4 |
-| 13 | P2.1: Workflow Simplification | 5 operational stages (Ingest -> Agent -> Audio -> Render -> Export), eliminate FINALIZE | M3-P2 | ORIGINAL_REQUEST §R3 |
-| 14 | P2.2: Code Cleanup & Dead Code Removal | Remove supabase_client, youtube_uploader, legacy CLI scripts, strip Google API packages | M3-P2 | ORIGINAL_REQUEST §R3 |
-| 15 | P2.3: Sequential Multi-Chapter Batch Mode | Implement `manga-recap batch`, chapter error isolation, single-chapter retry, direct 1080p | M3-P2 | ORIGINAL_REQUEST §R3 |
+| 1 | R1.1: Strict Form 10/10 Questions Schema | `SeriesSetupAnswers`, `QuestionId` enum Q01..Q10, user provenance, snapshot hash in `src/core/series_setup.py` | M1 (PR-01) | ORIGINAL_REQUEST §R1, docs/V4_Plan §PR-01 |
+| 2 | R1.2: Setup CLI & Runtime Validator | `manga-recap setup [validate\|record\|show\|migrate]` subcommands, `require_series_setup` gate at pipeline entry points | M1 (PR-01) | ORIGINAL_REQUEST §R1, docs/V4_Plan §PR-01 |
+| 3 | R1.3: Elimination of Implicit Defaults | Remove default fallbacks in `ProjectConfig`, `crawl`, `batch`, `render`, `cloud`; fail closed on missing answers | M1 (PR-01) | ORIGINAL_REQUEST §R1, docs/V4_Plan §PR-01 |
+| 4 | R1.4: Cloud Import Lint Fix | Convert static `googleapiclient.http` import in `src/cli/thumbnail_cmd.py` to dynamic import | M1 (PR-01) | explorer_survey_1 handoff |
+| 5 | R2.1: Canonical VisualPlan & Shot Models | `VisualPlan`, `Shot`, and `visual_role` in `src/render/visual_policy.py` shared across local and Kaggle | M2 (PR-02) | ORIGINAL_REQUEST §R2, docs/V4_Plan §PR-02 |
+| 6 | R2.2: Monotonic Top-Down Motion & Anti-Jitter | Clamp progress `p = min(1, max(0, t/T))`, eliminate cosine reverse rebound, cap speed <= 120 px/s, alias PAN_UP | M2 (PR-02) | ORIGINAL_REQUEST §R2, docs/V4_Plan §PR-02 |
+| 7 | R2.3: Subject-Centric Framing & Text Avoidance | Enforce `FocusBox` dimensions (w>=0.35, h>=0.30), safe zone clamping (fy>=0.30), speech bubble suppression | M2 (PR-02) | ORIGINAL_REQUEST §R2, docs/V4_Plan §PR-02 |
+| 8 | R2.4: Tall Panel Auto-Splitting & Sliver Filter | Split panels with H/W > 2.0 into overlapping sub-panels, filter blank/low-variance slivers < 80px | M2 (PR-02) | ORIGINAL_REQUEST §R2, docs/V4_Plan §PR-02 |
+| 9 | R3.1: Dual-T4 GPU Allocation & Isolation | GPU 0 dedicated to VieNeu-TTS v3 Turbo; GPU 1 dedicated to FFmpeg NVENC hardware video render | M3 (PR-03) | ORIGINAL_REQUEST §R3, docs/V4_Plan §PR-03 |
+| 10 | R3.2: One-Session Multi-Chapter Lifecycle | Chapter 1 preview gate -> single upload `series_payload.tar.gz` -> single session -> single download | M3 (PR-03) | ORIGINAL_REQUEST §R3, docs/V4_Plan §PR-03 |
+| 11 | R3.3: Pipelined Overlap & Micro-Batching | Group segments by voice/length, dynamic batch size backoff, overlap TTS(N+1) with Render(N) | M3 (PR-03) | ORIGINAL_REQUEST §R3, docs/V4_Plan §PR-03 |
+| 12 | R3.4: Kaggle Machine Shape Specification | Set `"machine_shape": "NvidiaTeslaT4"` in `kernel-metadata.json` for guaranteed 2x T4 GPU hardware | M3 (PR-03) | ORIGINAL_REQUEST §R3, docs/V4_Plan §PR-03 |
+| 13 | R4.1: Private Hugging Face Dataset Archive | `src/archive/hf_archive.py` with `huggingface_hub.HfApi`, private dataset `Cuong2004/manga-recap-archive` | M4 (PR-04) | ORIGINAL_REQUEST §R4, docs/V4_Plan §PR-04 |
+| 14 | R4.2: Cryptographic Archive Manifest & Receipts | Recursive SHA-256 whitelist manifest, exclude secrets/tokens, store immutable local archive receipt | M4 (PR-04) | ORIGINAL_REQUEST §R4, docs/V4_Plan §PR-04 |
+| 15 | R4.3: Independent Verification & Restore Test | `manga-recap archive verify`, `manga-recap youtube verify`, sandbox round-trip test restore before cleanup | M4 (PR-04) | ORIGINAL_REQUEST §R4, docs/V4_Plan §PR-04 |
+| 16 | R4.4: Fail-Closed Safe Cleanup & Tombstone | Enforce two-receipt gate (YouTube + HF), require `--confirm-project`, leave persistent `tombstone.json` | M4 (PR-04) | ORIGINAL_REQUEST §R4, docs/V4_Plan §PR-04 |
+| 17 | R5.1: End-to-End Regression Test Suite | 100% pass on all existing suites (649 tests) plus new test suites for PR-01 through PR-04 | M5 (PR-05) | ORIGINAL_REQUEST §R5, docs/V4_Plan §PR-05 |
+| 18 | R5.2: Empirical Dual-T4 Benchmark Report | Measure VRAM allocation, TTS throughput, NVENC FPS, wall-clock speedup on multi-chapter workload | M5 (PR-05) | ORIGINAL_REQUEST §R5, docs/V4_Plan §PR-05 |
 
 ## Milestones
 | # | Name | Scope | Dependencies | Status |
 |---|------|-------|-------------|--------|
-| M1 | P0 Critical Fixes | FIX-01, FIX-02, FIX-03, FIX-04, FIX-05 | Survey complete | DONE |
-| M2 | P1 Data Integrity & Contracts | FIX-06, FIX-07, FIX-08, FIX-09, FIX-10 | M1 | DONE |
-| M3 | Regression Testing Suite | Comprehensive test suite for FIX-01..10 and baseline integrity | M1, M2 | DONE |
-| M4 | Real E2E Chapter Verification | Real Webtoons URL crawl, neural TTS, render, and forensic audit | M1, M2, M3 | DONE |
-| P2 | Phase 3: P2 Simplification & Batch | 5 operational stages, consolidated gates, dead code cleanup, batch CLI | M1, M2, M3 | DONE |
-| P3 | Production Release Ch 1–10 | Sequential pipeline execution Ch 1–10 (1,389 clips, 10 1080p MP4s) | P2 | DONE |
-| P4 | Multi-Chapter Feature Compilation | 10-chapter merged 1080p MP4 (9,315.6s, 2.59h, drift 57.4ms, 2,855 cues) | P3 | DONE |
-| P5 | Forensic Integrity & Release QA | Forensic audit CLEAN, 5,954 strict checks passed, Reviewer APPROVE | P4 | DONE |
+| M1 | PR-01: Strict Form Runtime Validation | Features 1, 2, 3, 4 (`src/core/series_setup.py`, `src/cli/setup_cmd.py`, `thumbnail_cmd.py`) | Survey complete | DONE |
+| M2 | PR-02: Visual-First Motion & Framing | Features 5, 6, 7, 8 (`src/render/visual_policy.py`, `camera.py`, `video_engine.py`, `streaming_segmenter.py`) | M1 (contracts frozen) | DONE |
+| M3 | PR-03: Kaggle Dual-T4 Pipeline Engine | Features 9, 10, 11, 12 (`src/cloud/kaggle_service.py`, `dual_t4_orchestrator.py`, `cloud_cmd.py`) | M2 (VisualPlan parity) | DONE |
+| M4 | PR-04: Private HF Archive & Safe Cleanup | Features 13, 14, 15, 16 (`src/archive/hf_archive.py`, `archive_cmd.py`, `clean_cmd.py`, `youtube_cmd.py`) | M1 (contracts frozen) | DONE |
+| M5 | PR-05: E2E Acceptance & Dual-T4 Benchmark | Features 17, 18 (Full test suite 100% pass, Kaggle benchmark, release report) | M1, M2, M3, M4 | DONE |
 
 ## Interface Contracts
-### TTS Fingerprinting Contract (FIX-01)
-- Input: `text: str`, `voice: str`, `speed: float`, `emotion: Optional[str]`, `emotion_cue: Optional[str]`, `engine_mode: str`.
-- Fingerprint: `SHA256(f"{text}|{voice}|{speed:.2f}|{emotion or ''}|{emotion_cue or ''}|{engine_mode}")`.
-- Stored in: `ScriptSegment.fingerprint: Optional[str]`, `ScriptSegment.checksum: Optional[str]`.
-- Resume condition: File exists, size > 44, `seg.checksum == calculate_sha256(file)` AND `seg.fingerprint == calculated_fingerprint`.
 
-### Crawler Checkpoint Contract (FIX-02)
-- On network error, HTTP error, anti-bot block, or `raw_count == 0`:
-  - `update_checkpoint(chap_dir, StageType.CRAWL, CheckpointStatus.FAILED, error=...)`
-  - Raise `CliValidationError` or exit with non-zero exit code.
-  - Zero silent `except Exception: pass`.
+### 1. Series Setup Contract (PR-01)
+- Storage document: `data/projects/<slug>/series_setup_answers.json`
+- Model: `SeriesSetupAnswers`
+- Required keys: `Q01` through `Q10`, all with `answer_source == "user"`
+- Snapshot hash: `SHA-256` of canonical sorted JSON of answers
+- Sync revision: `setup_revision: int` matching `ProjectConfig.setup_revision`
+- Fail-closed gate: `require_series_setup(project_slug: str)` raises `CliValidationError` if incomplete
 
-### Sliding Window Partitioning Contract (FIX-03)
-- For chapter with $P$ panels ($P \ge 1$):
-  - Stride = 3, window commit = 3 (last commit = remainder).
-  - Each panel $p \in [0, P)$ is committed to narration in exactly ONE window batch.
-  - `validate_cmd.py` enforces: `set(all_seg_panel_ids) == set(manifest_panel_ids)` with zero duplicates.
+### 2. VisualPlan & Motion Contract (PR-02)
+- Engine: `src/render/visual_policy.py` -> `VisualPlan`, `Shot`
+- Motion constraint: $y(t + \Delta t) \ge y(t)$ at all frames; $v \le 120\text{ px/s}$
+- Time progression: $p(t) = \min(1.0, \max(0.0, t / T))$ with smoothstep easing $p^2(3 - 2p)$
+- Focus box: $x_{max} - x_{min} \ge 0.35$, $y_{max} - y_{min} \ge 0.30$, $f_y \ge 0.30$ on portrait panels
+- Panel splitting: Panels with height/width $> 2.0$ auto-split into overlapping segments with $0.65 \le W/H \le 2.0$
 
-### Consolidated Review Gates Contract (P2 Simplification)
-- Gate 0 (Video Configuration): Configured ONCE per series in `project.json`; inherited automatically across all chapters.
-- Gate 1 (Voice Selection): Approved ONCE per series in `data/projects/<slug>/voice_selection.json`; inherited across all chapters.
-- Gate 2 (Preview Approval): Optional for interactive human inspection; bypassed in batch mode or via `--skip-preview` for direct 1080p final render.
-- Completing `RENDER` completes chapter checkpoint (`overall_status = CheckpointStatus.COMPLETED`).
+### 3. Kaggle Dual-T4 Pipeline Contract (PR-03)
+- CLI command: `manga-recap cloud produce-series --project <slug> --chapters <ch_list> --json`
+- Machine shape: `"machine_shape": "NvidiaTeslaT4"`
+- Process 0 (TTS): `CUDA_VISIBLE_DEVICES=0`, `Vieneu(mode="v3turbo")`, emits `chapter_{N}_audio_ready.json`
+- Process 1 (Render): `CUDA_VISIBLE_DEVICES=1`, polls readiness, renders with `h264_nvenc`
+- Chapter 1 Gate: Refuses series batch unless Chapter 1 has `human_review_status == "approved"`
 
-### CLI Sync Contract (FIX-05 / P2)
-- `main.py` -> `render_cmd.py` -> `video_engine.py`: `--video-mode` (`auto`, `landscape_fit`, `portrait_vertical`, `portrait_padded`) forwarded to `render_chapter()`.
-- `batch_cmd.py`: sequential multi-chapter batch runner (`manga-recap batch`) with chapter error isolation and single retry (`--retry-chapter`).
-- `segment_cmd.py`: respects `--force`.
-- `compile_cmd.py`: `-ar 48000`, inherits series Gate 1 and Gate 2.
+### 4. Hugging Face Archive & Safe Cleanup Contract (PR-04)
+- Repository: Private dataset `Cuong2004/manga-recap-archive` via `huggingface_hub.HfApi`
+- Manifest: `archive_manifest.json` containing recursive SHA-256 of all series assets (no secrets)
+- Receipts:
+  1. `archive_receipt.json`: Commit SHA, timestamp, verified file count
+  2. `youtube_verified_receipt.json`: Verified YouTube video ID, status via `videos.list`
+- Cleanup rule: `manga-recap archive finalize --project <slug>` strictly blocked unless BOTH receipts are verified and round-trip test restore passes
+- Tombstone: Persistent `tombstone.json` left in local project folder after cleanup
 
 ## Code Layout
-- `src/cli/`: Command handlers (`main.py`, `batch_cmd.py`, `crawl_cmd.py`, `segment_cmd.py`, `validate_cmd.py`, `tts_cmd.py`, `render_cmd.py`, `compile_cmd.py`, `status_cmd.py`, `tts_benchmark_cmd.py`).
-- `src/core/`: Schemas (`schemas.py`), storage (`storage.py`), config (`config.py`).
-- `src/crawler/`: Webtoons crawler service (`crawler_service.py`).
-- `src/segment/`: Panel segmenter (`streaming_segmenter.py`).
-- `src/tts/`: TTS engine abstraction (`engine.py`, `tts_service.py`, `benchmark.py`).
-- `src/render/`: Video engine (`video_engine.py`), audio mixer (`audio_mixer.py`), subtitle generator (`subtitle.py`).
-- `tests/`: Unit, adversarial, and E2E tests (`tests/unit/`, `tests/adversarial/`, `tests/e2e/`).
-- `pyproject.toml`: Packaging specification for `pip install -e .`.
-
+- `src/core/series_setup.py`: Pydantic models and validator for 10-question setup
+- `src/cli/setup_cmd.py`: CLI handlers for `manga-recap setup`
+- `src/render/visual_policy.py`: Shared canonical `VisualPlan` and `Shot` generator
+- `src/render/camera.py`: Monotonic camera motion and Ken Burns interpolation
+- `src/render/video_engine.py`: Single-pass canvas rendering and video muxing
+- `src/segment/streaming_segmenter.py`: Tall panel auto-splitting and blank panel filtering
+- `src/cloud/kaggle_service.py`: Kaggle cloud API client and session orchestrator
+- `src/cloud/dual_t4_orchestrator.py`: In-container multi-chapter dual-GPU supervisor
+- `src/archive/hf_archive.py`: Hugging Face dataset upload, verification, and restore engine
+- `src/cli/archive_cmd.py`: CLI handlers for `manga-recap archive`
+- `src/cli/clean_cmd.py`: Safe cleanup with two-receipt verification and tombstone
+- `src/cli/youtube_cmd.py`: YouTube publishing and independent post-upload verification
+- `tests/unit/`: Unit tests for setup, visual policy, cloud, archive, cleanup
+- `tests/e2e/`: End-to-end integration test suites

@@ -84,6 +84,16 @@ def cloud_service():
     service = KaggleCloudService(api_token="KGAT_hermetic_mock_token_99999")
     mock_api = MagicMock()
     mock_api.get_config_value.return_value = "cuongnguyen1802"
+    mock_api.dataset_status.return_value = "ready"
+    mock_file = MagicMock()
+    mock_file.name = "script.json"
+    mock_ds_files = MagicMock()
+    mock_ds_files.dataset_files = [mock_file]
+    mock_api.dataset_list_files.return_value = mock_ds_files
+    mock_ds = MagicMock()
+    mock_ds.ref = "cuongnguyen1802/manga-recap-payload"
+    mock_ds.current_version_number = 1
+    mock_api.dataset_list.return_value = [mock_ds]
     service._api = mock_api
     service._username = "cuongnguyen1802"
     return service

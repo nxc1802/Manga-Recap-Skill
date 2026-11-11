@@ -360,6 +360,7 @@ class VideoEngine:
         video_mode: Union[VideoMode, str] = VideoMode.PORTRAIT_PADDED,
         focus_box: Optional[Union[FocusBox, Dict[str, Any]]] = None,
         motion_type: Union[CameraMotionType, str] = CameraMotionType.STATIC,
+        source_box: Optional[FocusBox] = None,
     ) -> Image.Image:
         """
         Creates a single 16:9 composited canvas image frame (RGB) for static camera hold segments.
@@ -371,7 +372,7 @@ class VideoEngine:
         if isinstance(img_path, (str, Path)):
             p = Path(img_path).resolve()
             mtime = p.stat().st_mtime_ns if p.exists() else 0
-            cache_key = f"{p}_{mtime}_{self.width}x{self.height}_{video_mode}_{motion_type}_{str(focus_box)}"
+            cache_key = f"{p}_{mtime}_{self.width}x{self.height}_{video_mode}_{motion_type}_{str(focus_box)}_{str(source_box)}"
             with self._canvas_lock:
                 if cache_key in self._canvas_cache:
                     return self._canvas_cache[cache_key].copy()
@@ -389,6 +390,14 @@ class VideoEngine:
             img = img.convert("RGB")
         elif img.mode == "RGBA":
             img = img.convert("RGB")
+
+        if source_box is not None:
+            bx0 = int(round(max(0.0, min(1.0, source_box.x_min)) * img.size[0]))
+            by0 = int(round(max(0.0, min(1.0, source_box.y_min)) * img.size[1]))
+            bx1 = int(round(max(0.0, min(1.0, source_box.x_max)) * img.size[0]))
+            by1 = int(round(max(0.0, min(1.0, source_box.y_max)) * img.size[1]))
+            if bx1 > bx0 and by1 > by0:
+                img = img.crop((bx0, by0, bx1, by1))
 
         img_w, img_h = img.size
         ar_in = img_w / float(img_h) if img_h > 0 else 1.0

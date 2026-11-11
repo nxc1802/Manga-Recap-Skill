@@ -138,7 +138,7 @@ def test_cli_cloud_subcommands():
     mock_service.get_username.return_value = "cuongnguyen1802"
     mock_service.dispatch_chapter_job.return_value = {"status": "success"}
 
-    with patch("src.cli.cloud_cmd.KaggleCloudService", return_value=mock_service):
+    with patch("src.cli.cloud_cmd.KaggleCloudService", return_value=mock_service), patch("src.core.series_setup.require_series_setup"):
         # 1. info
         info_args = argparse.Namespace(cloud_action="info")
         info_res = handle_cloud(info_args)
