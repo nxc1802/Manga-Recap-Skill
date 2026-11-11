@@ -389,9 +389,21 @@ class TestSetupCliCommands:
         # Setup legacy project layout
         init_project_layout(slug, "Legacy Project Title")
 
+        # Legacy defaults do not constitute explicit user consent.
+        code_without_answers = main([
+            "setup", "migrate", "-p", slug, "--reviewer", "migration_bot", "--json",
+        ])
+        assert code_without_answers == ExitCode.VALIDATION_ERROR
+        capsys.readouterr()
+
+        # Only user-confirmed Q01..Q10 responses may be migrated.
+        explicit_answers = _make_valid_answers_dict()
+        answers_file = tmp_path / "legacy_confirmed_answers.json"
+        answers_file.write_text(json.dumps(explicit_answers, ensure_ascii=False), encoding="utf-8")
         code_mig = main([
             "setup", "migrate",
             "-p", slug,
+            "--answers-json", str(answers_file),
             "--reviewer", "migration_bot",
             "--json",
         ])
