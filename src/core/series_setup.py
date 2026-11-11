@@ -268,6 +268,10 @@ def validate_complete_setup(
             continue
 
         normalized_answers[qid] = item
+        if item.question_id != qid:
+            errors.append(
+                f"Question ID mismatch: key {qid} contains answer for {item.question_id}."
+            )
 
         # Verify answer_source
         if item.answer_source != "user":
@@ -290,9 +294,11 @@ def validate_complete_setup(
                     errors.append("Question Q01: source (URL or local path) must be specified.")
                 if not ch:
                     errors.append("Question Q01: chapter scope must be specified.")
-            elif isinstance(u_ans, str):
-                if len(u_ans.strip()) < 1:
-                    errors.append("Question Q01: Chapter and source must not be blank.")
+            else:
+                errors.append(
+                    "Question Q01: provide an explicit object containing both 'source' and 'chapters'; "
+                    "unstructured text cannot prove the chapter range/source were selected."
+                )
         elif qid == "Q02":
             # Compute environment: 'kaggle' or 'local'
             c_env = str(u_ans).strip().lower()
@@ -346,56 +352,69 @@ def validate_complete_setup(
                     f"Question Q07: thumbnail selection must be boolean (Có/Không), got '{u_ans}'."
                 )
         elif qid == "Q08":
-            # YouTube publishing: "Không upload" / False OR account + privacy
-            if isinstance(u_ans, bool) and not u_ans:
-                pass  # False is valid for 'Không upload'
-            elif isinstance(u_ans, str):
-                s_ans = u_ans.strip().lower()
-                if s_ans in ("không upload", "khong upload", "none", "no", "không", "khong"):
-                    pass
-                elif not s_ans:
-                    errors.append("Question Q08: YouTube selection cannot be blank.")
+            # YouTube: explicit opt-out or exact account + privacy.
+            if u_ans is False or (
+                isinstance(u_ans, str)
+                and u_ans.strip().lower() in ("không upload", "khong upload", "none", "no")
+            ):
+                pass
             elif isinstance(u_ans, dict):
-                if not u_ans.get("account") and not u_ans.get("no_upload"):
-                    errors.append("Question Q08: account or 'no_upload' must be specified.")
+                if u_ans.get("no_upload") is True:
+                    if u_ans.get("account"):
+                        errors.append("Question Q08: cannot choose both no_upload and an account.")
+                elif (
+                    isinstance(u_ans.get("account"), str)
+                    and u_ans["account"].strip()
+                    and u_ans.get("privacy") in ("private", "unlisted", "public")
+                ):
+                    pass
+                else:
+                    errors.append(
+                        "Question Q08: upload requires both a non-empty 'account' and "
+                        "'privacy' in private/unlisted/public."
+                    )
             else:
-                errors.append(f"Question Q08: invalid YouTube publishing specification '{u_ans}'.")
+                errors.append("Question Q08: explicit no_upload or account+privacy required.")
         elif qid == "Q09":
-            # Video quality: preview or final
+            # Video quality: exact user choice, no fuzzy substring matching.
             q_str = str(u_ans).strip().lower()
-            if not any(k in q_str for k in ("preview", "final", "720", "1080")):
+            if q_str not in ("preview", "final", "720p", "1080p"):
                 errors.append(
-                    f"Question Q09: video quality must specify 'preview' (720p) or 'final' (1080p), got '{u_ans}'."
+                    f"Question Q09: select preview/720p or final/1080p; got '{u_ans}'."
                 )
         elif qid == "Q10":
-            # BGM settings: "Không BGM" / False OR dict with bgm_path + gains
-            if isinstance(u_ans, bool) and not u_ans:
-                pass  # False is valid for 'Không BGM'
-            elif isinstance(u_ans, str):
-                s_ans = u_ans.strip().lower()
-                if s_ans in ("không bgm", "khong bgm", "none", "no", "không", "khong"):
-                    pass
-                elif not s_ans:
-                    errors.append("Question Q10: BGM selection cannot be blank.")
+            # BGM: explicit none or fully specified path AND both gain levels.
+            if u_ans is False or (
+                isinstance(u_ans, str)
+                and u_ans.strip().lower() in ("không bgm", "khong bgm", "none", "no")
+            ):
+                pass
             elif isinstance(u_ans, dict):
-                if not u_ans.get("bgm_path") and not u_ans.get("none"):
-                    errors.append("Question Q10: bgm_path must be specified if BGM is enabled.")
-                if "bgm_volume" in u_ans:
+                if u_ans.get("none") is True:
+                    if u_ans.get("bgm_path"):
+                        errors.append("Question Q10: cannot choose both no BGM and a BGM file.")
+                elif (
+                    isinstance(u_ans.get("bgm_path"), str)
+                    and u_ans["bgm_path"].strip()
+                    and "bgm_volume" in u_ans
+                    and "voice_volume" in u_ans
+                ):
                     try:
                         bv = float(u_ans["bgm_volume"])
-                        if not (0.0 <= bv <= 1.0):
-                            errors.append(f"Question Q10: bgm_volume must be in [0.0, 1.0], got {bv}.")
-                    except ValueError:
-                        errors.append("Question Q10: bgm_volume must be numeric.")
-                if "voice_volume" in u_ans:
-                    try:
                         vv = float(u_ans["voice_volume"])
-                        if not (0.0 <= vv <= 2.0):
-                            errors.append(f"Question Q10: voice_volume must be in [0.0, 2.0], got {vv}.")
-                    except ValueError:
-                        errors.append("Question Q10: voice_volume must be numeric.")
+                        if not (0.0 <= bv <= 1.0 and 0.0 <= vv <= 2.0):
+                            errors.append(
+                                "Question Q10: BGM volume must be 0..1 and voice volume 0..2."
+                            )
+                    except (TypeError, ValueError):
+                        errors.append("Question Q10: both volume values must be numeric.")
+                else:
+                    errors.append(
+                        "Question Q10: BGM requires a path, bgm_volume and voice_volume "
+                        "explicitly selected by the user."
+                    )
             else:
-                errors.append(f"Question Q10: invalid BGM settings specification '{u_ans}'.")
+                errors.append("Question Q10: explicit no BGM or path + both volumes required.")
 
     # 3. Verify cryptographic snapshot hash
     computed_hash = compute_snapshot_hash(normalized_answers)
@@ -508,7 +527,7 @@ def record_series_setup(
                     q_title = item_val.get("question_title", QUESTION_METADATA.get(qid, {}).get("title", qid))
                     u_ans = item_val.get("user_answer", item_val.get("raw_answer"))
                     raw_in = item_val.get("raw_input", item_val.get("raw_answer", u_ans))
-                    src = item_val.get("answer_source", "user")
+                    src = item_val.get("answer_source", "missing_explicit_confirmation")
                     c_at = item_val.get("confirmed_at", item_val.get("user_confirmed_at", now_ts))
                     parsed_answers[qid] = SetupAnswerItem(
                         question_id=qid,
@@ -519,14 +538,9 @@ def record_series_setup(
                         confirmed_at=c_at,
                     )
                 else:
-                    q_title = QUESTION_METADATA.get(qid, {}).get("title", qid)
-                    parsed_answers[qid] = SetupAnswerItem(
-                        question_id=qid,
-                        question_title=q_title,
-                        user_answer=item_val,
-                        answer_source="user",
-                        raw_input=item_val,
-                        confirmed_at=now_ts,
+                    raise CliValidationError(
+                        f"Q{qid} requires a structured, explicitly confirmed answer "
+                        "(user_answer + answer_source='user'); raw values are not provenance."
                     )
 
     # Compute snapshot hash
