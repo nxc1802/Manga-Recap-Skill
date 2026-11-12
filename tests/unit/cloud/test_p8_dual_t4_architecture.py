@@ -866,3 +866,110 @@ def test_runner_maps_canonical_render_export_keys(tmp_path, monkeypatch):
     assert ch1.export_video_path == fake_render_res["export_paths"]["video_padded"]
     assert ch1.export_subtitle_path == fake_render_res["export_paths"]["subtitle_padded"]
     assert ch1.rendered_clips_count == 1
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required for per-shot subtitle burn L2")
+def test_dual_t4_burn_subtitles_per_shot_and_font_size_propagation(tmp_path, monkeypatch):
+    import functools
+    import src.render.fast_renderer as fast_renderer
+    from src.cloud.dual_t4_orchestrator import _build_chapter_shot_tasks, _concat_chapter_shot_clips
+
+    proj_dir = _create_multi_chapter_series(tmp_path, monkeypatch, chapters=["1", "2"], approve_ch1=False)
+    proj_cfg = read_json(proj_dir / "project.json")
+    proj_cfg["render_settings"]["subtitle"]["font_size"] = 30
+    atomic_write_json(proj_dir / "project.json", proj_cfg)
+
+    answers = _make_valid_answers_dict()
+    answers["Q01"]["user_answer"] = {"chapters": "1-2", "source": "https://example.invalid/p8"}
+    answers["Q02"]["user_answer"] = "kaggle"
+    answers["Q05"]["user_answer"] = True
+    answers["Q06"]["user_answer"] = "static"
+    answers["Q07"]["user_answer"] = False
+    answers["Q08"]["user_answer"] = {"no_upload": True}
+    answers["Q09"]["user_answer"] = "preview"
+    answers["Q10"]["user_answer"] = {"none": True}
+    record_series_setup("p8_series", answers, project_dir=proj_dir)
+
+    render_chapter(proj_dir, "1", quality="preview")
+    approve_preview(
+        proj_dir,
+        "L2 human fixture",
+        review_fingerprint(proj_dir),
+        fingerprint(proj_dir / "chapters" / "1" / "video" / "preview.mp4"),
+    )
+
+    recorded_build_calls: List[Dict[str, Any]] = []
+    recorded_concat_calls: List[Dict[str, Any]] = []
+    orig_build = fast_renderer.build_shot_render_tasks
+    orig_concat = fast_renderer.concat_shot_clips
+
+    @functools.wraps(orig_build)
+    def _spy_build(*args, **kwargs):
+        tasks = orig_build(*args, **kwargs)
+        recorded_build_calls.append({"kwargs": dict(kwargs), "tasks": list(tasks)})
+        return tasks
+
+    @functools.wraps(orig_concat)
+    def _spy_concat(*args, **kwargs):
+        recorded_concat_calls.append(dict(kwargs))
+        return orig_concat(*args, **kwargs)
+
+    monkeypatch.setattr(fast_renderer, "build_shot_render_tasks", _spy_build)
+    monkeypatch.setattr(fast_renderer, "concat_shot_clips", _spy_concat)
+
+    orch = DualT4Orchestrator(
+        workspace_dir=proj_dir,
+        chapters=["1", "2"],
+        profile=BenchmarkProfileId.B3,
+        encoder="libx264",
+        compile_feature=False,
+        receipts_dir=tmp_path / "sub_receipts",
+        smi_querier=lambda: [],
+        worker_pool_factory=lambda **kw: CudaWorkerPool(
+            **kw, worker_handle_factory=_RealMediaFakeGpuWorkerHandle
+        ),
+    )
+    tel = orch.run_pipeline()
+    assert tel.chapters == ["1", "2"]
+    assert (proj_dir / "chapters" / "2" / "video" / "final.mp4").is_file()
+
+    # Verify per-shot burn + font_size=30 + chapter_number propagation into fast_renderer
+    assert len(recorded_build_calls) == 1
+    b_call = recorded_build_calls[0]
+    assert b_call["kwargs"]["burn_subtitles"] is True
+    assert b_call["kwargs"]["subtitle_font_size"] == 30
+    assert b_call["kwargs"]["subtitle_cues"]
+    for t in b_call["tasks"]:
+        assert t["subtitle_font_size"] == 30
+        assert t["burn_subtitles"] is True
+        assert t["local_subtitle_cues"]
+
+    # Verify concat received zero-reencode burn_subtitles=False (already burned per-shot) + font_size=30 + gpu_index=0
+    assert len(recorded_concat_calls) == 1
+    c_call = recorded_concat_calls[0]
+    assert c_call["burn_subtitles"] is False
+    assert c_call["subtitle_path"] is None
+    assert c_call["subtitle_font_size"] == 30
+    assert c_call["gpu_index"] == 0
+
+    # Also verify _build_chapter_shot_tasks stamps chapter_number explicitly
+    assert _build_chapter_shot_tasks is not None and _concat_chapter_shot_clips is not None
+    ch2_dir = proj_dir / "chapters" / "2"
+    from src.core.storage import load_manifest, load_recap_script
+    from src.core.visual_contract import VisualPlan
+    stamped_tasks, per_shot = _build_chapter_shot_tasks(
+        orig_build,
+        ch2_dir,
+        "2",
+        VisualPlan.load(ch2_dir / "visual_plan.json"),
+        load_manifest(ch2_dir),
+        work_dir=tmp_path / "stamp_work",
+        encoder="libx264",
+        subtitles_path=ch2_dir / "subtitles" / "final.srt",
+        burn_subtitles=True,
+        subtitle_font_size=30,
+        quality_mode="final",
+    )
+    assert per_shot is True
+    assert stamped_tasks and all(t.get("chapter_number") == "2" for t in stamped_tasks)
+    assert load_recap_script(ch2_dir).chapter_number == "2"

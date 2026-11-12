@@ -343,6 +343,9 @@ def _resolve_fast_renderer_api():
         target_height: int = 1080,
         fps: int = 30,
         encoder: str = "libx264",
+        subtitle_font_size: int = 26,
+        quality_mode: Optional[str] = None,
+        gpu_index: int = 0,
     ) -> Path:
         out = Path(output_video).resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -418,6 +421,94 @@ def _resolve_fast_renderer_api():
             partial.unlink(missing_ok=True)
 
     return _fallback_build_shot_render_tasks, _fallback_render_shot_clip, _fallback_concat_shot_clips
+
+
+def _build_chapter_shot_tasks(
+    build_shot_tasks_fn: Callable[..., List[Dict[str, Any]]],
+    chapter_dir: Path,
+    chapter_num: str,
+    plan: VisualPlan,
+    manifest: PanelManifest,
+    *,
+    work_dir: Path,
+    encoder: str,
+    subtitles_path: Optional[Path] = None,
+    burn_subtitles: bool = False,
+    subtitle_font_size: int = 26,
+    quality_mode: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """
+    Builds per-shot render tasks with guaranteed `chapter_number` metadata and
+    per-shot subtitle cues/font_size when `fast_renderer.build_shot_render_tasks`
+    supports per-shot burn (avoiding serial post-concat re-encoding).
+    """
+    cues = None
+    if burn_subtitles and subtitles_path is not None and Path(subtitles_path).is_file():
+        cues = SubtitleGenerator().parse_srt(subtitles_path)
+
+    sig_params = inspect.signature(build_shot_tasks_fn).parameters
+    accepts_varkw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_params.values()
+    )
+    supports_per_shot_burn = "burn_subtitles" in sig_params or accepts_varkw
+    kwargs: Dict[str, Any] = {
+        "work_dir": work_dir,
+        "encoder": encoder,
+    }
+    per_shot_burned = bool(burn_subtitles and cues and supports_per_shot_burn)
+    if "subtitle_cues" in sig_params or accepts_varkw:
+        kwargs["subtitle_cues"] = cues
+    if supports_per_shot_burn:
+        kwargs["burn_subtitles"] = per_shot_burned
+    if "subtitle_font_size" in sig_params or accepts_varkw:
+        kwargs["subtitle_font_size"] = int(subtitle_font_size)
+    if "quality_mode" in sig_params or accepts_varkw:
+        kwargs["quality_mode"] = quality_mode
+
+    tasks = build_shot_tasks_fn(chapter_dir, plan, manifest, **kwargs)
+    for task in tasks:
+        task.setdefault("chapter_number", str(chapter_num))
+    return tasks, per_shot_burned
+
+
+def _concat_chapter_shot_clips(
+    concat_fn: Callable[..., Path],
+    shot_clips: List[Path],
+    output_video: Path,
+    *,
+    work_dir: Path,
+    audio_path: Optional[Path],
+    subtitle_path: Optional[Path],
+    burn_subtitles: bool,
+    per_shot_burned: bool,
+    target_height: int,
+    fps: int,
+    encoder: str,
+    subtitle_font_size: int = 26,
+    quality_mode: Optional[str] = None,
+    gpu_index: int = 0,
+) -> Path:
+    """Assembles shot clips using zero-reencode `-c:v copy` concat when subtitles were burned per-shot."""
+    sig_params = inspect.signature(concat_fn).parameters
+    accepts_varkw = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in sig_params.values()
+    )
+    kwargs: Dict[str, Any] = {
+        "work_dir": work_dir,
+        "audio_path": audio_path,
+        "subtitle_path": None if per_shot_burned else subtitle_path,
+        "burn_subtitles": False if per_shot_burned else bool(burn_subtitles),
+        "target_height": int(target_height),
+        "fps": int(fps),
+        "encoder": encoder,
+    }
+    if "subtitle_font_size" in sig_params or accepts_varkw:
+        kwargs["subtitle_font_size"] = int(subtitle_font_size)
+    if "quality_mode" in sig_params or accepts_varkw:
+        kwargs["quality_mode"] = quality_mode
+    if "gpu_index" in sig_params or accepts_varkw:
+        kwargs["gpu_index"] = int(gpu_index)
+    return concat_fn(shot_clips, output_video, **kwargs)
 
 
 # ==============================================================================
@@ -663,25 +754,37 @@ class RenderWorker:
             )
             build_tasks, render_shot_fn, concat_fn = _resolve_fast_renderer_api()
             shot_work = chap_dir / "video" / "_shots_work"
-            tasks = build_tasks(
+            sub_font_size = int(sub_settings.get("font_size", 26))
+            tasks, per_shot_burned = _build_chapter_shot_tasks(
+                build_tasks,
                 chap_dir,
+                str(chapter_num),
                 plan,
                 manifest,
                 work_dir=shot_work,
                 encoder=self.encoder,
+                subtitles_path=subtitles_path,
+                burn_subtitles=bool(settings["burn_subtitles"]),
+                subtitle_font_size=sub_font_size,
+                quality_mode=quality,
             )
             cache: Dict[Any, Any] = {}
             clips = [render_shot_fn(t, canvas_cache=cache, gpu_index=0) for t in tasks]
-            concat_fn(
+            _concat_chapter_shot_clips(
+                concat_fn,
                 clips,
                 out_mp4,
                 work_dir=shot_work,
                 audio_path=mixed_m4a,
                 subtitle_path=subtitles_path,
                 burn_subtitles=bool(settings["burn_subtitles"]),
+                per_shot_burned=per_shot_burned,
                 target_height=int(settings["target_height"]),
                 fps=int(settings["fps"]),
                 encoder=self.encoder,
+                subtitle_font_size=sub_font_size,
+                quality_mode=quality,
+                gpu_index=0,
             )
             shutil.rmtree(shot_work, ignore_errors=True)
 
@@ -751,6 +854,9 @@ class _ReadyChapterPackage:
     tts_duration_seconds: float
     tts_throughput: float
     promote_preview: bool = False
+    per_shot_burned: bool = False
+    subtitle_font_size: int = 26
+    quality_mode: str = "final"
 
 
 @dataclass
@@ -1288,12 +1394,19 @@ class DualT4Orchestrator:
                             voice_volume=float(audio_settings["voice_volume"]),
                             fadeout_seconds=0,
                         )
-                        shot_tasks = build_shot_tasks_fn(
+                        sub_font_size = int(sub_settings.get("font_size", 26))
+                        shot_tasks, per_shot_burned = _build_chapter_shot_tasks(
+                            build_shot_tasks_fn,
                             chap_dir,
+                            ch_num,
                             plan,
                             manifest,
                             work_dir=shot_work_dir,
                             encoder=self.encoder,
+                            subtitles_path=subtitles_path,
+                            burn_subtitles=bool(render_settings["burn_subtitles"]),
+                            subtitle_font_size=sub_font_size,
+                            quality_mode=quality_name,
                         )
                         pkg = _ReadyChapterPackage(
                             chapter_num=ch_num,
@@ -1309,6 +1422,9 @@ class DualT4Orchestrator:
                             tts_duration_seconds=ready.tts_duration_seconds,
                             tts_throughput=ready.tts_throughput,
                             promote_preview=False,
+                            per_shot_burned=per_shot_burned,
+                            subtitle_font_size=sub_font_size,
+                            quality_mode=quality_name,
                         )
 
                     self.queues.chapter_ready_queue.put(pkg)
@@ -1426,16 +1542,21 @@ class DualT4Orchestrator:
                             render_start = tr["start_time"]
 
                     if assembled_pkg is not None and ordered_clips is not None:
-                        concat_shot_clips_fn(
+                        _concat_chapter_shot_clips(
+                            concat_shot_clips_fn,
                             ordered_clips,
                             assembled_pkg.output_video_path,
                             work_dir=assembled_pkg.shot_work_dir,
                             audio_path=assembled_pkg.mixed_audio_path,
                             subtitle_path=assembled_pkg.subtitles_path,
                             burn_subtitles=bool(render_settings["burn_subtitles"]),
+                            per_shot_burned=assembled_pkg.per_shot_burned,
                             target_height=int(render_settings["target_height"]),
                             fps=int(render_settings["fps"]),
                             encoder=self.encoder,
+                            subtitle_font_size=assembled_pkg.subtitle_font_size,
+                            quality_mode=assembled_pkg.quality_mode,
+                            gpu_index=0,
                         )
                         shutil.rmtree(assembled_pkg.shot_work_dir, ignore_errors=True)
                         rnd_dur = max(0.001, time.monotonic() - render_start)
