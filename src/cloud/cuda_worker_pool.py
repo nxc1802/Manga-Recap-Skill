@@ -408,8 +408,16 @@ class GpuTelemetrySampler:
                     "max_gpu_util_pct": round(
                         max((s.gpu_util_pct for s in samples), default=0.0), 1
                     ),
+                    "avg_gpu_util_pct": round(
+                        (sum(s.gpu_util_pct for s in samples) / len(samples)) if samples else 0.0,
+                        2,
+                    ),
                     "max_encoder_util_pct": round(
                         max((s.encoder_util_pct for s in samples), default=0.0), 1
+                    ),
+                    "avg_encoder_util_pct": round(
+                        (sum(s.encoder_util_pct for s in samples) / len(samples)) if samples else 0.0,
+                        2,
                     ),
                 }
             return {
@@ -798,13 +806,18 @@ def _cuda_worker_process_main(
                         }
                     )
                 elif op == "tts_batch":
+                    t_init0 = time.monotonic()
+                    was_loaded = tts_worker is not None
                     worker_obj = _ensure_tts_loaded()
+                    init_dur = 0.0 if was_loaded else max(0.0, time.monotonic() - t_init0)
+                    t_inf0 = time.monotonic()
                     results = worker_obj.synthesize_batch_tasks(
                         cmd["tasks"],
                         batch_size=int(cmd.get("batch_size", 8)),
                         precision=str(cmd.get("precision", options.get("precision", "auto"))),
                         cpu_workers=int(cmd.get("cpu_workers", 4)),
                     )
+                    infer_dur = max(0.0, time.monotonic() - t_inf0)
                     res_queue.put(
                         {
                             "type": "result",
@@ -813,6 +826,8 @@ def _cuda_worker_process_main(
                             "ok": True,
                             "data": {
                                 "results": results,
+                                "model_init_sec": round(init_dur, 4),
+                                "tts_infer_sec": round(infer_dur, 4),
                                 "vram_mb": _current_vram_mb(),
                                 "env_cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
                             },
@@ -1064,9 +1079,19 @@ class CudaWorkerPool:
         self._oom_events: Dict[int, int] = {g: 0 for g in self.gpu_ids}
         self._crash_events: Dict[int, int] = {g: 0 for g in self.gpu_ids}
         self._stats: Dict[int, Dict[str, Any]] = {
-            g: {"tts_tasks": 0, "tts_items": 0, "render_shots": 0, "active_seconds": 0.0}
+            g: {
+                "tts_tasks": 0,
+                "tts_items": 0,
+                "render_shots": 0,
+                "active_seconds": 0.0,
+                "model_init_seconds": 0.0,
+                "tts_infer_seconds": 0.0,
+                "render_shot_seconds": 0.0,
+            }
             for g in self.gpu_ids
         }
+        self._tts_init_intervals: List[Tuple[float, float]] = []
+        self._tts_infer_intervals: List[Tuple[float, float]] = []
         self._closed = False
 
     def _spawn_handle(self, physical_gpu_id: int, role: str) -> Any:
@@ -1293,7 +1318,8 @@ class CudaWorkerPool:
                     "cpu_workers": cpu_workers,
                 },
             )
-            dur = time.monotonic() - t0
+            t1 = time.monotonic()
+            dur = t1 - t0
             data = resp.get("data", {})
             results = data.get("results", [])
             if len(results) != len(tasks):
@@ -1301,10 +1327,19 @@ class CudaWorkerPool:
                     f"TTS result count mismatch on GPU {gid}: expected {len(tasks)}, got {len(results)}",
                     crashed=True,
                 )
+            init_sec = float(data.get("model_init_sec", 0.0) or 0.0)
+            infer_sec = float(data.get("tts_infer_sec", max(0.0, dur - init_sec)) or 0.0)
+            t_init_end = min(t1, t0 + init_sec)
             with self._lock:
                 self._stats[gid]["tts_tasks"] += 1
                 self._stats[gid]["tts_items"] += len(tasks)
                 self._stats[gid]["active_seconds"] += dur
+                self._stats[gid]["model_init_seconds"] += init_sec
+                self._stats[gid]["tts_infer_seconds"] += infer_sec
+                if init_sec > 0.0 and t_init_end > t0:
+                    self._tts_init_intervals.append((t0, t_init_end))
+                if t1 > t_init_end:
+                    self._tts_infer_intervals.append((t_init_end, t1))
             if self.telemetry is not None:
                 self.telemetry.log_worker_event(
                     "tts_batch_completed",
@@ -1318,6 +1353,8 @@ class CudaWorkerPool:
                     vram_used_mb=data.get("vram_mb"),
                     details={
                         "items": len(tasks),
+                        "model_init_sec": round(init_sec, 4),
+                        "tts_infer_sec": round(infer_sec, 4),
                         "env_cuda_visible_devices": data.get("env_cuda_visible_devices"),
                     },
                 )
@@ -1398,6 +1435,7 @@ class CudaWorkerPool:
             with self._lock:
                 self._stats[gid]["render_shots"] += 1
                 self._stats[gid]["active_seconds"] += dur
+                self._stats[gid]["render_shot_seconds"] += dur
             if self.telemetry is not None:
                 self.telemetry.log_worker_event(
                     "render_shot_completed",
@@ -1445,6 +1483,13 @@ class CudaWorkerPool:
                 s["current_nvenc_workers"] = self.nvenc_workers_target.get(gid, 1)
                 out[gid] = s
             return out
+
+    def get_timing_intervals(self) -> Dict[str, List[Tuple[float, float]]]:
+        with self._lock:
+            return {
+                "tts_init": list(self._tts_init_intervals),
+                "tts_infer": list(self._tts_infer_intervals),
+            }
 
     def shutdown(self) -> None:
         with self._lock:

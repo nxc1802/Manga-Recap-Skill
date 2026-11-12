@@ -35,9 +35,15 @@ import tarfile
 import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 try:
     import torch
@@ -139,10 +145,85 @@ class SeriesTelemetry:
     per_chapter: Dict[str, ChapterTelemetry] = field(default_factory=dict)
     scheduler_transitions: List[Dict[str, Any]] = field(default_factory=list)
     frozen_profile: Optional[Dict[str, Any]] = None
+    stage_breakdown: Dict[str, float] = field(default_factory=dict)
+    gpu_util_avg: Dict[str, float] = field(default_factory=dict)
+    cpu_util_avg: float = 0.0
+    disk_throughput_mb_s: float = 0.0
+    all_valid: bool = True
     completed_at: str = field(default_factory=utc_iso_now)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def _merge_interval_seconds(intervals: Sequence[Tuple[float, float]]) -> float:
+    """Computes total union duration across potentially overlapping monotonic intervals."""
+    valid = sorted((float(a), float(b)) for a, b in intervals if b > a)
+    if not valid:
+        return 0.0
+    total = 0.0
+    cur_s, cur_e = valid[0]
+    for s, e in valid[1:]:
+        if s <= cur_e:
+            cur_e = max(cur_e, e)
+        else:
+            total += cur_e - cur_s
+            cur_s, cur_e = s, e
+    total += cur_e - cur_s
+    return round(total, 4)
+
+
+def _capture_cpu_snapshot() -> Dict[str, Any]:
+    """Captures host `/proc/stat` jiffies (Linux) and POSIX rusage CPU time."""
+    proc_active: Optional[int] = None
+    proc_total: Optional[int] = None
+    stat_path = Path("/proc/stat")
+    if stat_path.is_file():
+        try:
+            first_line = stat_path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+            parts = first_line.split()
+            if parts and parts[0] == "cpu":
+                vals = [int(x) for x in parts[1:]]
+                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+                total = sum(vals)
+                proc_active = total - idle
+                proc_total = total
+        except Exception:
+            pass
+    rusage_cpu = 0.0
+    if resource is not None:
+        try:
+            r_self = resource.getrusage(resource.RUSAGE_SELF)
+            r_child = resource.getrusage(resource.RUSAGE_CHILDREN)
+            rusage_cpu = float(r_self.ru_utime + r_self.ru_stime + r_child.ru_utime + r_child.ru_stime)
+        except Exception:
+            pass
+    else:
+        t = os.times()
+        rusage_cpu = float(t.user + t.system + t.children_user + t.children_system)
+    return {
+        "proc_active": proc_active,
+        "proc_total": proc_total,
+        "rusage_cpu": rusage_cpu,
+        "wall": time.monotonic(),
+    }
+
+
+def _compute_cpu_util_pct(before: Dict[str, Any], after: Dict[str, Any]) -> float:
+    """Computes average host CPU utilization percentage [0, 100]."""
+    if (
+        before.get("proc_total") is not None
+        and after.get("proc_total") is not None
+        and after["proc_total"] > before["proc_total"]
+    ):
+        d_active = max(0, int(after["proc_active"]) - int(before["proc_active"]))
+        d_total = int(after["proc_total"]) - int(before["proc_total"])
+        return round(min(100.0, max(0.0, (d_active / d_total) * 100.0)), 2)
+    wall = max(0.001, float(after.get("wall", 0.0)) - float(before.get("wall", 0.0)))
+    cores = max(1, os.cpu_count() or 1)
+    d_cpu = max(0.0, float(after.get("rusage_cpu", 0.0)) - float(before.get("rusage_cpu", 0.0)))
+    pct = (d_cpu / (wall * cores)) * 100.0
+    return round(min(100.0, max(0.0, pct)), 2)
 
 
 # ==============================================================================
@@ -879,7 +960,7 @@ class DualT4Orchestrator:
         chapters: Sequence[Union[str, int]],
         project_config: Optional[Dict[str, Any]] = None,
         *,
-        render_workers: int = 2,
+        render_workers: Optional[int] = None,
         compile_feature: bool = True,
         mock_mode: bool = False,
         profile: Union[str, BenchmarkProfileId, ArchitectureProfile] = BenchmarkProfileId.B5,
@@ -890,8 +971,10 @@ class DualT4Orchestrator:
         work_dir: Optional[Path] = None,
         receipts_dir: Optional[Path] = None,
         worker_pool_factory: Optional[Callable[..., CudaWorkerPool]] = None,
+        worker_options: Optional[Dict[str, Any]] = None,
         smi_querier: Optional[Callable[[], List[Dict[str, Any]]]] = None,
         enforce_setup: bool = True,
+        force_recompute: bool = False,
     ):
         if mock_mode:
             raise ValueError(
@@ -906,14 +989,19 @@ class DualT4Orchestrator:
         self.compile_feature = bool(compile_feature)
         self.quality = str(quality)
         self.profile = resolve_architecture_profile(profile)
-        self.render_workers = max(1, int(render_workers or self.profile.nvenc_workers_per_gpu))
+        self.render_workers = max(
+            1,
+            int(render_workers if render_workers is not None else self.profile.nvenc_workers_per_gpu),
+        )
         self.autotune = bool(autotune)
         self.autotune_probe_fn = autotune_probe_fn
         self.work_dir = Path(work_dir).resolve() if work_dir else (self.workspace_dir / "_p8_work")
         self.receipts_dir = Path(receipts_dir).resolve() if receipts_dir else self.workspace_dir
         self.worker_pool_factory = worker_pool_factory
+        self.worker_options = dict(worker_options or {})
         self.smi_querier = smi_querier
         self.enforce_setup = bool(enforce_setup)
+        self.force_recompute = bool(force_recompute)
 
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.receipts_dir.mkdir(parents=True, exist_ok=True)
@@ -1039,12 +1127,14 @@ class DualT4Orchestrator:
                 nvenc_workers_per_gpu=effective_nvenc,
                 initial_tts_batch_size=effective_batch,
                 telemetry=telemetry_sampler,
+                worker_options=self.worker_options,
             )
 
         smi_initial = (self.smi_querier or query_nvidia_smi)() or []
         env_receipt = self._collect_environment_receipt(smi_initial)
         atomic_write_json(self.receipts_dir / "dual_t4_environment.json", env_receipt)
 
+        cpu_snap0 = _capture_cpu_snapshot()
         telemetry_sampler.start()
 
         abort_event = threading.Event()
@@ -1062,6 +1152,15 @@ class DualT4Orchestrator:
         rendered_video_paths: Dict[str, Path] = {}
         per_chapter_lock = threading.Lock()
         all_tts_done_event = threading.Event()
+
+        metrics_lock = threading.Lock()
+        tts_intervals: List[Tuple[float, float]] = []
+        audio_norm_intervals: List[Tuple[float, float]] = []
+        render_shot_intervals: List[Tuple[float, float]] = []
+        mux_intervals: List[Tuple[float, float]] = []
+        validation_intervals: List[Tuple[float, float]] = []
+        intermediate_bytes_written = 0
+        all_chapters_valid = True
 
         def _snapshot_and_evaluate() -> None:
             nonlocal active_tts_gpus, active_render_gpus
@@ -1107,32 +1206,34 @@ class DualT4Orchestrator:
                     if script.project_slug != self.project_config["slug"] or script.chapter_number != str(ch_num):
                         raise ValueError(f"Chapter identity mismatch: {ch_num}")
 
-                    # Respect Chapter 1 human-reviewed preview -> final promotion
+                    # Respect Chapter 1 human-reviewed preview -> final promotion unless benchmarking recompute
                     promote_preview = (
-                        str(ch_num) == "1"
+                        not self.force_recompute
+                        and str(ch_num) == "1"
                         and self.quality == "final"
                         and (chap_dir / "video" / "preview.mp4").is_file()
                         and (self.workspace_dir / "preview_approval.json").is_file()
                     )
 
                     # Check cached audio clips
-                    cached_audio = True
-                    for seg in script.segments:
-                        if not seg.audio_path or not seg.checksum:
-                            cached_audio = False
-                            break
-                        cand = (chap_dir / seg.audio_path).resolve()
-                        if not cand.is_relative_to(chap_dir.resolve()) or not cand.is_file():
-                            cached_audio = False
-                            break
-                        try:
-                            rep = validate_audio(cand)
-                            if rep["sha256"] != seg.checksum:
+                    cached_audio = not self.force_recompute
+                    if cached_audio:
+                        for seg in script.segments:
+                            if not seg.audio_path or not seg.checksum:
                                 cached_audio = False
                                 break
-                        except Exception:
-                            cached_audio = False
-                            break
+                            cand = (chap_dir / seg.audio_path).resolve()
+                            if not cand.is_relative_to(chap_dir.resolve()) or not cand.is_file():
+                                cached_audio = False
+                                break
+                            try:
+                                rep = validate_audio(cand)
+                                if rep["sha256"] != seg.checksum:
+                                    cached_audio = False
+                                    break
+                            except Exception:
+                                cached_audio = False
+                                break
 
                     item = _PreparedChapter(
                         chapter_num=str(ch_num),
@@ -1208,24 +1309,47 @@ class DualT4Orchestrator:
                         target_gpus = active_tts_gpus or (self.profile.gpu_ids[0],)
 
                         all_tts_results: Dict[str, Dict[str, Any]] = {}
+                        tts_res_lock = threading.Lock()
                         with sampler_state_lock:
                             in_flight_tts += len(raw_tasks)
                         try:
-                            for batch in batches:
+                            def _run_single_tts_batch(batch_items: List[Dict[str, Any]]) -> None:
+                                nonlocal rr_gpu
                                 if abort_event.is_set():
-                                    break
+                                    return
                                 _snapshot_and_evaluate()
-                                gpus_now = active_tts_gpus or (self.profile.gpu_ids[0],)
-                                gid = gpus_now[rr_gpu % len(gpus_now)]
-                                rr_gpu += 1
+                                with sampler_state_lock:
+                                    gpus_now = active_tts_gpus or (self.profile.gpu_ids[0],)
+                                    gid = gpus_now[rr_gpu % len(gpus_now)]
+                                    rr_gpu += 1
+                                t_b0 = time.monotonic()
                                 batch_res = pool.submit_tts_batch(
                                     gid,
-                                    batch,
-                                    batch_size=min(effective_batch, len(batch)),
+                                    batch_items,
+                                    batch_size=min(effective_batch, len(batch_items)),
                                     chapter=ch_num,
                                 )
-                                for r in batch_res:
-                                    all_tts_results[str(r["seq_id"])] = r
+                                t_b1 = time.monotonic()
+                                with metrics_lock:
+                                    tts_intervals.append((t_b0, t_b1))
+                                with tts_res_lock:
+                                    for r in batch_res:
+                                        all_tts_results[str(r["seq_id"])] = r
+
+                            tts_concurrency = max(1, len(target_gpus) * effective_replicas)
+                            if len(batches) > 1 and tts_concurrency > 1:
+                                with ThreadPoolExecutor(
+                                    max_workers=min(len(batches), tts_concurrency),
+                                    thread_name_prefix=f"P8-TTS-Ch{ch_num}",
+                                ) as tts_exec:
+                                    futs = [tts_exec.submit(_run_single_tts_batch, b) for b in batches]
+                                    for fut in futs:
+                                        fut.result()
+                            else:
+                                for b in batches:
+                                    if abort_event.is_set():
+                                        break
+                                    _run_single_tts_batch(b)
                         finally:
                             with sampler_state_lock:
                                 in_flight_tts = max(0, in_flight_tts - len(raw_tasks))
@@ -1376,6 +1500,7 @@ class DualT4Orchestrator:
                             promote_preview=True,
                         )
                     else:
+                        t_an0 = time.monotonic()
                         mixer = AudioMixer(silence_padding_sec=0, tail_padding_sec=0)
                         speech_wav, _ = mixer.concatenate_speech(
                             script.segments, chap_dir, chap_dir / "audio" / "speech_master.wav"
@@ -1394,6 +1519,9 @@ class DualT4Orchestrator:
                             voice_volume=float(audio_settings["voice_volume"]),
                             fadeout_seconds=0,
                         )
+                        t_an1 = time.monotonic()
+                        with metrics_lock:
+                            audio_norm_intervals.append((t_an0, t_an1))
                         sub_font_size = int(sub_settings.get("font_size", 26))
                         shot_tasks, per_shot_burned = _build_chapter_shot_tasks(
                             build_shot_tasks_fn,
@@ -1494,7 +1622,7 @@ class DualT4Orchestrator:
                     self.queues.render_queue.put(None)
 
         def _gpu_render_stealer(gpu_id: int) -> None:
-            nonlocal in_flight_render
+            nonlocal in_flight_render, intermediate_bytes_written
             try:
                 while True:
                     if abort_event.is_set():
@@ -1510,22 +1638,25 @@ class DualT4Orchestrator:
                     ch_num, shot_idx, stask = item
                     _snapshot_and_evaluate()
                     # Respect elastic GPU allocation when TTS is still active on gpu_id
-                    if gpu_id not in active_render_gpus and active_render_gpus:
-                        # If B1/B3/B4 keeps GPU0 dedicated to TTS while GPU1 renders,
-                        # let eligible render GPUs handle the shot instead of stealing prematurely.
-                        if not self.queues.render_queue.empty() or len(active_render_gpus) > 0:
-                            # Re-queue when this GPU is momentarily reserved exclusively for TTS
-                            if self.profile.profile_id == BenchmarkProfileId.B1 and gpu_id == 0:
-                                self.queues.render_queue.put(item)
-                                self.queues.render_queue.task_done()
-                                time.sleep(0.05)
-                                continue
+                    if (
+                        gpu_id not in active_render_gpus
+                        and active_render_gpus
+                        and not all_tts_done_event.is_set()
+                    ):
+                        self.queues.render_queue.put(item)
+                        self.queues.render_queue.task_done()
+                        time.sleep(0.02)
+                        continue
 
                     with sampler_state_lock:
                         in_flight_render += 1
+                    t_shot0 = time.monotonic()
                     try:
                         clip_path = pool.submit_render_shot(gpu_id, stask, chapter=ch_num)
                     finally:
+                        t_shot1 = time.monotonic()
+                        with metrics_lock:
+                            render_shot_intervals.append((t_shot0, t_shot1))
                         with sampler_state_lock:
                             in_flight_render = max(0, in_flight_render - 1)
 
@@ -1542,6 +1673,7 @@ class DualT4Orchestrator:
                             render_start = tr["start_time"]
 
                     if assembled_pkg is not None and ordered_clips is not None:
+                        t_mux0 = time.monotonic()
                         _concat_chapter_shot_clips(
                             concat_shot_clips_fn,
                             ordered_clips,
@@ -1558,6 +1690,15 @@ class DualT4Orchestrator:
                             quality_mode=assembled_pkg.quality_mode,
                             gpu_index=0,
                         )
+                        t_mux1 = time.monotonic()
+                        shot_bytes = sum(
+                            p.stat().st_size
+                            for p in assembled_pkg.shot_work_dir.rglob("*")
+                            if p.is_file()
+                        )
+                        with metrics_lock:
+                            mux_intervals.append((t_mux0, t_mux1))
+                            intermediate_bytes_written += shot_bytes
                         shutil.rmtree(assembled_pkg.shot_work_dir, ignore_errors=True)
                         rnd_dur = max(0.001, time.monotonic() - render_start)
                         audio_paths = [
@@ -1578,6 +1719,7 @@ class DualT4Orchestrator:
 
         # ---- Stage 5: Validation Queue Consumer ----
         def _validation_stage() -> None:
+            nonlocal all_chapters_valid
             completed_count = 0
             target_count = len(self.chapters)
             try:
@@ -1594,6 +1736,7 @@ class DualT4Orchestrator:
 
                     pkg = item.package
                     ch_num = pkg.chapter_num
+                    t_val0 = time.monotonic()
                     val_report = validate_final_artifact(
                         pkg.output_video_path,
                         pkg.subtitles_path,
@@ -1604,6 +1747,11 @@ class DualT4Orchestrator:
                         ch_num,
                         chapter_dir=pkg.chapter_dir,
                     )
+                    t_val1 = time.monotonic()
+                    with metrics_lock:
+                        validation_intervals.append((t_val0, t_val1))
+                        if not bool(val_report.get("valid", False)):
+                            all_chapters_valid = False
                     atomic_write_json(pkg.chapter_dir / "artifact_validation.json", val_report)
                     update_checkpoint(
                         pkg.chapter_dir,
@@ -1695,9 +1843,34 @@ class DualT4Orchestrator:
         ]
         compiled_path: Optional[Path] = None
         if self.compile_feature and len(ordered_videos) > 1:
+            t_comp0 = time.monotonic()
             compiled_path = self._compile_feature_video(ordered_videos)
+            mux_intervals.append((t_comp0, time.monotonic()))
 
         total_wall = max(0.001, time.monotonic() - t_start)
+        cpu_snap1 = _capture_cpu_snapshot()
+        cpu_util_avg = _compute_cpu_util_pct(cpu_snap0, cpu_snap1)
+
+        output_bytes_written = intermediate_bytes_written
+        for ch_num in self.chapters:
+            chap_dir = self._resolve_chapter_dir(ch_num)
+            for rel_dir in ("audio", "video", "subtitles"):
+                d = chap_dir / rel_dir
+                if d.is_dir():
+                    for fp in d.rglob("*"):
+                        if fp.is_file():
+                            output_bytes_written += fp.stat().st_size
+            for fname in ("visual_plan.json", "artifact_validation.json"):
+                fp = chap_dir / fname
+                if fp.is_file():
+                    output_bytes_written += fp.stat().st_size
+        if compiled_path is not None and compiled_path.is_file():
+            output_bytes_written += compiled_path.stat().st_size
+        disk_throughput_mb_s = round(
+            output_bytes_written / (1024.0 * 1024.0 * max(0.001, total_wall)),
+            3,
+        )
+
         per_chap_tel: Dict[str, ChapterTelemetry] = {}
         seq_est = 0.0
         for ch_num in self.chapters:
@@ -1723,6 +1896,46 @@ class DualT4Orchestrator:
 
         pool_stats = pool.get_stats()
         tel_summary = telemetry_sampler.summarize()
+
+        tts_wall_sec = _merge_interval_seconds(tts_intervals)
+        pool_intervals = (
+            pool.get_timing_intervals() if callable(getattr(pool, "get_timing_intervals", None)) else {}
+        )
+        init_ivs = pool_intervals.get("tts_init") or []
+        infer_ivs = pool_intervals.get("tts_infer") or []
+        if init_ivs or infer_ivs:
+            model_init_sec = min(tts_wall_sec, _merge_interval_seconds(init_ivs))
+            tts_infer_sec = _merge_interval_seconds(infer_ivs)
+        else:
+            raw_init = max(
+                (float(pool_stats.get(gid, {}).get("model_init_seconds", 0.0)) for gid in self.profile.gpu_ids),
+                default=0.0,
+            )
+            model_init_sec = min(tts_wall_sec, round(raw_init, 4))
+            tts_infer_sec = round(max(0.0, tts_wall_sec - model_init_sec), 4)
+        stage_breakdown = {
+            "model_init_sec": round(model_init_sec, 4),
+            "tts_infer_sec": round(tts_infer_sec, 4),
+            "audio_norm_sec": _merge_interval_seconds(audio_norm_intervals),
+            "render_sec": _merge_interval_seconds(render_shot_intervals),
+            "mux_sec": _merge_interval_seconds(mux_intervals),
+            "validation_sec": _merge_interval_seconds(validation_intervals),
+        }
+
+        gpu_util_avg = {
+            str(gid): float(
+                tel_summary["per_gpu"].get(str(gid), {}).get("avg_gpu_util_pct", 0.0)
+            )
+            for gid in self.profile.gpu_ids
+        }
+        all_valid = bool(
+            all_chapters_valid
+            and len(chapter_artifacts) == len(self.chapters)
+            and all(
+                bool(chapter_artifacts.get(c, {}).get("validation", {}).get("valid", False))
+                for c in self.chapters
+            )
+        )
 
         def _build_gpu_tel(gid: int, task_label: str) -> Optional[GpuDeviceTelemetry]:
             if gid not in self.profile.gpu_ids:
@@ -1755,6 +1968,11 @@ class DualT4Orchestrator:
             per_chapter=per_chap_tel,
             scheduler_transitions=self.scheduler.history,
             frozen_profile=self.frozen_session.to_dict() if self.frozen_session else None,
+            stage_breakdown=stage_breakdown,
+            gpu_util_avg=gpu_util_avg,
+            cpu_util_avg=cpu_util_avg,
+            disk_throughput_mb_s=disk_throughput_mb_s,
+            all_valid=all_valid,
         )
 
         atomic_write_json(self.receipts_dir / "series_telemetry.json", series_tel.to_dict())
@@ -1765,6 +1983,7 @@ class DualT4Orchestrator:
             "profile_id": self.profile.profile_id.value,
             "encoder": self.encoder,
             "compiled_feature_video": str(compiled_path) if compiled_path else None,
+            "all_valid": all_valid,
             "gpu_usage_evidence": {
                 str(gid): {
                     "tts_tasks": int(pool_stats.get(gid, {}).get("tts_tasks", 0)),
@@ -1773,6 +1992,7 @@ class DualT4Orchestrator:
                     "oom_events": int(pool_stats.get(gid, {}).get("oom_events", 0)),
                     "crash_events": int(pool_stats.get(gid, {}).get("crash_events", 0)),
                     "peak_vram_mb": tel_summary["per_gpu"].get(str(gid), {}).get("peak_vram_mb", 0.0),
+                    "avg_gpu_util_pct": gpu_util_avg.get(str(gid), 0.0),
                 }
                 for gid in self.profile.gpu_ids
             },
@@ -1826,10 +2046,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Kaggle Dual-T4 Elastic Pipeline Orchestrator")
     parser.add_argument("--workspace", default="/kaggle/working/workspace")
     parser.add_argument("--chapters", required=True)
-    parser.add_argument("--render-workers", type=int, default=2)
-    parser.add_argument("--profile", default="B5")
+    parser.add_argument("--render-workers", type=int, default=None)
+    parser.add_argument("--profile", "--architecture-profile", dest="profile", default="B5")
     parser.add_argument("--encoder", default="auto")
     parser.add_argument("--no-compile", action="store_true", default=False)
+    parser.add_argument("--force-recompute", action="store_true", default=False)
     args = parser.parse_args()
 
     ch_list = [c.strip() for c in args.chapters.split(",") if c.strip()]
@@ -1840,6 +2061,7 @@ def main() -> int:
         compile_feature=not args.no_compile,
         profile=args.profile,
         encoder=args.encoder,
+        force_recompute=args.force_recompute,
     )
     tel = orchestrator.run_pipeline()
     print(f"Dual-T4 Production Completed: {len(ch_list)} chapters, {tel.speedup_factor}x speedup.")

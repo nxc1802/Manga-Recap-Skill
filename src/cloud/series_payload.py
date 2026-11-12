@@ -11,6 +11,7 @@ import csv
 import json
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 from pathlib import Path
@@ -102,6 +103,9 @@ def verify_series_payload_manifest(root: Union[str, Path], expected_manifest_has
     for req in required_assets:
         if req not in actual:
             raise ValueError(f"Required series runtime asset is absent: {req}")
+    if manifest.get("job_type") == "benchmark_matrix":
+        if "scripts/benchmark/run_dual_t4_matrix.py" not in actual:
+            raise ValueError("Required benchmark harness is absent: scripts/benchmark/run_dual_t4_matrix.py")
     return manifest
 
 
@@ -113,6 +117,8 @@ def package_series_payload(
     skip_preview: bool = False,
     profile: str = "B5",
     job_type: str = "produce_series",
+    include_benchmark_harness: bool = False,
+    extra_metadata: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Path, str]:
     """
     Packages a self-contained Dual-T4 series payload enforcing Q01-Q10 setup,
@@ -156,6 +162,11 @@ def package_series_payload(
             files[src_file.relative_to(source_root).as_posix()] = src_file
         for meta_name in ("requirements.txt", "pyproject.toml"):
             files[meta_name] = source_root / meta_name
+        if include_benchmark_harness or job_type == "benchmark_matrix":
+            harness_path = source_root / "scripts" / "benchmark" / "run_dual_t4_matrix.py"
+            if not harness_path.is_file():
+                raise ValueError(f"Missing benchmark matrix harness: {harness_path}")
+            files["scripts/benchmark/run_dual_t4_matrix.py"] = harness_path
 
         for proj_meta in ("project.json", "series_setup_answers.json", "voice_selection.json", "preview_approval.json"):
             p = root / proj_meta
@@ -205,16 +216,34 @@ def package_series_payload(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_path, dest)
 
+        git_commit = "unknown"
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(source_root),
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+                check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                git_commit = res.stdout.strip()
+        except Exception:
+            pass
+
         manifest = {
             "schema_version": SERIES_PAYLOAD_SCHEMA_VERSION,
             "project_slug": slug,
             "chapters": target_chapters,
             "job_type": job_type,
             "profile": str(profile),
+            "git_commit": git_commit,
             "files": {
                 rel: fingerprint(stage / rel) for rel in sorted(files)
             },
         }
+        if extra_metadata:
+            manifest["benchmark"] = dict(extra_metadata)
         atomic_write_json(stage / "payload_manifest.json", manifest)
         digest = fingerprint(stage / "payload_manifest.json")
         verify_series_payload_manifest(stage, digest)
@@ -226,6 +255,56 @@ def package_series_payload(
                 if p.is_file():
                     archive.add(p, arcname=p.relative_to(stage).as_posix())
     return out_path, digest
+
+
+def _build_bootstrap_prefix_lines(payload_manifest_hash: str) -> List[str]:
+    """
+    Returns stdlib-only Kaggle container bootstrap statements that extract & verify
+    the payload SHA-256 inventory BEFORE running `pip install` or importing `src.*`.
+    Records `_boot_t0` and `_boot_sec` around extraction + verification + pip install.
+    """
+    return [
+        "import os, sys, json, hashlib, tarfile, shutil, subprocess, time",
+        "from pathlib import Path",
+        "sys.dont_write_bytecode = True",
+        "_boot_t0 = time.monotonic()",
+        "working_dir = Path('/kaggle/working')",
+        "os.environ.setdefault('HF_HOME', str(working_dir / 'cache' / 'hf'))",
+        "os.environ.setdefault('TORCH_HOME', str(working_dir / 'cache' / 'torch'))",
+        "os.environ.setdefault('TMPDIR', str(working_dir / 'tmp'))",
+        "Path(os.environ['TMPDIR']).mkdir(parents=True, exist_ok=True)",
+        "root = working_dir / 'runtime'",
+        "if root.exists(): raise RuntimeError('Runtime must be fresh')",
+        "root.mkdir(parents=True)",
+        "payloads = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
+        "if len(payloads) == 1:",
+        "    with tarfile.open(payloads[0]) as archive:",
+        "        for entry in archive.getmembers():",
+        "            target = (root / entry.name).resolve()",
+        "            if not target.is_relative_to(root) or not entry.isfile(): raise RuntimeError('Unsafe payload member')",
+        "        archive.extractall(root, filter='data')",
+        "else:",
+        "    manifests = list(Path('/kaggle/input').rglob('payload_manifest.json'))",
+        "    if len(manifests) != 1: raise RuntimeError('Expected one payload archive or extracted manifest')",
+        "    src_root = manifests[0].parent",
+        "    for item in src_root.iterdir():",
+        "        dst = root / item.name",
+        "        if item.is_symlink(): raise RuntimeError('Symlinks are forbidden in series payload')",
+        "        if item.is_dir(): shutil.copytree(item, dst, symlinks=False)",
+        "        else: shutil.copy2(item, dst)",
+        f"expected = {payload_manifest_hash!r}",
+        "manifest_path = root / 'payload_manifest.json'",
+        "if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected: raise RuntimeError('Payload manifest changed')",
+        "manifest = json.loads(manifest_path.read_text())",
+        "files = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p != manifest_path}",
+        "if files != set(manifest['files']): raise RuntimeError('Payload inventory mismatch')",
+        "for name, digest in manifest['files'].items():",
+        "    target = (root / name).resolve()",
+        "    if not target.is_relative_to(root) or hashlib.sha256(target.read_bytes()).hexdigest() != digest:",
+        "        raise RuntimeError(f'Payload hash mismatch: {name}')",
+        "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-r', str(root / 'requirements.txt')], check=True)",
+        "_boot_sec = max(0.0, time.monotonic() - _boot_t0)",
+    ]
 
 
 def generate_series_worker_script(
@@ -273,45 +352,8 @@ def generate_series_worker_script(
     if encoder not in {"libx264", "h264_nvenc"}:
         raise ValueError(f"Unsupported cloud encoder: {encoder_preference}")
 
-    return "\n".join([
-        "import os, sys, json, hashlib, tarfile, shutil, subprocess",
-        "from pathlib import Path",
-        "sys.dont_write_bytecode = True",
-        "working_dir = Path('/kaggle/working')",
-        "os.environ.setdefault('HF_HOME', str(working_dir / 'cache' / 'hf'))",
-        "os.environ.setdefault('TORCH_HOME', str(working_dir / 'cache' / 'torch'))",
-        "os.environ.setdefault('TMPDIR', str(working_dir / 'tmp'))",
-        "Path(os.environ['TMPDIR']).mkdir(parents=True, exist_ok=True)",
-        "root = working_dir / 'runtime'",
-        "if root.exists(): raise RuntimeError('Runtime must be fresh')",
-        "root.mkdir(parents=True)",
-        "payloads = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
-        "if len(payloads) == 1:",
-        "    with tarfile.open(payloads[0]) as archive:",
-        "        for entry in archive.getmembers():",
-        "            target = (root / entry.name).resolve()",
-        "            if not target.is_relative_to(root) or not entry.isfile(): raise RuntimeError('Unsafe payload member')",
-        "        archive.extractall(root, filter='data')",
-        "else:",
-        "    manifests = list(Path('/kaggle/input').rglob('payload_manifest.json'))",
-        "    if len(manifests) != 1: raise RuntimeError('Expected one payload archive or extracted manifest')",
-        "    src_root = manifests[0].parent",
-        "    for item in src_root.iterdir():",
-        "        dst = root / item.name",
-        "        if item.is_symlink(): raise RuntimeError('Symlinks are forbidden in series payload')",
-        "        if item.is_dir(): shutil.copytree(item, dst, symlinks=False)",
-        "        else: shutil.copy2(item, dst)",
-        f"expected = {payload_manifest_hash!r}",
-        "manifest_path = root / 'payload_manifest.json'",
-        "if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected: raise RuntimeError('Payload manifest changed')",
-        "manifest = json.loads(manifest_path.read_text())",
-        "files = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p != manifest_path}",
-        "if files != set(manifest['files']): raise RuntimeError('Payload inventory mismatch')",
-        "for name, digest in manifest['files'].items():",
-        "    target = (root / name).resolve()",
-        "    if not target.is_relative_to(root) or hashlib.sha256(target.read_bytes()).hexdigest() != digest:",
-        "        raise RuntimeError(f'Payload hash mismatch: {name}')",
-        "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-r', str(root / 'requirements.txt')], check=True)",
+    lines = _build_bootstrap_prefix_lines(payload_manifest_hash)
+    lines.extend([
         "sys.path.insert(0, str(root))",
         "from src.cloud.series_payload import run_series_worker",
         "run_series_worker(",
@@ -326,6 +368,67 @@ def generate_series_worker_script(
         f"    autotune={bool(autotune)!r},",
         ")",
     ])
+    return "\n".join(lines)
+
+
+def generate_benchmark_worker_script(
+    project_slug: str,
+    chapters: Sequence[Union[str, int]],
+    *,
+    payload_manifest_hash: str,
+    project_dir: Optional[Path] = None,
+    variants: Sequence[str] = ("B0", "B1", "B2", "B3", "B4", "B5"),
+    repeats: int = 1,
+    warmup: bool = False,
+    encoder_preference: str = "auto",
+    compile_feature: bool = False,
+) -> str:
+    """
+    Generates a stdlib-only Kaggle Dual-T4 bootstrap script that verifies payload SHA-256
+    inventory first, times kernel boot separately, and runs the P9 B0..B5 benchmark matrix
+    on the pinned series payload inside `/kaggle/working/results`.
+    """
+    from src.core.storage import get_project_dir
+
+    proj_dir = Path(project_dir) if project_dir is not None else get_project_dir(project_slug)
+    require_series_setup(project_slug, project_dir=proj_dir)
+    require_voice_approval(proj_dir)
+    require_preview_approval(proj_dir)
+
+    target_chapters = _normalize_chapters(chapters)
+    if not payload_manifest_hash:
+        raise ValueError("Package and hash the benchmark payload before generating worker script")
+
+    encoder = "h264_nvenc" if encoder_preference in {"auto", "nvenc", "h264_nvenc"} else encoder_preference
+    if encoder not in {"libx264", "h264_nvenc"}:
+        raise ValueError(f"Unsupported cloud encoder: {encoder_preference}")
+
+    norm_variants = [str(v).strip().upper() for v in variants if str(v).strip()]
+    if not norm_variants:
+        raise ValueError("Benchmark variants cannot be empty")
+
+    lines = _build_bootstrap_prefix_lines(payload_manifest_hash)
+    lines.extend([
+        "cmd = [",
+        "    sys.executable,",
+        "    str(root / 'scripts' / 'benchmark' / 'run_dual_t4_matrix.py'),",
+        "    '--in-container',",
+        "    '--runtime-root', str(root),",
+        "    '--manifest-hash', expected,",
+        "    '--output-dir', str(working_dir / 'results'),",
+        f"    '--chapters', {','.join(target_chapters)!r},",
+        f"    '--variants', {','.join(norm_variants)!r},",
+        f"    '--repeats', str({max(1, int(repeats))}),",
+        f"    '--encoder', {encoder!r},",
+        "    '--boot-sec', f'{_boot_sec:.4f}',",
+        "]",
+    ])
+    if warmup:
+        lines.append("cmd.append('--warmup')")
+    if not compile_feature:
+        lines.append("cmd.append('--no-compile')")
+    lines.append("subprocess.run(cmd, cwd=str(root), check=True)")
+    return "\n".join(lines)
 
 
 def run_series_worker(
