@@ -8,7 +8,7 @@ database dependency. Kaggle can run the same neural/media runtime on a remote GP
 
 **V4 P0–P7 are PASS and FROZEN on exact tested code tree `d1b032eaf5f2ed178fc28e71740664bb778dacd5` (`90f1786e31f45ddcac38376a3161ac9a7fff615b`). Branch not yet release ready overall while P8–P15 remain OPEN / IN PROGRESS.**
 Exact-HEAD deterministic checks (`794 passed`, zero failures/skips), GitHub Actions CI
-([PR #1 run `43083930743`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43083930743)
+([PR #2 run `43083930743`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43083930743)
 and [`push` run `43083921539`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43083921539)),
 and real Chapter 1 E2E verification (G0–G7: real VieNeu-TTS synthesis, canonical
 preview render, explicit human approval, bit-for-bit final promotion, live Kaggle
