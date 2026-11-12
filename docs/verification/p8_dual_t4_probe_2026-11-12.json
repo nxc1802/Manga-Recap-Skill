@@ -1,0 +1,537 @@
+{
+  "schema_version": "p8.0-probe-1.0",
+  "generated_at_utc": "2026-11-12T00:34:59Z",
+  "host": {
+    "timestamp_utc": "2026-11-12T00:33:38Z",
+    "platform": "Linux-6.18.55+-x86_64-with-glibc2.39",
+    "system": "Linux",
+    "release": "6.18.55+",
+    "machine": "x86_64",
+    "cpu_count": 4,
+    "python_version": "3.13.16",
+    "python_executable": "/usr/bin/python3",
+    "in_kaggle": true,
+    "kaggle_kernel_run_type": "Batch",
+    "initial_cuda_visible_devices": null,
+    "hf_cache_preexisting": false,
+    "packages": {
+      "vieneu": "3.8.4",
+      "torch": "2.11.0+cu130",
+      "transformers": "5.20.2",
+      "safetensors": "0.8.0",
+      "onnxruntime": "1.31.1",
+      "onnxruntime_gpu": null,
+      "huggingface_hub": "1.33.0",
+      "numpy": "2.1.3",
+      "kaggle": "2.0.2"
+    }
+  },
+  "vieneu_bootstrap": {
+    "already_installed": false,
+    "install_attempted": true,
+    "installed": true,
+    "duration_seconds": 8.07,
+    "version": "3.8.4",
+    "error": null
+  },
+  "nvidia_smi": {
+    "available": true,
+    "binary": "/opt/bin/nvidia-smi",
+    "raw_list": [
+      "GPU 0: Tesla T4 (UUID: GPU-f1e0d668-b9e4-6c3c-5f77-39932ea75777)",
+      "GPU 1: Tesla T4 (UUID: GPU-9e5a5ad5-63cc-af4b-0b33-bf0865d51ae9)"
+    ],
+    "list_error": null,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "Tesla T4",
+        "uuid": "GPU-f1e0d668-b9e4-6c3c-5f77-39932ea75777",
+        "vram_total_mb": 15360.0,
+        "vram_free_mb": 14912.0,
+        "vram_used_mb": 0.0,
+        "driver_version": "580.178.04",
+        "pci_bus_id": "00000000:00:04.0",
+        "compute_cap": "7.5"
+      },
+      {
+        "index": 1,
+        "name": "Tesla T4",
+        "uuid": "GPU-9e5a5ad5-63cc-af4b-0b33-bf0865d51ae9",
+        "vram_total_mb": 15360.0,
+        "vram_free_mb": 14912.0,
+        "vram_used_mb": 0.0,
+        "driver_version": "580.178.04",
+        "pci_bus_id": "00000000:00:05.0",
+        "compute_cap": "7.5"
+      }
+    ],
+    "gpu_count": 2,
+    "driver_version": "580.178.04",
+    "cuda_driver_version": "13.0",
+    "nvcc_version": "13.0"
+  },
+  "torch": {
+    "installed": true,
+    "version": "2.11.0+cu130",
+    "cuda_runtime_version": "13.0",
+    "cudnn_version": 92700,
+    "cuda_available": true,
+    "device_count": 2,
+    "bf16_supported": true,
+    "devices": [
+      {
+        "index": 0,
+        "name": "Tesla T4",
+        "uuid": "f1e0d668-b9e4-6c3c-5f77-39932ea75777",
+        "compute_capability": "7.5",
+        "multi_processor_count": 40,
+        "total_vram_mb": 14911.7,
+        "free_vram_mb": 14806.8
+      },
+      {
+        "index": 1,
+        "name": "Tesla T4",
+        "uuid": "9e5a5ad5-63cc-af4b-0b33-bf0865d51ae9",
+        "compute_capability": "7.5",
+        "multi_processor_count": 40,
+        "total_vram_mb": 14911.7,
+        "free_vram_mb": 14806.8
+      }
+    ]
+  },
+  "onnxruntime": {
+    "installed": true,
+    "version": "1.31.1",
+    "onnxruntime_gpu_version": null,
+    "available_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "cuda_provider_available": false,
+    "tensorrt_provider_available": false
+  },
+  "ffmpeg": {
+    "ffmpeg_available": true,
+    "ffmpeg_binary": "/usr/bin/ffmpeg",
+    "ffprobe_available": true,
+    "ffprobe_binary": "/usr/bin/ffprobe",
+    "version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+    "hwaccels": [
+      "vdpau",
+      "cuda",
+      "vaapi",
+      "qsv",
+      "drm",
+      "opencl",
+      "vulkan"
+    ],
+    "encoders_checked": {
+      "h264_nvenc": true,
+      "hevc_nvenc": true,
+      "libx264": true,
+      "h264_videotoolbox": false
+    },
+    "filters_checked": {
+      "scale_cuda": false,
+      "scale_npp": false,
+      "crop": true,
+      "zoompan": false,
+      "scale": true,
+      "boxblur": true,
+      "gblur": true,
+      "overlay": true,
+      "overlay_cuda": false,
+      "hwupload_cuda": false,
+      "hwdownload": false,
+      "subtitles": false,
+      "ass": false
+    }
+  },
+  "isolated_vieneu_probes": {
+    "0": {
+      "requested_gpu_id": 0,
+      "env_cuda_visible_devices": "0",
+      "torch": {
+        "installed": true,
+        "version": "2.11.0+cu130",
+        "cuda_runtime_version": "13.0",
+        "cudnn_version": 92700,
+        "cuda_available": true,
+        "device_count": 1,
+        "bf16_supported": true,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "uuid": "f1e0d668-b9e4-6c3c-5f77-39932ea75777",
+            "compute_capability": "7.5",
+            "multi_processor_count": 40,
+            "total_vram_mb": 14911.7,
+            "free_vram_mb": 14702.8
+          }
+        ]
+      },
+      "onnxruntime": {
+        "installed": true,
+        "version": "1.31.1",
+        "onnxruntime_gpu_version": null,
+        "available_providers": [
+          "AzureExecutionProvider",
+          "CPUExecutionProvider"
+        ],
+        "cuda_provider_available": false,
+        "tensorrt_provider_available": false
+      },
+      "sdk_inspection": {
+        "vieneu_version": "3.8.4",
+        "factory_signature": "(mode='v3turbo', **kwargs)",
+        "v3turbo_init_signature": "(self, backbone_repo: str = 'pnnbao-ump/VieNeu-TTS-v3-Turbo', model_subfolder: str = 'update', moss_tokenizer: str = 'OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano', device: str = 'auto', dtype: str = 'auto', backend: str = 'auto', onnx_repo: Optional[str] = None, onnx_dir: Optional[str] = None, precision: str = 'fp32', onnx_subfolder: Optional[str] = None, threads: int = 0, max_batch_size: int = 32, max_streams: int = 16, babble_retries: int = 2, **kwargs: Any)",
+        "has_infer": true,
+        "has_infer_batch": true,
+        "has_infer_stream": true
+      },
+      "initialization": {
+        "ok": true,
+        "init_seconds": 33.244,
+        "tts_backend": "pytorch",
+        "engine_class": "VieNeuTTSv3Turbo",
+        "engine_device": "cuda",
+        "engine_dtype": "torch.bfloat16",
+        "model_param_device": "cuda:0",
+        "model_param_dtype": "torch.bfloat16",
+        "codec_param_device": "cuda:0",
+        "codec_param_dtype": "torch.float32",
+        "sub_session_providers": {
+          "speaker_encoder": [
+            "CPUExecutionProvider"
+          ],
+          "denoiser": [
+            "CPUExecutionProvider"
+          ]
+        },
+        "actual_execution_provider": "pytorch_cuda",
+        "cuda_expected": true,
+        "cuda_actually_used": true,
+        "fell_back_to_cpu": false,
+        "max_batch_size": 32,
+        "max_streams": 16
+      },
+      "inference_single_cold": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "infer_seconds": 4.1503,
+        "rtf": 1.1791,
+        "sample_count": 168960,
+        "sample_rate": 48000,
+        "duration_seconds": 3.52,
+        "rms": 0.10784,
+        "peak_abs": 0.539346,
+        "non_silent": true
+      },
+      "inference_single_warm": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "infer_seconds": 0.5791,
+        "rtf": 0.181,
+        "sample_count": 153600,
+        "sample_rate": 48000,
+        "duration_seconds": 3.2,
+        "rms": 0.106262,
+        "peak_abs": 0.519489,
+        "non_silent": true
+      },
+      "inference_batch_4": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "item_count": 4,
+        "infer_seconds": 1.4169,
+        "total_audio_seconds": 14.64,
+        "batch_rtf": 0.0968,
+        "all_non_silent": true,
+        "batch_engine_class": "V3TurboBatchEngine",
+        "batch_engine_use_fused": true,
+        "fused_cuda_graph_available": true,
+        "fused_graphs_captured": 2,
+        "per_item_durations": [
+          3.28,
+          3.92,
+          3.68,
+          3.76
+        ]
+      },
+      "vram_after": {
+        "allocated_mb": 401.1,
+        "peak_allocated_mb": 475.1,
+        "reserved_mb": 704.0,
+        "free_mb": 13912.8,
+        "total_mb": 14911.7
+      }
+    },
+    "1": {
+      "requested_gpu_id": 1,
+      "env_cuda_visible_devices": "1",
+      "torch": {
+        "installed": true,
+        "version": "2.11.0+cu130",
+        "cuda_runtime_version": "13.0",
+        "cudnn_version": 92700,
+        "cuda_available": true,
+        "device_count": 1,
+        "bf16_supported": true,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "uuid": "9e5a5ad5-63cc-af4b-0b33-bf0865d51ae9",
+            "compute_capability": "7.5",
+            "multi_processor_count": 40,
+            "total_vram_mb": 14911.7,
+            "free_vram_mb": 14704.8
+          }
+        ]
+      },
+      "onnxruntime": {
+        "installed": true,
+        "version": "1.31.1",
+        "onnxruntime_gpu_version": null,
+        "available_providers": [
+          "AzureExecutionProvider",
+          "CPUExecutionProvider"
+        ],
+        "cuda_provider_available": false,
+        "tensorrt_provider_available": false
+      },
+      "sdk_inspection": {
+        "vieneu_version": "3.8.4",
+        "factory_signature": "(mode='v3turbo', **kwargs)",
+        "v3turbo_init_signature": "(self, backbone_repo: str = 'pnnbao-ump/VieNeu-TTS-v3-Turbo', model_subfolder: str = 'update', moss_tokenizer: str = 'OpenMOSS-Team/MOSS-Audio-Tokenizer-Nano', device: str = 'auto', dtype: str = 'auto', backend: str = 'auto', onnx_repo: Optional[str] = None, onnx_dir: Optional[str] = None, precision: str = 'fp32', onnx_subfolder: Optional[str] = None, threads: int = 0, max_batch_size: int = 32, max_streams: int = 16, babble_retries: int = 2, **kwargs: Any)",
+        "has_infer": true,
+        "has_infer_batch": true,
+        "has_infer_stream": true
+      },
+      "initialization": {
+        "ok": true,
+        "init_seconds": 11.344,
+        "tts_backend": "pytorch",
+        "engine_class": "VieNeuTTSv3Turbo",
+        "engine_device": "cuda",
+        "engine_dtype": "torch.bfloat16",
+        "model_param_device": "cuda:0",
+        "model_param_dtype": "torch.bfloat16",
+        "codec_param_device": "cuda:0",
+        "codec_param_dtype": "torch.float32",
+        "sub_session_providers": {
+          "speaker_encoder": [
+            "CPUExecutionProvider"
+          ],
+          "denoiser": [
+            "CPUExecutionProvider"
+          ]
+        },
+        "actual_execution_provider": "pytorch_cuda",
+        "cuda_expected": true,
+        "cuda_actually_used": true,
+        "fell_back_to_cpu": false,
+        "max_batch_size": 32,
+        "max_streams": 16
+      },
+      "inference_single_cold": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "infer_seconds": 1.8329,
+        "rtf": 0.5091,
+        "sample_count": 172800,
+        "sample_rate": 48000,
+        "duration_seconds": 3.6,
+        "rms": 0.104248,
+        "peak_abs": 0.536146,
+        "non_silent": true
+      },
+      "inference_single_warm": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "infer_seconds": 0.4645,
+        "rtf": 0.1452,
+        "sample_count": 153600,
+        "sample_rate": 48000,
+        "duration_seconds": 3.2,
+        "rms": 0.110868,
+        "peak_abs": 0.589727,
+        "non_silent": true
+      },
+      "inference_batch_4": {
+        "ok": true,
+        "voice": "Ngọc Huyền",
+        "item_count": 4,
+        "infer_seconds": 1.4048,
+        "total_audio_seconds": 14.64,
+        "batch_rtf": 0.096,
+        "all_non_silent": true,
+        "batch_engine_class": "V3TurboBatchEngine",
+        "batch_engine_use_fused": true,
+        "fused_cuda_graph_available": true,
+        "fused_graphs_captured": 2,
+        "per_item_durations": [
+          3.36,
+          3.92,
+          3.68,
+          3.68
+        ]
+      },
+      "vram_after": {
+        "allocated_mb": 401.4,
+        "peak_allocated_mb": 475.1,
+        "reserved_mb": 704.0,
+        "free_mb": 13914.8,
+        "total_mb": 14911.7
+      }
+    }
+  },
+  "isolated_nvenc_probes": {
+    "0": {
+      "requested_gpu_id": 0,
+      "env_cuda_visible_devices": "0",
+      "visible_cuda_devices": [
+        {
+          "index": 0,
+          "name": "Tesla T4",
+          "uuid": "f1e0d668-b9e4-6c3c-5f77-39932ea75777",
+          "compute_capability": "7.5",
+          "multi_processor_count": 40,
+          "total_vram_mb": 14911.7,
+          "free_vram_mb": 14702.8
+        }
+      ],
+      "ffmpeg_available": true,
+      "h264_nvenc_listed": true,
+      "crop_listed": true,
+      "scale_cuda_listed": false,
+      "nvenc_crop_smoke": {
+        "ok": true,
+        "available": true,
+        "gpu_flag_used": 0,
+        "returncode": 0,
+        "encode_seconds": 1.097,
+        "effective_fps": 54.7,
+        "ffprobe": {
+          "ok": true,
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "nb_frames": "60",
+          "pix_fmt": "yuv420p",
+          "avg_frame_rate": "30/1",
+          "duration": "2.000000",
+          "size_bytes": 351083
+        },
+        "nvenc_log_lines": [
+          "[vost#0:0/h264_nvenc @ 0x5d19b8a47b80] Created video stream from input stream 0:0",
+          "Stream #0:0 -> #0:0 (wrapped_avframe (native) -> h264 (h264_nvenc))",
+          "[h264_nvenc @ 0x5d19b8a47f80] Loaded Nvenc version 13.0",
+          "[h264_nvenc @ 0x5d19b8a47f80] Nvenc initialized successfully",
+          "[h264_nvenc @ 0x5d19b8a47f80] 1 CUDA capable devices found",
+          "[h264_nvenc @ 0x5d19b8a47f80] [ GPU #0 - < Tesla T4 > has Compute SM 7.5 ]",
+          "[h264_nvenc @ 0x5d19b8a47f80] supports NVENC",
+          "[h264_nvenc @ 0x5d19b8a47f80] CQ(5888) mode enabled.",
+          "Output #0, mp4, to '/tmp/p8_nvenc_gpu0_zlots8a8/smoke_gpu0.mp4':",
+          "encoder         : Lavc60.31.102 h264_nvenc",
+          "[out#0/mp4 @ 0x5d19b8a46740] Output file #0 (/tmp/p8_nvenc_gpu0_zlots8a8/smoke_gpu0.mp4):",
+          "[h264_nvenc @ 0x5d19b8a47f80] Nvenc unloaded",
+          "[in#0/lavfi @ 0x5d19b8a42240]   Input stream #0:0 (video): 60 packets read (28800 bytes); 60 frames decoded; 0 decode errors;"
+        ]
+      },
+      "scale_cuda_smoke": {
+        "ok": false,
+        "available": false,
+        "reason": "scale_cuda or hwupload_cuda filter not listed in ffmpeg -filters"
+      }
+    },
+    "1": {
+      "requested_gpu_id": 1,
+      "env_cuda_visible_devices": "1",
+      "visible_cuda_devices": [
+        {
+          "index": 0,
+          "name": "Tesla T4",
+          "uuid": "9e5a5ad5-63cc-af4b-0b33-bf0865d51ae9",
+          "compute_capability": "7.5",
+          "multi_processor_count": 40,
+          "total_vram_mb": 14911.7,
+          "free_vram_mb": 14704.8
+        }
+      ],
+      "ffmpeg_available": true,
+      "h264_nvenc_listed": true,
+      "crop_listed": true,
+      "scale_cuda_listed": false,
+      "nvenc_crop_smoke": {
+        "ok": true,
+        "available": true,
+        "gpu_flag_used": 0,
+        "returncode": 0,
+        "encode_seconds": 1.05,
+        "effective_fps": 57.1,
+        "ffprobe": {
+          "ok": true,
+          "codec_name": "h264",
+          "width": 1920,
+          "height": 1080,
+          "nb_frames": "60",
+          "pix_fmt": "yuv420p",
+          "avg_frame_rate": "30/1",
+          "duration": "2.000000",
+          "size_bytes": 351083
+        },
+        "nvenc_log_lines": [
+          "[vost#0:0/h264_nvenc @ 0x588a16fcfb80] Created video stream from input stream 0:0",
+          "Stream #0:0 -> #0:0 (wrapped_avframe (native) -> h264 (h264_nvenc))",
+          "[h264_nvenc @ 0x588a16fcff80] Loaded Nvenc version 13.0",
+          "[h264_nvenc @ 0x588a16fcff80] Nvenc initialized successfully",
+          "[h264_nvenc @ 0x588a16fcff80] 1 CUDA capable devices found",
+          "[h264_nvenc @ 0x588a16fcff80] [ GPU #0 - < Tesla T4 > has Compute SM 7.5 ]",
+          "[h264_nvenc @ 0x588a16fcff80] supports NVENC",
+          "[h264_nvenc @ 0x588a16fcff80] CQ(5888) mode enabled.",
+          "Output #0, mp4, to '/tmp/p8_nvenc_gpu1_4kqqxiyy/smoke_gpu1.mp4':",
+          "encoder         : Lavc60.31.102 h264_nvenc",
+          "[out#0/mp4 @ 0x588a16fce740] Output file #0 (/tmp/p8_nvenc_gpu1_4kqqxiyy/smoke_gpu1.mp4):",
+          "[h264_nvenc @ 0x588a16fcff80] Nvenc unloaded",
+          "[in#0/lavfi @ 0x588a16fca240]   Input stream #0:0 (video): 60 packets read (28800 bytes); 60 frames decoded; 0 decode errors;"
+        ]
+      },
+      "scale_cuda_smoke": {
+        "ok": false,
+        "available": false,
+        "reason": "scale_cuda or hwupload_cuda filter not listed in ffmpeg -filters"
+      }
+    }
+  },
+  "summary": {
+    "gpu_count": 2,
+    "dual_t4_detected": true,
+    "distinct_nvsmi_uuids_count": 2,
+    "distinct_isolated_torch_uuids_verified": true,
+    "vieneu_gpu0_cuda_active": true,
+    "vieneu_gpu1_cuda_active": true,
+    "vieneu_gpu0_provider": "pytorch_cuda",
+    "vieneu_gpu1_provider": "pytorch_cuda",
+    "vieneu_infer_batch_gpu0_ok": true,
+    "vieneu_infer_batch_gpu1_ok": true,
+    "h264_nvenc_available": true,
+    "nvenc_gpu0_crop_smoke_ok": true,
+    "nvenc_gpu1_crop_smoke_ok": true,
+    "scale_cuda_available": false,
+    "scale_cuda_smoke_gpu0_ok": false,
+    "scale_cuda_smoke_gpu1_ok": false,
+    "scale_npp_available": false,
+    "crop_available": true,
+    "zoompan_available": false,
+    "ready_for_p8_dual_t4": true
+  },
+  "kaggle_dispatch": {
+    "kernel_ref": "cuongnguyen1802/mr-p8-dual-t4-probe-43603",
+    "requested_machine_shape": "NvidiaTeslaT4",
+    "enable_gpu": true,
+    "elapsed_seconds": 107.85
+  }
+}
