@@ -6,14 +6,20 @@ VieNeu-TTS audio, VisualPlan rendering and artifact validation. Persistence is
 local JSON/Markdown under `data/projects/`. The core has no cloud LLM/TTS API or
 database dependency. Kaggle can run the same neural/media runtime on a remote GPU.
 
-**V4 is not release ready yet.** Initial real Chapter 1 E2E verification
-(G1, G3–G7: real VieNeu-TTS synthesis, canonical preview render, human approval,
-and live single-session Kaggle T4 semantic parity) passed and is committed in
-[docs/verification/v4_e2e_2026-11-11/](docs/verification/v4_e2e_2026-11-11/README.md).
-An exact-HEAD P0–P7 E2E re-pin & freeze (after CI/documentation cleanup following
-post-E2E `src/cloud/kaggle_service.py` changes in `055d17f`) and P8–P15 (Dual-T4,
-benchmarks, HF archive/restore, YouTube verification, receipt-gated cleanup, and
-canonical release state machine) remain pending. See the canonical
+**V4 P0–P7 are PASS and FROZEN on exact tested code tree `d1b032eaf5f2ed178fc28e71740664bb778dacd5` (`90f1786e31f45ddcac38376a3161ac9a7fff615b`). Branch not yet release ready overall while P8–P15 remain OPEN / IN PROGRESS.**
+Exact-HEAD deterministic checks (`794 passed`, zero failures/skips), GitHub Actions CI
+([PR #1 run `43083930743`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43083930743)
+and [`push` run `43083921539`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43083921539)),
+and real Chapter 1 E2E verification (G0–G7: real VieNeu-TTS synthesis, canonical
+preview render, explicit human approval, bit-for-bit final promotion, live Kaggle
+Tesla T4 semantic parity, and 8/8 failure-path checks) passed and are recorded in
+[docs/verification/v4_e2e_2026-11-12/](docs/verification/v4_e2e_2026-11-12/README.md)
+(superseding the initial live checkpoint in
+[docs/verification/v4_e2e_2026-11-11/](docs/verification/v4_e2e_2026-11-11/README.md)).
+Future evidence/documentation commits do not alter canonical P0–P7 correctness
+code unless explicitly re-opened; P8–P15 (Dual-T4, benchmarks, HF archive/restore,
+YouTube verification, receipt-gated cleanup, test pyramid, and canonical release
+state machine) remain OPEN / IN PROGRESS next. See the canonical
 [gate ledger](docs/V4_Correctness_Status.md),
 [controlling plan](docs/V4_Correctness_Improvement_Plan.md) and
 [remaining fixes / E2E handoff](docs/V4_Remaining_Fixes_and_E2E_Handoff.md).
@@ -23,9 +29,9 @@ canonical release state machine) remain pending. See the canonical
 | Scope | Current status |
 |---|---|
 | V3 stable / compatibility | Existing V3 schema reads and utility APIs remain supported where explicitly allowed by strict schemas. Historical V3 reports do not establish V4 acceptance. |
-| V4 deterministic baseline (P0–P7) | Runtime Q01–Q10 checks, canonical contracts, shared Local/Cloud renderer, media validators, hash-bound approval and exact Chapter 1 promotion. Deterministic L1/L2 suite green (`793 passed` at `0d10ff1` / `c890afe`). |
-| V4 initial live E2E verified (G1, G3–G7) | Real Chapter 1 E2E passed (`055d17f`, runtime `environment.json` recorded at `c890afe`; see [v4_e2e_2026-11-11](docs/verification/v4_e2e_2026-11-11/README.md)): VieNeu-TTS v3 Turbo (`"Ngọc Huyền"`, 37 clips, 304.24s), preview render (9127 frames), human approval (`cuongnguyen1802`), bit-for-bit final promotion, and live Kaggle T4 parity (`semantic_parity: true`). Exact-HEAD P0–P7 re-pin & freeze pending after CI/doc cleanup. |
-| Pending P8–P15 roadmap | Dual-T4 production dispatch & benchmarks (P8–P9) and HF private archive/restore, YouTube processed verification, receipt-gated cleanup & canonical state machine (P10–P15) remain gated behind the exact-HEAD P0–P7 freeze. |
+| V4 deterministic baseline & CI (P0–P7) | Runtime Q01–Q10 checks, canonical contracts, shared Local/Cloud renderer, media validators, hash-bound approval and exact Chapter 1 promotion. Deterministic L1/L2 suite green (`794 passed` at `90f1786`); GitHub Actions CI (`43083930743`, `43083921539`) PASS. |
+| V4 P0–P7 live-verified & FROZEN | Exact-HEAD Chapter 1 E2E closed **G0–G7 PASS** on tested code tree `d1b032ea...` (`90f1786`; [v4_e2e_2026-11-12](docs/verification/v4_e2e_2026-11-12/README.md)): VieNeu-TTS v3 Turbo (`"Ngọc Huyền"`, 37 clips, `303.68s`), preview render (`9110` frames, `187` SRT cues), human approval (`cuongnguyen1802`), bit-for-bit final promotion (`d6d8f75b...`), live Kaggle T4 run (`cuongnguyen1802/mr-nhan-vat-phu-c1-40228`, `1756s`, `389` files synced, `semantic_parity: true`), and `8/8` failure-path checks. Future evidence/doc commits do not alter canonical P0–P7 correctness code unless explicitly re-opened. |
+| Open P8–P15 roadmap | Dual-T4 multiprocessing & benchmarks (P8–P9) and HF private archive/restore, YouTube processed verification, receipt-gated cleanup, test pyramid & canonical release state machine (P10–P15) remain OPEN / IN PROGRESS next. |
 
 ## Correctness rules
 
@@ -101,9 +107,9 @@ FFmpeg encoding/decoding with isolated test inputs. It is not neural, human or
 live Kaggle acceptance. Legacy assertions consolidated into canonical scenarios
 are tracked in [the migration ledger](docs/verification/v4_regression_migration.json).
 [Deferred/live specifications](acceptance/README.md) are explicitly outside this
-suite and are not reported as passing. Current gate status and live E2E evidence
-are tracked in [the canonical gate ledger](docs/V4_Correctness_Status.md) and
-`docs/verification/`, not a static test badge.
+suite and are not reported as passing. Current gate status and exact-HEAD E2E
+evidence are tracked in [the canonical gate ledger](docs/V4_Correctness_Status.md)
+and `docs/verification/`, not a static test badge.
 
 ## Layout
 
