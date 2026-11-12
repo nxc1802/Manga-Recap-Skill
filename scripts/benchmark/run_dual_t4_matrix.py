@@ -587,7 +587,9 @@ def run_benchmark_matrix(
                 f"Dual-T4 benchmark requires >= 2 distinct physical GPUs, found {len(smi_rows)} ({sorted(distinct_uuids)})"
             )
 
-    scratch_root = Path(tempfile.mkdtemp(prefix="p9-bench-matrix-"))
+    mr_work = Path(os.environ.get("MR_WORK_DIR", "/tmp/mr_work"))
+    mr_work.mkdir(parents=True, exist_ok=True)
+    scratch_root = Path(tempfile.mkdtemp(prefix="bench-", dir=str(mr_work)))
     prev_data_dir = os.environ.get("MANGA_RECAP_DATA_DIR")
     warmup_sec = 0.0
     runs: List[Dict[str, Any]] = []

@@ -778,6 +778,16 @@ def test_series_payload_worker_and_g8_sync_end_to_end(tmp_path, monkeypatch):
         assert (results_dir / fname).is_file()
     assert receipt["payload_manifest_sha256"] == digest
 
+    # Verify lean Kaggle results/chapters/<N>/ export (excludes raw/panels/shots/visual.mp4/speech_master.wav/cache)
+    ch2_out = results_dir / "chapters" / "2"
+    for req_file in ("script.json", "chapter.json", "manifest.json", "visual_plan.json", "artifact_validation.json"):
+        assert (ch2_out / req_file).is_file()
+    assert list((ch2_out / "audio" / "clips").glob("*.wav"))
+    assert (ch2_out / "subtitles" / "final.srt").is_file()
+    assert (ch2_out / "video" / "final.mp4").is_file()
+    for excluded in ("raw", "panels", "shots", "cache", "video/visual.mp4", "audio/speech_master.wav"):
+        assert not (ch2_out / excluded).exists(), f"Unexpected bloated artifact in results: {excluded}"
+
     # 4. Sync results back to local project via trusted dispatch snapshot
     expected_inputs = {
         rel.removeprefix("project/"): h
@@ -1053,7 +1063,10 @@ def test_kaggle_bootstrap_scripts_safe_under_mp_main_and_real_spawn(tmp_path, mo
         compile(code, f"{label}_worker.py", "exec")
         assert "def main() -> None:" in code
         assert "if __name__ == '__main__':\n    main()" in code
-        assert "_KAGGLE_RUNTIME = '/kaggle/working/runtime'" in code
+        assert "_KAGGLE_RUNTIME = '/tmp/mr_runtime'" in code
+        assert "'/tmp/mr_hf_cache'" in code
+        assert "'/tmp/mr_torch_cache'" in code
+        assert "'/tmp/mr_work'" in code
         assert "os.environ['PYTHONPATH']" in code
         assert code.index("def main() -> None:") < code.index("Runtime must be fresh")
 
@@ -1113,3 +1126,67 @@ def test_kaggle_bootstrap_scripts_safe_under_mp_main_and_real_spawn(tmp_path, mo
         check=False,
     )
     assert proc.returncode == 0, f"Spawn driver failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required for validation deferral test")
+def test_validate_final_artifact_runs_after_render_pool_shutdown(tmp_path, monkeypatch):
+    """
+    Regression test (#124/#125):
+    `DualT4Orchestrator` must defer `validate_final_artifact` (`ffprobe -count_frames`)
+    until AFTER all GPU render workers have drained and `pool.shutdown()` has completed
+    so shared Kaggle vCPUs are uncontended during validation.
+    """
+    import src.cloud.dual_t4_orchestrator as orch_mod
+
+    proj_dir = _create_multi_chapter_series(
+        tmp_path, monkeypatch, chapters=["1", "2", "3"], approve_ch1=True
+    )
+    events: List[tuple[str, Any]] = []
+    orig_validate = orch_mod.validate_final_artifact
+
+    def _spy_validate(*args, **kwargs):
+        ch = args[6] if len(args) > 6 else kwargs.get("chapter_number")
+        events.append(("validate_start", str(ch)))
+        res = orig_validate(*args, **kwargs)
+        events.append(("validate_end", str(ch)))
+        return res
+
+    monkeypatch.setattr(orch_mod, "validate_final_artifact", _spy_validate)
+
+    timeline: List[Any] = []
+
+    def _pool_factory(**kw):
+        pool = CudaWorkerPool(
+            **kw,
+            worker_options={"timeline": timeline},
+            worker_handle_factory=_RealMediaFakeGpuWorkerHandle,
+        )
+        orig_shutdown = pool.shutdown
+
+        def _spy_shutdown():
+            orig_shutdown()
+            events.append(("pool_shutdown", None))
+
+        pool.shutdown = _spy_shutdown  # type: ignore[method-assign]
+        return pool
+
+    orch = DualT4Orchestrator(
+        workspace_dir=proj_dir,
+        chapters=["1", "2", "3"],
+        profile=BenchmarkProfileId.B3,
+        encoder="libx264",
+        compile_feature=False,
+        receipts_dir=tmp_path / "val_defer_receipts",
+        smi_querier=lambda: [
+            {"gpu_id": 0, "gpu_uuid": "GPU-0", "name": "Tesla T4", "vram_total_mb": 15360.0, "vram_used_mb": 700.0, "vram_free_mb": 14660.0, "gpu_util_pct": 60.0, "encoder_util_pct": 30.0, "temperature_c": 50.0},
+            {"gpu_id": 1, "gpu_uuid": "GPU-1", "name": "Tesla T4", "vram_total_mb": 15360.0, "vram_used_mb": 700.0, "vram_free_mb": 14660.0, "gpu_util_pct": 60.0, "encoder_util_pct": 30.0, "temperature_c": 50.0},
+        ],
+        worker_pool_factory=_pool_factory,
+    )
+    tel = orch.run_pipeline()
+    assert tel.all_valid is True
+
+    shutdown_idx = events.index(("pool_shutdown", None))
+    validate_starts = [(idx, ch) for idx, (kind, ch) in enumerate(events) if kind == "validate_start"]
+    assert [ch for _, ch in validate_starts] == ["1", "2", "3"]
+    assert all(idx > shutdown_idx for idx, _ in validate_starts)

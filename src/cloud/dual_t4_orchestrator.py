@@ -995,7 +995,13 @@ class DualT4Orchestrator:
         )
         self.autotune = bool(autotune)
         self.autotune_probe_fn = autotune_probe_fn
-        self.work_dir = Path(work_dir).resolve() if work_dir else (self.workspace_dir / "_p8_work")
+        if work_dir is not None:
+            self.work_dir = Path(work_dir).resolve()
+        elif str(self.workspace_dir).startswith("/kaggle/working"):
+            slug_part = str(self.project_config.get("slug") or self.workspace_dir.name)
+            self.work_dir = (Path(os.environ.get("MR_WORK_DIR", "/tmp/mr_work")) / "_p8_work" / slug_part).resolve()
+        else:
+            self.work_dir = self.workspace_dir / "_p8_work"
         self.receipts_dir = Path(receipts_dir).resolve() if receipts_dir else self.workspace_dir
         self.worker_pool_factory = worker_pool_factory
         self.worker_options = dict(worker_options or {})
@@ -1728,9 +1734,10 @@ class DualT4Orchestrator:
             except BaseException as exc:
                 _record_error(exc)
 
-        # ---- Stage 5: Validation Queue Consumer ----
-        def _validation_stage() -> None:
-            nonlocal all_chapters_valid
+        # ---- Stage 5: Validation Queue Collector (heavy ffprobe deferred until render pool drains) ----
+        assembled_for_validation: List[_AssembledChapter] = []
+
+        def _validation_collector_stage() -> None:
             completed_count = 0
             target_count = len(self.chapters)
             try:
@@ -1744,66 +1751,7 @@ class DualT4Orchestrator:
                     if item is None:
                         self.queues.validation_queue.task_done()
                         break
-
-                    pkg = item.package
-                    ch_num = pkg.chapter_num
-                    t_val0 = time.monotonic()
-                    val_report = validate_final_artifact(
-                        pkg.output_video_path,
-                        pkg.subtitles_path,
-                        item.audio_paths,
-                        pkg.plan,
-                        pkg.script,
-                        pkg.manifest,
-                        ch_num,
-                        chapter_dir=pkg.chapter_dir,
-                    )
-                    t_val1 = time.monotonic()
-                    with metrics_lock:
-                        validation_intervals.append((t_val0, t_val1))
-                        if not bool(val_report.get("valid", False)):
-                            all_chapters_valid = False
-                    atomic_write_json(pkg.chapter_dir / "artifact_validation.json", val_report)
-                    update_checkpoint(
-                        pkg.chapter_dir,
-                        StageType.RENDER,
-                        CheckpointStatus.COMPLETED,
-                        artifacts=[
-                            pkg.output_video_path.relative_to(pkg.chapter_dir).as_posix(),
-                            pkg.subtitles_path.relative_to(pkg.chapter_dir).as_posix(),
-                            "visual_plan.json",
-                            "artifact_validation.json",
-                        ],
-                    )
-                    with acquire_lock(pkg.chapter_dir / "chapter.json"):
-                        meta = load_chapter_metadata(pkg.chapter_dir)
-                        meta.technical_status = CheckpointStatus.COMPLETED
-                        meta.overall_status = (
-                            CheckpointStatus.NEEDS_REVIEW
-                            if pkg.output_video_path.name == "preview.mp4"
-                            else CheckpointStatus.COMPLETED
-                        )
-                        meta.human_review_status = (
-                            HumanReviewStatus.APPROVED
-                            if (ch_num == "1" and pkg.promote_preview)
-                            else HumanReviewStatus.UNREVIEWED
-                        )
-                        atomic_write_json(pkg.chapter_dir / "chapter.json", meta)
-
-                    frames = int(val_report["video"]["frames"])
-                    fps_eff = round(frames / max(0.001, item.render_duration_seconds), 2)
-                    with per_chapter_lock:
-                        chapter_render_metrics[ch_num] = (
-                            item.render_duration_seconds,
-                            frames,
-                            fps_eff,
-                        )
-                        rendered_video_paths[ch_num] = pkg.output_video_path
-                        chapter_artifacts[ch_num] = {
-                            "video_path": str(pkg.output_video_path),
-                            "subtitle_path": str(pkg.subtitles_path),
-                            "validation": val_report,
-                        }
+                    assembled_for_validation.append(item)
                     completed_count += 1
                     self.queues.validation_queue.task_done()
             except BaseException as exc:
@@ -1815,7 +1763,7 @@ class DualT4Orchestrator:
             threading.Thread(target=_tts_stage, name="P8-TTS", daemon=True),
             threading.Thread(target=_chapter_prep_stage, name="P8-Prep", daemon=True),
             threading.Thread(target=_render_dispatcher, name="P8-RenderDisp", daemon=True),
-            threading.Thread(target=_validation_stage, name="P8-Validate", daemon=True),
+            threading.Thread(target=_validation_collector_stage, name="P8-Validate", daemon=True),
         ]
         for idx, gid in enumerate(render_stealer_gpus):
             threads.append(
@@ -1838,6 +1786,73 @@ class DualT4Orchestrator:
 
         if errors:
             raise errors[0]
+
+        # Run full `validate_final_artifact` (`ffprobe -count_frames` + decode checks)
+        # once GPU render workers have shut down so Kaggle vCPUs are uncontended.
+        chapter_order = {ch: idx for idx, ch in enumerate(self.chapters)}
+        for item in sorted(
+            assembled_for_validation,
+            key=lambda it: chapter_order.get(it.package.chapter_num, 0),
+        ):
+            pkg = item.package
+            ch_num = pkg.chapter_num
+            t_val0 = time.monotonic()
+            val_report = validate_final_artifact(
+                pkg.output_video_path,
+                pkg.subtitles_path,
+                item.audio_paths,
+                pkg.plan,
+                pkg.script,
+                pkg.manifest,
+                ch_num,
+                chapter_dir=pkg.chapter_dir,
+            )
+            t_val1 = time.monotonic()
+            with metrics_lock:
+                validation_intervals.append((t_val0, t_val1))
+                if not bool(val_report.get("valid", False)):
+                    all_chapters_valid = False
+            atomic_write_json(pkg.chapter_dir / "artifact_validation.json", val_report)
+            update_checkpoint(
+                pkg.chapter_dir,
+                StageType.RENDER,
+                CheckpointStatus.COMPLETED,
+                artifacts=[
+                    pkg.output_video_path.relative_to(pkg.chapter_dir).as_posix(),
+                    pkg.subtitles_path.relative_to(pkg.chapter_dir).as_posix(),
+                    "visual_plan.json",
+                    "artifact_validation.json",
+                ],
+            )
+            with acquire_lock(pkg.chapter_dir / "chapter.json"):
+                meta = load_chapter_metadata(pkg.chapter_dir)
+                meta.technical_status = CheckpointStatus.COMPLETED
+                meta.overall_status = (
+                    CheckpointStatus.NEEDS_REVIEW
+                    if pkg.output_video_path.name == "preview.mp4"
+                    else CheckpointStatus.COMPLETED
+                )
+                meta.human_review_status = (
+                    HumanReviewStatus.APPROVED
+                    if (ch_num == "1" and pkg.promote_preview)
+                    else HumanReviewStatus.UNREVIEWED
+                )
+                atomic_write_json(pkg.chapter_dir / "chapter.json", meta)
+
+            frames = int(val_report["video"]["frames"])
+            fps_eff = round(frames / max(0.001, item.render_duration_seconds), 2)
+            with per_chapter_lock:
+                chapter_render_metrics[ch_num] = (
+                    item.render_duration_seconds,
+                    frames,
+                    fps_eff,
+                )
+                rendered_video_paths[ch_num] = pkg.output_video_path
+                chapter_artifacts[ch_num] = {
+                    "video_path": str(pkg.output_video_path),
+                    "subtitle_path": str(pkg.subtitles_path),
+                    "validation": val_report,
+                }
 
         ordered_videos = [
             rendered_video_paths[c] for c in self.chapters if c in rendered_video_paths

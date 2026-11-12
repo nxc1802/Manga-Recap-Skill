@@ -266,7 +266,7 @@ def _build_bootstrap_header_lines() -> List[str]:
         "import os, sys, json, hashlib, tarfile, shutil, subprocess, time",
         "from pathlib import Path",
         "sys.dont_write_bytecode = True",
-        "_KAGGLE_RUNTIME = '/kaggle/working/runtime'",
+        "_KAGGLE_RUNTIME = '/tmp/mr_runtime'",
         "if os.path.isdir(_KAGGLE_RUNTIME) and _KAGGLE_RUNTIME not in sys.path:",
         "    sys.path.insert(0, _KAGGLE_RUNTIME)",
     ]
@@ -276,16 +276,20 @@ def _build_bootstrap_main_lines(payload_manifest_hash: str) -> List[str]:
     """
     Returns `main()`-scoped Kaggle container bootstrap statements that extract & verify
     the payload SHA-256 inventory BEFORE running `pip install` or importing `src.*`.
+    Keeps runtime, caches, and temp working dirs under `/tmp/` so `/kaggle/working/`
+    contains ONLY `results/`.
     Records `_boot_t0` and `_boot_sec` around extraction + verification + pip install.
     """
     return [
         "_boot_t0 = time.monotonic()",
         "working_dir = Path('/kaggle/working')",
-        "os.environ.setdefault('HF_HOME', str(working_dir / 'cache' / 'hf'))",
-        "os.environ.setdefault('TORCH_HOME', str(working_dir / 'cache' / 'torch'))",
-        "os.environ.setdefault('TMPDIR', str(working_dir / 'tmp'))",
+        "os.environ.setdefault('HF_HOME', '/tmp/mr_hf_cache')",
+        "os.environ.setdefault('TORCH_HOME', '/tmp/mr_torch_cache')",
+        "os.environ.setdefault('TMPDIR', '/tmp/mr_tmp')",
+        "os.environ.setdefault('MR_WORK_DIR', '/tmp/mr_work')",
         "Path(os.environ['TMPDIR']).mkdir(parents=True, exist_ok=True)",
-        "root = working_dir / 'runtime'",
+        "Path(os.environ['MR_WORK_DIR']).mkdir(parents=True, exist_ok=True)",
+        "root = Path(_KAGGLE_RUNTIME)",
         "if root.exists(): raise RuntimeError('Runtime must be fresh')",
         "root.mkdir(parents=True)",
         "payloads = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
@@ -363,7 +367,7 @@ def generate_series_worker_script(
     fps: Optional[int] = None,
 ) -> str:
     """
-    Generates a stdlib-only single-extraction bootstrap script for Kaggle `/kaggle/working/runtime`.
+    Generates a stdlib-only single-extraction bootstrap script for Kaggle `/tmp/mr_runtime`.
     Supports both `payload.tar.gz` and Kaggle auto-extracted `payload_manifest.json`.
     Verifies SHA-256 inventory BEFORE running `pip install` or importing any `src.*` module.
     """
@@ -468,6 +472,54 @@ def generate_benchmark_worker_script(
     return _wrap_kaggle_bootstrap_script(payload_manifest_hash, job_lines)
 
 
+def _export_lean_chapter_outputs(src_chap: Path, dst_chap: Path) -> None:
+    """
+    Exports ONLY produced chapter metadata & media outputs (`results/chapters/<N>/`),
+    excluding redundant `raw/`, `panels/`, `shots/`, `visual.mp4`, `speech_master.wav`,
+    and `cache/` so Kaggle `kernels_output` downloads stay lean.
+    """
+    dst_chap.mkdir(parents=True, exist_ok=True)
+    for fname in (
+        "script.json",
+        "chapter.json",
+        "manifest.json",
+        "visual_plan.json",
+        "artifact_validation.json",
+    ):
+        src_file = src_chap / fname
+        if src_file.is_file():
+            shutil.copy2(src_file, dst_chap / fname)
+
+    clips_dir = src_chap / "audio" / "clips"
+    if clips_dir.is_dir():
+        dst_clips = dst_chap / "audio" / "clips"
+        dst_clips.mkdir(parents=True, exist_ok=True)
+        for wav in sorted(clips_dir.glob("*.wav")):
+            if wav.is_file():
+                shutil.copy2(wav, dst_clips / wav.name)
+
+    mixed_m4a = src_chap / "audio" / "mixed.m4a"
+    if mixed_m4a.is_file():
+        (dst_chap / "audio").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(mixed_m4a, dst_chap / "audio" / "mixed.m4a")
+
+    sub_dir = src_chap / "subtitles"
+    if sub_dir.is_dir():
+        dst_sub = dst_chap / "subtitles"
+        dst_sub.mkdir(parents=True, exist_ok=True)
+        for srt in sorted(sub_dir.glob("*.srt")):
+            if srt.is_file():
+                shutil.copy2(srt, dst_sub / srt.name)
+
+    video_dir = src_chap / "video"
+    if video_dir.is_dir():
+        for vname in ("final.mp4", "preview.mp4"):
+            vfile = video_dir / vname
+            if vfile.is_file():
+                (dst_chap / "video").mkdir(parents=True, exist_ok=True)
+                shutil.copy2(vfile, dst_chap / "video" / vname)
+
+
 def run_series_worker(
     root: Union[str, Path],
     manifest_hash: str,
@@ -484,7 +536,7 @@ def run_series_worker(
     """
     In-container single-session Dual-T4 series execution entrypoint.
     Verifies SHA-256 payload manifest before running, preserves single-session
-    model lifecycle, writes G8 receipts + chapter outputs + `dual_t4_result_manifest.json`.
+    model lifecycle, writes G8 receipts + lean chapter outputs + `dual_t4_result_manifest.json`.
     """
     from src.cloud.dual_t4_orchestrator import DualT4Orchestrator
 
@@ -498,7 +550,9 @@ def run_series_worker(
     out_p.mkdir(parents=True, exist_ok=True)
     prev_data_dir = os.environ.get("MANGA_RECAP_DATA_DIR")
     prev_pythonpath = os.environ.get("PYTHONPATH")
-    with tempfile.TemporaryDirectory(prefix="p8-series-", dir=str(out_p.parent)) as session_tmp:
+    mr_work = Path(os.environ.get("MR_WORK_DIR", "/tmp/mr_work"))
+    mr_work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="p8-series-", dir=str(mr_work)) as session_tmp:
         session_dir = Path(session_tmp)
         runtime_data = session_dir / "data"
         (runtime_data / "projects").mkdir(parents=True, exist_ok=True)
@@ -546,7 +600,7 @@ def run_series_worker(
             for ch_num in target_chapters:
                 src_chap = destination / "chapters" / ch_num
                 dst_chap = out_p / "chapters" / ch_num
-                shutil.copytree(src_chap, dst_chap, dirs_exist_ok=True)
+                _export_lean_chapter_outputs(src_chap, dst_chap)
 
             feat_src = destination / "outputs" / "full_recap_feature.mp4"
             if feat_src.is_file():
@@ -815,7 +869,7 @@ def sync_series_results(
             incoming_script,
             local_manifest,
             ch,
-            chapter_dir=incoming_chap,
+            chapter_dir=local_chap,
         )
         validated_chapters[ch] = {
             "incoming": incoming_chap,
