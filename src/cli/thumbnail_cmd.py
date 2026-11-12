@@ -183,50 +183,6 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
         "artifact_sha256": fingerprint(chap_thumb_p),
     })
 
-    upload_result = None
-    if getattr(args, "upload", False):
-        from src.cli.youtube_cmd import get_authenticated_service
-        account = getattr(args, "account", "default")
-        # Load video ID from metadata or project records
-        yt_meta_p = chap_dir / "youtube_metadata.json"
-        video_id = None
-        if yt_meta_p.exists():
-            try:
-                m_data = read_json(yt_meta_p)
-                video_id = m_data.get("video_id")
-            except Exception:
-                pass
-
-        if not video_id:
-            # Check review pack or command output
-            rp_json = chap_dir / "review_pack.json"
-            if rp_json.exists():
-                try:
-                    rp_data = read_json(rp_json)
-                    video_id = rp_data.get("video_id")
-                except Exception:
-                    pass
-
-        if not video_id:
-            # Fallback to checking youtube upload history or ask user
-            logger.warning("No recorded video_id found in chapter metadata to update thumbnail on YouTube.")
-        else:
-            try:
-                logger.info(f"Updating YouTube video '{video_id}' thumbnail via account '{account}'...")
-                service = get_authenticated_service(account=account)
-                import importlib
-                media_mod = importlib.import_module("googleapiclient.http")
-                media_file_upload = getattr(media_mod, "MediaFileUpload")
-                service.thumbnails().set(
-                    videoId=video_id,
-                    media_body=media_file_upload(str(final_thumb_p), mimetype="image/jpeg"),
-                ).execute()
-                upload_result = {"status": "success", "video_id": video_id}
-                logger.info(f"Successfully updated YouTube thumbnail for video {video_id}!")
-            except Exception as e:
-                logger.error(f"Failed to upload thumbnail to YouTube: {e}")
-                upload_result = {"status": "error", "error": str(e)}
-
     return {
         "status": "success",
         "action": "compose",
@@ -246,5 +202,5 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
             "badge": badge,
             "color_preset": color_preset,
         },
-        "youtube_upload": upload_result,
+        "youtube_upload": None,
     }
