@@ -18,6 +18,7 @@ import dataclasses
 import json
 import os
 import shutil
+import sys
 import tarfile
 import threading
 import time
@@ -503,7 +504,19 @@ class _RealMediaFakeGpuWorkerHandle:
             ch = str(tasks[0].get("chapter_number", ""))
             if timeline is not None:
                 timeline.append(("tts_start", ch, self.physical_gpu_id, time.monotonic()))
-            time.sleep(0.06)  # ensures observable overlap window
+            gate_event = self.options.get("ch2_render_started_event")
+            if ch == "3" and gate_event is not None:
+                gate_lock = self.options.get("tts_ch3_gate_lock")
+                gate_state = self.options.get("gate_state")
+                should_wait = True
+                if gate_lock is not None and gate_state is not None:
+                    with gate_lock:
+                        should_wait = not gate_state.get("ch3_waited", False)
+                        gate_state["ch3_waited"] = True
+                if should_wait:
+                    gate_event.wait(timeout=5.0)
+            elif gate_event is None:
+                time.sleep(0.06)
             results = []
             for t in tasks:
                 out_p = Path(t["output_path"])
@@ -528,6 +541,9 @@ class _RealMediaFakeGpuWorkerHandle:
                 timeline.append(("render_start", ch, self.physical_gpu_id, time.monotonic()))
             _, render_shot_fn, _ = _resolve_fast_renderer_api()
             clip_path = render_shot_fn(task, canvas_cache=self.canvas_cache, gpu_index=0)
+            gate_event = self.options.get("ch2_render_started_event")
+            if ch == "2" and gate_event is not None:
+                gate_event.set()
             if timeline is not None:
                 timeline.append(("render_end", ch, self.physical_gpu_id, time.monotonic()))
             return {
@@ -566,6 +582,9 @@ def test_streaming_ready_chapter_queue_overlap_and_g8_receipts(tmp_path, monkeyp
             },
         ]
 
+    ch2_render_started_event = threading.Event()
+    tts_ch3_gate_lock = threading.Lock()
+    gate_state = {"ch3_waited": False}
     receipts_dir = tmp_path / "receipts"
     orch = DualT4Orchestrator(
         workspace_dir=proj_dir,
@@ -577,7 +596,12 @@ def test_streaming_ready_chapter_queue_overlap_and_g8_receipts(tmp_path, monkeyp
         smi_querier=_smi_fake,
         worker_pool_factory=lambda **kw: CudaWorkerPool(
             **kw,
-            worker_options={"timeline": timeline},
+            worker_options={
+                "timeline": timeline,
+                "ch2_render_started_event": ch2_render_started_event,
+                "tts_ch3_gate_lock": tts_ch3_gate_lock,
+                "gate_state": gate_state,
+            },
             worker_handle_factory=_RealMediaFakeGpuWorkerHandle,
         ),
     )
@@ -592,6 +616,7 @@ def test_streaming_ready_chapter_queue_overlap_and_g8_receipts(tmp_path, monkeyp
     assert (proj_dir / "outputs" / "full_recap_feature.mp4").is_file()
 
     # Verify streaming overlap: Chapter 2 starts rendering BEFORE Chapter 3 finishes TTS!
+    assert ch2_render_started_event.is_set(), "Chapter 2 never triggered render_start synchronization event"
     ch2_render_starts = [item[3] for item in timeline if item[0] == "render_start" and item[1] == "2"]
     ch3_tts_ends = [item[3] for item in timeline if item[0] == "tts_end" and item[1] == "3"]
     assert ch2_render_starts and ch3_tts_ends
@@ -854,6 +879,15 @@ def test_runner_maps_canonical_render_export_keys(tmp_path, monkeypatch):
             "subtitle_padded": str(tmp_path / "exports" / "p8_series" / "chapter_001.srt"),
         },
     }
+    monkeypatch.setitem(sys.modules, "vieneu", None)
+    monkeypatch.setattr(
+        "src.production.runner.get_tts_engine",
+        lambda *_, **__: SimpleNamespace(
+            mode="neural",
+            init_duration_seconds=0.0,
+            total_inference_seconds=0.0,
+        ),
+    )
     monkeypatch.setattr("src.production.runner.handle_tts", lambda *_: {"segments_synthesized": 0, "segments_cached": 1})
     monkeypatch.setattr("src.production.runner.handle_render", lambda *_: fake_render_res)
     monkeypatch.setattr("src.production.runner.resolve_video_encoder", lambda *_: ("libx264", [], "CPU"))
