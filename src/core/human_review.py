@@ -138,7 +138,16 @@ def require_preview_approval(project_dir):
 
 def approve_preview(project_dir, reviewer, expected_config, expected_artifact):
     # Explicit command records the human's decision; flags on render never do.
-    from src.core.schemas import utc_iso_now
+    from src.core.contracts import ReleaseState
+    from src.core.schemas import CheckpointStatus, HumanReviewStatus, utc_iso_now
+    from src.core.state_machine import (
+        STATE_ORDER,
+        StateTransitionError,
+        advance_release_state,
+        load_release_record,
+    )
+    from src.core.storage import acquire_lock, load_chapter_metadata
+
     root = Path(project_dir)
     config = review_fingerprint(root)
     artifact = root / "chapters" / "1" / "video" / "preview.mp4"
@@ -148,4 +157,28 @@ def approve_preview(project_dir, reviewer, expected_config, expected_artifact):
     approval = HumanApproval(human_review_status="approved", project_slug=read_json(root / "project.json")["slug"],
         approved_at=utc_iso_now(), reviewer=reviewer.strip(), config_fingerprint=config, artifact_hash=expected_artifact)
     atomic_write_json(root / "preview_approval.json", approval)
+
+    chap_json = root / "chapters" / "1" / "chapter.json"
+    if chap_json.is_file():
+        with acquire_lock(chap_json):
+            meta = load_chapter_metadata(chap_json)
+            meta.human_review_status = HumanReviewStatus.APPROVED
+            if meta.technical_status == CheckpointStatus.COMPLETED:
+                meta.overall_status = CheckpointStatus.COMPLETED
+            meta.updated_at = utc_iso_now()
+            atomic_write_json(chap_json, meta)
+
+    state_file = root / "release_state.json"
+    if state_file.is_file():
+        record = load_release_record(root, chapter_number="1")
+        if record.state == ReleaseState.TECHNICALLY_VALID:
+            advance_release_state(root, ReleaseState.HUMAN_APPROVED, chapter_number="1")
+        elif record.state != ReleaseState.HUMAN_APPROVED:
+            raise StateTransitionError(
+                f"Cannot sync release_state.json to HUMAN_APPROVED from {record.state.value}"
+            )
+    elif (root / "chapters" / "1" / "artifact_validation.json").is_file():
+        for state in STATE_ORDER[1 : STATE_ORDER.index(ReleaseState.HUMAN_APPROVED) + 1]:
+            advance_release_state(root, state, chapter_number="1")
+
     return approval

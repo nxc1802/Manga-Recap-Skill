@@ -33,7 +33,6 @@ from src.core.storage import (
     get_output_dir,
     get_project_dir,
     read_json,
-    update_checkpoint,
     verify_checksum,
 )
 from src.core.utils import get_project_data_dir
@@ -211,7 +210,6 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
 
         # script.json & audio files
         script_path = chap_dir / "script.json"
-        script_errors_before = len(errors)
         if script_path.exists():
             try:
                 s_data = read_json(script_path)
@@ -318,21 +316,6 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                         check(False, f"chapter_{chap_num}/script_pacing", f"Script pacing warning: {recs}", is_warning=not strict)
                     else:
                         check(True, f"chapter_{chap_num}/script_pacing", "Script pacing is within budget")
-
-                # When script validation passes without new errors, complete StageType.SCRIPT checkpoint
-                if len(errors) == script_errors_before and chap_meta:
-                    current_script_status = None
-                    if hasattr(chap_meta, "stages"):
-                        s_cp = chap_meta.stages.get(StageType.SCRIPT) or chap_meta.stages.get("script")
-                        if s_cp:
-                            current_script_status = getattr(s_cp, "status", None)
-                            if hasattr(current_script_status, "value"):
-                                current_script_status = current_script_status.value
-                    if current_script_status == CheckpointStatus.FAILED.value:
-                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.RUNNING)
-                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
-                    elif current_script_status != CheckpointStatus.COMPLETED.value:
-                        update_checkpoint(chap_dir, StageType.SCRIPT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
 
             except (ValidationError, StorageCorruptError) as e:
                 check(False, f"chapter_{chap_num}/script.json", f"Invalid script.json schema: {e}")

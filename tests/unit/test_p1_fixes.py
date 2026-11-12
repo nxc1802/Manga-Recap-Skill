@@ -118,8 +118,8 @@ class TestFix06CheckpointLifecycle:
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass
 
-    def test_script_validation_updates_script_stage_to_completed(self, tmp_path, monkeypatch):
-        """Verifies that successful script validation updates StageType.SCRIPT checkpoint to COMPLETED."""
+    def test_script_validation_is_read_only_and_does_not_mutate_checkpoints(self, tmp_path, monkeypatch):
+        """Verifies that handle_validate stays strictly read-only without mutating chapter.json or release_state.json."""
         monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         init_confirmed_project("proj_val_script", "Val Script")
         chap_dir = init_chapter_layout("proj_val_script", 1)
@@ -170,8 +170,9 @@ class TestFix06CheckpointLifecycle:
         assert res["valid"] is True
 
         meta_after = load_chapter_metadata(chap_dir)
-        assert meta_after.stages[StageType.SCRIPT].status == CheckpointStatus.COMPLETED
-        assert "script.json" in meta_after.stages[StageType.SCRIPT].artifacts
+        assert meta_after.stages[StageType.SCRIPT].status == CheckpointStatus.PENDING
+        assert meta_after.stages[StageType.SCRIPT].artifacts == []
+        assert not (chap_dir.parents[1] / "release_state.json").exists()
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass

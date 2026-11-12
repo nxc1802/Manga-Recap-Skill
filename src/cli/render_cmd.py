@@ -40,13 +40,27 @@ def handle_render(args: argparse.Namespace):
         script, load_manifest(chapter), chapter_num, chapter_dir=chapter)
     atomic_write_json(chapter / "artifact_validation.json", report)
     if options["quality"] == "final":
+        project_dir = get_project_dir(slug)
+        reviewed_status = HumanReviewStatus.UNREVIEWED
+        if chapter_num == "1":
+            from src.core.human_review import require_preview_approval
+            approval = require_preview_approval(project_dir)
+            if report["video"]["sha256"] != approval.artifact_hash:
+                raise CliValidationError("Chapter 1 final artifact differs from human-reviewed preview")
+            reviewed_status = HumanReviewStatus.APPROVED
         with acquire_lock(chapter / "chapter.json"):
             metadata = load_chapter_metadata(chapter)
             metadata.overall_status = metadata.technical_status = CheckpointStatus.COMPLETED
-            metadata.human_review_status = HumanReviewStatus.APPROVED if chapter_num == "1" else HumanReviewStatus.UNREVIEWED
+            metadata.human_review_status = reviewed_status
             metadata.stats.video_path = result["video_path"]
             metadata.stats.final_video_duration_seconds = report["video"]["duration"]
             atomic_write_json(chapter / "chapter.json", metadata)
+        if (project_dir / "release_state.json").is_file():
+            from src.core.contracts import ReleaseState
+            from src.core.state_machine import advance_release_state, load_release_record
+            rec = load_release_record(project_dir, chapter_number=chapter_num)
+            if rec.state == ReleaseState.HUMAN_APPROVED:
+                advance_release_state(project_dir, ReleaseState.PRODUCTION_READY, chapter_number=chapter_num)
         staged = stage_chapter_export(slug, chapter_num, result["video_path"], result["subtitle_path"])
         result["export_paths"] = {key: str(value) if value else None for key, value in staged.items()}
     else:

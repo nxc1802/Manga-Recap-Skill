@@ -712,7 +712,8 @@ class VoiceSelectionApproval(BaseModel):
 
 class PreviewApproval(BaseModel):
     """
-    Schema for Review Gate 2 preview video approval.
+    Legacy V3 schema for Review Gate 2 preview video approval.
+    Superseded in V4 by `src.core.human_review.HumanApproval` (bound to config/artifact hashes).
     """
     model_config = ConfigDict(extra="ignore")
 

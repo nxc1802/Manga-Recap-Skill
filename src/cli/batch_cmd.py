@@ -221,6 +221,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                         continue
 
         # 2. Sequential Chapter Pipeline with Error Isolation
+        active_stage: Optional[StageType] = None
         try:
             logger.info(f"--- [Batch] Starting Chapter {chap_num} ({project_slug}) ---")
 
@@ -231,31 +232,22 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
             if not script_path.exists():
                 raise StorageFileNotFoundError(f"script.json not found in chapter directory: {chap_dir}")
 
-            # Operational Stage 1: Ingest
-            c_meta = load_chapter_metadata(chap_dir)
-            ing_cp = c_meta.stages.get(StageType.INGEST)
-            if not ing_cp or ing_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(chap_dir, StageType.INGEST, CheckpointStatus.RUNNING)
-                update_checkpoint(chap_dir, StageType.INGEST, CheckpointStatus.COMPLETED)
-
-            # Operational Stage 2: Agent (Validate script.json)
+            # Read-only preflight validation of manifest, panels, and script.json
+            active_stage = StageType.AGENT
             val_args = argparse.Namespace(project=project_slug, chapter=chap_num, strict=False)
             val_res = handle_validate(val_args)
             if not val_res.get("valid", True) and val_res.get("errors"):
                 err_msg = "; ".join(f"{e.get('target')}: {e.get('message')}" for e in val_res["errors"])
                 raise CliValidationError(f"Script validation failed: {err_msg}")
-            c_meta = load_chapter_metadata(chap_dir)
-            agent_cp = c_meta.stages.get(StageType.AGENT)
-            if not agent_cp or agent_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.RUNNING)
-                update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
 
             if getattr(args, "kaggle", False) and str(chap_num) == "1":
                 # Full-series production promotes the reviewed chapter-one file;
                 # it must never replace that review with a newly generated preview.
+                active_stage = StageType.RENDER
                 render_res = handle_render(argparse.Namespace(project=project_slug, chapter="1", quality="final"))
             elif getattr(args, "kaggle", False):
                 logger.info(f"[Batch] Offloading Chapter {chap_num} to Kaggle Cloud GPU (TTS + Hardware NVENC)...")
+                active_stage = StageType.RENDER
                 from src.cloud.kaggle_service import KaggleCloudService
                 service = KaggleCloudService()
                 if not service.is_authenticated:
@@ -273,6 +265,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 }
             else:
                 # Operational Stage 3: Audio (VieNeu-TTS)
+                active_stage = StageType.AUDIO
                 tts_args = argparse.Namespace(
                     project=project_slug,
                     chapter=chap_num,
@@ -289,6 +282,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     update_checkpoint(chap_dir, StageType.AUDIO, CheckpointStatus.COMPLETED)
 
                 # Operational Stage 4: Render (Final 1080p, skip_preview=True)
+                active_stage = StageType.RENDER
                 render_args = argparse.Namespace(
                     project=project_slug,
                     chapter=chap_num,
@@ -314,6 +308,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 render_res = handle_render(render_args)
 
             # Operational Stage 5: Export (Stage MP4 and SRT to output/)
+            active_stage = StageType.EXPORT
             src_video = Path(render_res["video_path"]) if render_res.get("video_path") else (chap_dir / "video" / f"chapter_{chap_num}_final.mp4")
             src_srt = Path(render_res["subtitle_path"]) if render_res.get("subtitle_path") else (chap_dir / "subtitles" / f"chapter_{chap_num}.srt")
 
@@ -349,13 +344,13 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
 
         except Exception as chap_err:
             logger.error(f"[Batch] Chapter {chap_num} execution failed: {chap_err}")
-            # Isolate failure: mark chapter checkpoint as FAILED
+            # Isolate failure: mark active chapter checkpoint as FAILED
             if chap_dir.exists() and (chap_dir / "chapter.json").exists():
                 with contextlib.suppress(Exception):
                     c_meta = load_chapter_metadata(chap_dir)
-                    target_stg = StageType.RENDER
+                    target_stg = active_stage or c_meta.current_stage
                     stg_cp = c_meta.stages.get(target_stg)
-                    if not stg_cp or stg_cp.status == CheckpointStatus.PENDING:
+                    if not stg_cp or stg_cp.status != CheckpointStatus.RUNNING:
                         update_checkpoint(chap_dir, target_stg, CheckpointStatus.RUNNING)
                     update_checkpoint(
                         chap_dir,

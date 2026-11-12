@@ -796,6 +796,13 @@ def safe_cleanup_chapter_intermediates(
         "characters.json",
         "voice_selection.json",
         "preview_approval.json",
+        "release_state.json",
+        "series_setup_answers.json",
+        "visual_plan.json",
+        "artifact_validation.json",
+        "archive_manifest.json",
+        "archive_receipt.json",
+        "youtube_receipt.json",
     }
 
     TEMP_PATTERNS = [
