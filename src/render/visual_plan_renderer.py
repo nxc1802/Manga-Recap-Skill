@@ -1,11 +1,8 @@
 """Reference frame compositor. Encoder choice never changes shot interpretation."""
 from __future__ import annotations
-import math
-import subprocess
 from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 from src.core.visual_contract import ProductionMotion, VisualPlan
-from src.render.visual_policy import evidence_path
 
 
 def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> Image.Image:
@@ -47,41 +44,34 @@ def render_shot(image, shot, plan, frame_count):
         yield render_frame(image, shot, plan, min(index / plan.fps, shot.duration_sec))
 
 
-def render_visual_plan(plan, chapter_dir, manifest, output_path, encoder="libx264"):
-    # Revalidate even constructed/mutated in-memory models at the trust boundary.
-    plan = VisualPlan.model_validate(plan.model_dump(mode="json"))
-    panels = {p.panel_id: p for p in manifest.panels}
-    paths = {}
-    for shot in plan.shots:
-        pid = shot.substitute_panel_id or shot.source_panel_id
-        if pid not in panels or shot.source_panel_id not in panels:
-            raise ValueError(f"Unknown shot evidence: {shot.shot_id}")
-        paths[pid] = evidence_path(chapter_dir, panels[pid])
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    partial = output.with_name(f".{output.stem}.partial.mp4")
-    cmd = ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
-           "-s", f"{plan.target_width}x{plan.target_height}", "-r", str(plan.fps),
-           "-i", "pipe:0", "-an", "-c:v", encoder, "-pix_fmt", "yuv420p", str(partial)]
-    # stderr goes to a file so a failing encoder cannot deadlock the frame pipe.
-    error_path = output.with_suffix(".encoder.log")
-    try:
-        with error_path.open("wb") as error_file:
-            process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=error_file)
-            try:
-                for shot, count in frame_schedule(plan):
-                    with Image.open(paths[shot.substitute_panel_id or shot.source_panel_id]) as image:
-                        for frame in render_shot(image, shot, plan, count):
-                            process.stdin.write(frame.tobytes())
-                process.stdin.close()
-                code = process.wait(timeout=120)
-                if code:
-                    raise RuntimeError(f"Encoder failed ({code}): {error_path.read_text()[-2000:]}")
-            except BaseException:
-                process.kill()
-                process.wait()
-                raise
-        partial.replace(output)
-    finally:
-        partial.unlink(missing_ok=True)
-    return output
+def render_visual_plan(
+    plan,
+    chapter_dir,
+    manifest,
+    output_path,
+    encoder="libx264",
+    *,
+    audio_path=None,
+    subtitle_path=None,
+    burn_subtitles=False,
+    subtitle_font_size=24,
+    max_workers=4,
+    gpu_index=0,
+    quality_mode=None,
+):
+    from src.render.fast_renderer import render_visual_plan_fast
+
+    return render_visual_plan_fast(
+        plan=plan,
+        chapter_dir=Path(chapter_dir),
+        manifest=manifest,
+        output_path=Path(output_path),
+        encoder=encoder or "libx264",
+        max_workers=int(max_workers),
+        gpu_index=int(gpu_index),
+        audio_path=Path(audio_path) if audio_path is not None else None,
+        subtitle_path=Path(subtitle_path) if subtitle_path is not None else None,
+        burn_subtitles=bool(burn_subtitles),
+        subtitle_font_size=int(subtitle_font_size),
+        quality_mode=quality_mode,
+    )

@@ -1,7 +1,6 @@
 """Production chapter orchestration using only the canonical frame renderer."""
 from pathlib import Path
 import shutil
-import subprocess
 from src.cli.exit_codes import CliValidationError
 from src.core.schemas import CheckpointStatus, StageType
 from src.core.storage import (load_recap_script, load_manifest, read_json, atomic_write_json,
@@ -48,7 +47,11 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
         raise CliValidationError("Chapter number mismatch")
     config = read_json(root / "project.json")
     settings = config["render_settings"]
-    encoder = "libx264" if encoder in (None, "auto") else encoder
+    if encoder == "auto":
+        from src.production.hardware import resolve_video_encoder
+        encoder = resolve_video_encoder("auto")[0]
+    else:
+        encoder = encoder or "libx264"
     if settings["video_mode"] not in {"auto", "landscape_fit"}:
         raise CliValidationError("Canonical production currently supports auto/landscape_fit framing")
     if options.get("video_mode") is not None and options["video_mode"] != settings["video_mode"]:
@@ -95,7 +98,6 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
             # differently framed or encoded video after approval.
             shutil.copy2(video_dir / "preview.mp4", output)
         else:
-            raw = render_visual_plan(plan, chapter, manifest, video_dir / "visual.mp4", encoder=encoder or "libx264")
             mixer = AudioMixer(silence_padding_sec=0, tail_padding_sec=0)
             speech, _ = mixer.concatenate_speech(script.segments, chapter, chapter / "audio" / "speech_master.wav")
             bgm = audio_settings.get("bgm_path")
@@ -105,19 +107,24 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
             mixed = mixer.mix_audio_track(speech, chapter / "audio" / "mixed.m4a", bgm_path=bgm_path,
                 bgm_volume=audio_settings["bgm_volume"], voice_volume=audio_settings["voice_volume"], fadeout_seconds=0)
             partial = output.with_name(f".{output.stem}.mux.mp4")
-            cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(raw), "-i", str(mixed), "-map", "0:v:0", "-map", "1:a:0"]
-            if settings["burn_subtitles"]:
-                # A generated, fixed relative path avoids ffmpeg filter escaping
-                # of user-controlled filesystem names.
-                shutil.copy2(subtitles, video_dir / "captions.srt")
-                cmd += ["-vf", f"subtitles=captions.srt:force_style='Fontsize={sub_settings['font_size']}'", "-c:v", encoder or "libx264"]
-            else:
-                cmd += ["-c:v", "copy"]
-            cmd += ["-c:a", "copy", "-movflags", "+faststart", str(partial)]
-            result = subprocess.run(cmd, cwd=video_dir, capture_output=True, timeout=3600)
-            if result.returncode:
-                raise RuntimeError(result.stderr.decode(errors="replace")[-2000:])
-            partial.replace(output)
+            try:
+                render_visual_plan(
+                    plan,
+                    chapter,
+                    manifest,
+                    partial,
+                    encoder=encoder,
+                    audio_path=mixed,
+                    subtitle_path=subtitles if settings["burn_subtitles"] else None,
+                    burn_subtitles=bool(settings["burn_subtitles"]),
+                    subtitle_font_size=sub_settings["font_size"],
+                    max_workers=int(options.get("render_workers", 4)),
+                    gpu_index=int(options.get("gpu_index", 0)),
+                    quality_mode=quality,
+                )
+                partial.replace(output)
+            finally:
+                partial.unlink(missing_ok=True)
         report = validate_final_artifact(output, subtitles, audio_paths, plan, script, manifest, chapter_num, chapter_dir=chapter)
         atomic_write_json(chapter / "artifact_validation.json", report)
         if quality == "preview" and str(chapter_num) == "1":
