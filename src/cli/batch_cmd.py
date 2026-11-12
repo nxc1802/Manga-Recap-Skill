@@ -29,7 +29,6 @@ from src.core.storage import (
     get_project_dir,
     load_chapter_metadata,
     read_json,
-    safe_cleanup_chapter_intermediates,
     stage_chapter_export,
     update_checkpoint,
 )
@@ -168,7 +167,11 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
     force = getattr(args, "force", False)
     skip_preview = getattr(args, "skip_preview", True)
     allow_placeholders = getattr(args, "allow_placeholders", False)
-    cleanup = getattr(args, "cleanup", False)
+    if getattr(args, "cleanup", False):
+        raise CliValidationError(
+            "batch --cleanup bypasses the Two-Receipt Safe Cleanup Gate and is disabled. "
+            "Run 'manga-recap clean --no-dry-run --confirm-project <slug>' after archive and YouTube verification."
+        )
     output_dir = get_output_dir(project_slug)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -300,7 +303,6 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     approved=True,
                     allow_placeholders=allow_placeholders,
                     keep_temp=getattr(args, "keep_temp", None),
-                    cleanup=cleanup,
                     subtitle_lines=getattr(args, "subtitle_lines", None),
                     subtitle_font_size=getattr(args, "subtitle_font_size", None),
                     subtitle_chunking=getattr(args, "subtitle_chunking", None),
@@ -319,9 +321,6 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 subtitle_path=src_srt,
             )
             dest_video = staged.get("video_padded") or staged.get("video") or (output_dir / f"chapter_{chap_num}.mp4")
-
-            if cleanup and src_video.exists():
-                safe_cleanup_chapter_intermediates(chap_dir, output_video_path=src_video)
 
             c_meta = load_chapter_metadata(chap_dir)
             exp_cp = c_meta.stages.get(StageType.EXPORT)

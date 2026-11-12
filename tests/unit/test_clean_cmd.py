@@ -4,6 +4,8 @@ Unit tests for manga-recap clean subcommand and intermediate storage reclamation
 """
 
 import argparse
+import shutil
+import subprocess
 from pathlib import Path
 import pytest
 
@@ -48,11 +50,23 @@ def test_clean_cmd_reclaims_intermediates_when_output_verified(tmp_path, monkeyp
     proj_dir = init_confirmed_project(slug, "Verified Project")
     chap_dir = init_chapter_layout(slug, 1)
 
-    # Create verified final video in output
+    # Create verified final video in output (real FFmpeg MP4)
     out_proj_dir = out_dir / slug
     out_proj_dir.mkdir(parents=True, exist_ok=True)
     verified_vid = out_proj_dir / "chapter_001.mp4"
-    verified_vid.write_bytes(b"V" * 150000)
+    if shutil.which("ffmpeg"):
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc=duration=0.3:size=160x120:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+                str(verified_vid),
+            ],
+            check=True,
+        )
+    else:
+        pytest.skip("FFmpeg required for verified MP4 check")
 
     # Create intermediate audio and video clips
     a_clip = chap_dir / "audio" / "clips" / "audio_1_001.wav"

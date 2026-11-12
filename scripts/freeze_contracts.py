@@ -6,11 +6,12 @@ from src.core.series_setup import SeriesSetupAnswers
 from src.core.schemas import ProjectConfig, PanelManifest, RecapScript
 from src.core.visual_contract import VisualPlan, Shot
 from src.core.human_review import HumanApproval
-from src.core.contracts import ArchiveReceipt, YouTubeReceipt, ReleaseRecord
+from src.core.contracts import ArchiveReceipt, YouTubeReceipt, ReleaseRecord, TombstoneRecord
 
 MODELS = dict(project=ProjectConfig, series_setup=SeriesSetupAnswers, script=RecapScript, panel_evidence=PanelManifest,
               visual_plan=VisualPlan, shot=Shot, preview_approval=HumanApproval,
-              archive_receipt=ArchiveReceipt, youtube_receipt=YouTubeReceipt, release_state=ReleaseRecord)
+              archive_receipt=ArchiveReceipt, youtube_receipt=YouTubeReceipt, release_state=ReleaseRecord,
+              tombstone=TombstoneRecord)
 
 
 def main():

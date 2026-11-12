@@ -49,6 +49,22 @@ from src.pipeline import MangaRecapPipeline, pipeline
 class TestDefect1CleanupTempFilesAdversarial:
     """Stress tests and boundary condition exploration for temp file cleanup."""
 
+    @staticmethod
+    def _seed_two_receipt_gate(proj_dir: Path, slug: str, chapter: str = "1") -> None:
+        from unit.test_safe_cleanup import add_hf_receipt, add_release_state, add_youtube_receipt
+        from unit.test_series_setup import _make_valid_answers_dict
+        from src.core.series_setup import record_series_setup
+        from src.core.storage import init_project_layout
+
+        if not (proj_dir / "project.json").exists():
+            init_project_layout(slug, f"Adv {slug}")
+        answers = _make_valid_answers_dict()
+        answers["Q08"]["user_answer"] = {"account": "review_truyen", "privacy": "private"}
+        record_series_setup(slug, answers, project_dir=proj_dir)
+        add_hf_receipt(proj_dir, slug)
+        add_youtube_receipt(proj_dir / "chapters" / str(chapter), slug, chapter=str(chapter))
+        add_release_state(proj_dir, slug, state="CLEANUP_ALLOWED", chapter=str(chapter))
+
     def test_cleanup_temp_files_removes_known_intermediates_preserves_finals(self, tmp_path, monkeypatch):
         """Verifies intermediate scratch files are wiped while raw panels, clips, and finals survive."""
         monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
@@ -86,6 +102,7 @@ class TestDefect1CleanupTempFilesAdversarial:
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text("payload")
 
+        self._seed_two_receipt_gate(proj_dir, proj_name, chapter="1")
         cleaned = pipeline.cleanup_temp_files(chapter="1", project=proj_name)
 
         # Assert all targets were unlinked
@@ -148,6 +165,7 @@ class TestDefect1CleanupTempFilesAdversarial:
         temp2 = chap_dir / "clip_2_raw_temp.mp4"
         temp1.write_text("t1")
         temp2.write_text("t2")
+        self._seed_two_receipt_gate(proj_dir, "p_perm", chapter="1")
 
         original_unlink = Path.unlink
 

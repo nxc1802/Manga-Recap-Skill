@@ -19,6 +19,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import time
@@ -70,7 +71,21 @@ def mock_series_project(tmp_path):
     from unit.test_series_setup import _make_valid_answers_dict
     record_series_setup("adv_series", _make_valid_answers_dict(), project_dir=proj_dir)
 
-    valid_mp4_bytes = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 150000
+    sample_mp4 = tmp_path / "_fixture_real.mp4"
+    if shutil.which("ffmpeg"):
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc=duration=0.3:size=160x120:rate=30",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.3",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+                str(sample_mp4),
+            ],
+            check=True,
+        )
+        valid_mp4_bytes = sample_mp4.read_bytes()
+    else:
+        valid_mp4_bytes = b"\x00\x00\x00\x20ftypisom" + b"\x00" * 150000
 
     for ch_num in ["1", "2", "3"]:
         c_dir = proj_dir / "chapters" / ch_num
@@ -102,7 +117,7 @@ def mock_series_project(tmp_path):
         # Media assets
         (c_dir / "panels" / "panel_001.jpg").write_bytes(b"\xff\xd8\xff\xe0dummy_jpg")
         (c_dir / "video" / "final.mp4").write_bytes(valid_mp4_bytes)
-        (c_dir / "subtitles" / f"chapter_{ch_num}.srt").write_text("1\n00:00:00,000 --> 00:00:02,000\nHi\n")
+        (c_dir / "subtitles" / f"chapter_{ch_num}.srt").write_text("1\n00:00:00,000 --> 00:00:00,250\nHi\n")
         (c_dir / "audio" / "speech_master.wav").write_bytes(b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 40)
         (c_dir / "audio" / "clips" / f"audio_{ch_num}_001.wav").write_bytes(b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 40)
 
@@ -479,37 +494,17 @@ def test_tombstone_size_boundary_multi_chapter(mock_series_project, monkeypatch)
     monkeypatch.setattr("src.cli.clean_cmd.get_project_dir", lambda p: mock_series_project)
     monkeypatch.setattr("src.cli.clean_cmd.get_output_dir", lambda p: mock_series_project / "output")
 
-    # Create 35 chapters with receipts and videos
+    from unit.test_safe_cleanup import add_hf_receipt, add_youtube_receipt
+    real_mp4_bytes = (mock_series_project / "chapters" / "1" / "video" / "final.mp4").read_bytes()
+
+    # Create 35 chapters with real FFmpeg MP4s and canonical YouTube receipts
     for ch in range(1, 36):
         ch_str = str(ch)
         c_dir = mock_series_project / "chapters" / ch_str
         (c_dir / "video").mkdir(parents=True, exist_ok=True)
-        (c_dir / "video" / "final.mp4").write_bytes(b"\x00\x00\x00\x20ftypisom" + b"\x00" * 150000)
-        (c_dir / "youtube_receipt.json").write_text(
-            json.dumps({
-                "status": "verified",
-                "video_id": f"vid_{ch:011d}",
-                "upload_status": "processed",
-                "verified_at": "2026-11-10T20:05:00Z",
-                "video_url": f"https://www.youtube.com/watch?v=vid_{ch:011d}",
-                "privacy_status": "unlisted",
-            }),
-            encoding="utf-8",
-        )
+        (c_dir / "video" / "final.mp4").write_bytes(real_mp4_bytes)
+        add_youtube_receipt(c_dir, "adv_series", chapter=ch_str, video_id=f"vid_{ch:011d}")
 
-    # Valid archive receipt
-    (mock_series_project / "archive_receipt.json").write_text(
-        json.dumps({
-            "status": "verified",
-            "commit_sha": "abc1234567890abcdef1234567890abcdef123456",
-            "repo_id": "Cuong2004/manga-recap-archive",
-            "remote_url": "https://huggingface.co/datasets/Cuong2004/manga-recap-archive/tree/abc1234",
-            "created_at": "2026-11-10T20:00:00Z",
-        }),
-        encoding="utf-8",
-    )
-
-    from unit.test_safe_cleanup import add_hf_receipt
     add_hf_receipt(mock_series_project, "adv_series")
     args = argparse.Namespace(
         project="adv_series",

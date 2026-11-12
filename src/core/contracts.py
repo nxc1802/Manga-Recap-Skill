@@ -77,3 +77,21 @@ class ReleaseRecord(BaseModel):
     chapter_number: str
     state: ReleaseState
     evidence_hashes: dict[str, str]
+
+
+class TombstoneRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["4.0.0"] = "4.0.0"
+    tombstone_version: Literal["4.0.0"] = "4.0.0"
+    project_slug: str = Field(min_length=1)
+    archive_timestamp: str | None = None
+    cleanup_timestamp: str = Field(min_length=1)
+    hf_repo_id: str = Field(min_length=1)
+    hf_commit_sha: str = Field(pattern=r"^[a-f0-9]{40}$")
+    hf_remote_url: str = Field(min_length=1)
+    manifest_sha256: str = Field(pattern=SHA256)
+    youtube_videos: dict[str, str] = Field(default_factory=dict)
+    youtube_videos_total: int | None = Field(default=None, ge=0)
+    youtube_videos_truncated: bool = False
+    reclaimed_bytes: int = Field(ge=0)
+    cleaned_files_count: int = Field(ge=0)

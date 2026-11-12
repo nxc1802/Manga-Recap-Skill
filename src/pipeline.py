@@ -1,6 +1,8 @@
 """Legacy compatibility surface; production work uses canonical CLI policy."""
+from src.cli.clean_cmd import _check_two_receipt_gate
 from src.core.logger import logger
-from src.core.utils import get_project_data_dir, cleanup_intermediate_files
+from src.core.utils import cleanup_intermediate_files, get_project_data_dir
+
 
 class MangaRecapPipeline:
     def __init__(self):
@@ -8,12 +10,21 @@ class MangaRecapPipeline:
 
     def cleanup_temp_files(self, chapter: int | str, suffix: str = "", project: str = None, keep_temp: bool = False) -> list:
         """
-        Cleans up temporary video and subtitle files generated during chapter processing.
+        Cleans up temporary video and subtitle files generated during chapter processing
+        only after enforcing the Two-Receipt Safe Cleanup Gate.
         """
-        if not project:
+        if not project or keep_temp:
             return []
         proj_name = project
         project_dir = get_project_data_dir(proj_name)
+        if not project_dir.exists():
+            return []
+        _check_two_receipt_gate(
+            project_slug=proj_name,
+            project_dir=project_dir,
+            target_chapters=[str(chapter)],
+            dry_run=False,
+        )
         chap_dir = project_dir / "chapters" / str(chapter)
         cleaned = []
         if chap_dir.exists():
