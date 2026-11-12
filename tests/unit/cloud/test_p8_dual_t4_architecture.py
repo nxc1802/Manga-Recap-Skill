@@ -17,7 +17,9 @@ import csv
 import dataclasses
 import json
 import os
+import runpy
 import shutil
+import subprocess
 import sys
 import tarfile
 import threading
@@ -58,6 +60,8 @@ from src.cloud.elastic_scheduler import (
 from src.cloud.kaggle_service import KaggleCloudService
 from src.cloud.series_payload import (
     G8_REQUIRED_RECEIPTS,
+    generate_benchmark_worker_script,
+    generate_series_worker_script,
     package_series_payload,
     run_series_worker,
     sync_series_results,
@@ -1007,3 +1011,105 @@ def test_dual_t4_burn_subtitles_per_shot_and_font_size_propagation(tmp_path, mon
     assert per_shot is True
     assert stamped_tasks and all(t.get("chapter_number") == "2" for t in stamped_tasks)
     assert load_recap_script(ch2_dir).chapter_number == "2"
+
+
+def test_kaggle_bootstrap_scripts_safe_under_mp_main_and_real_spawn(tmp_path, monkeypatch):
+    """
+    Regression test (#110/#111):
+    `generate_series_worker_script` and `generate_benchmark_worker_script` MUST guard
+    runtime extraction, SHA-256 verification, `pip install`, and worker invocation inside
+    `if __name__ == '__main__':` so Python `multiprocessing.get_context('spawn')`
+    re-importing the Kaggle kernel script as `__mp_main__` never crashes on
+    `Runtime must be fresh`.
+    """
+    proj_dir = _create_multi_chapter_series(
+        tmp_path, monkeypatch, chapters=["1", "2"], approve_ch1=True
+    )
+    _, digest = package_series_payload(
+        proj_dir,
+        ["1", "2"],
+        tmp_path / "mp_series.tar.gz",
+        job_type="benchmark_matrix",
+        include_benchmark_harness=True,
+    )
+
+    series_code = generate_series_worker_script(
+        "p8_series",
+        ["1", "2"],
+        payload_manifest_hash=digest,
+        project_dir=proj_dir,
+        encoder_preference="libx264",
+    )
+    bench_code = generate_benchmark_worker_script(
+        "p8_series",
+        ["1", "2"],
+        payload_manifest_hash=digest,
+        project_dir=proj_dir,
+        variants=("B0", "B5"),
+        encoder_preference="libx264",
+    )
+
+    for label, code in (("series", series_code), ("benchmark", bench_code)):
+        compile(code, f"{label}_worker.py", "exec")
+        assert "def main() -> None:" in code
+        assert "if __name__ == '__main__':\n    main()" in code
+        assert "_KAGGLE_RUNTIME = '/kaggle/working/runtime'" in code
+        assert "os.environ['PYTHONPATH']" in code
+        assert code.index("def main() -> None:") < code.index("Runtime must be fresh")
+
+        script_file = tmp_path / f"{label}_worker.py"
+        script_file.write_text(code, encoding="utf-8")
+        # Simulates Python multiprocessing.spawn._fixup_main_from_path(..., run_name="__mp_main__")
+        ns = runpy.run_path(str(script_file), run_name="__mp_main__")
+        assert callable(ns["main"])
+
+    # Real subprocess + real multiprocessing.get_context("spawn") end-to-end check:
+    # `spawn_driver.py` mirrors the generated Kaggle script structure and guards
+    # `if runtime.exists(): raise RuntimeError('Runtime must be fresh')` inside main().
+    repo_root = Path(__file__).resolve().parents[3]
+    fake_runtime = tmp_path / "runtime"
+    spawn_driver = tmp_path / "spawn_driver.py"
+    spawn_driver.write_text(
+        "\n".join(
+            [
+                "import os, sys",
+                "from pathlib import Path",
+                "sys.dont_write_bytecode = True",
+                f"_REPO = {str(repo_root)!r}",
+                "if os.path.isdir(_REPO) and _REPO not in sys.path:",
+                "    sys.path.insert(0, _REPO)",
+                "",
+                "def main() -> None:",
+                f"    root = Path({str(fake_runtime)!r})",
+                "    if root.exists():",
+                "        raise RuntimeError('Runtime must be fresh')",
+                "    root.mkdir(parents=True)",
+                "    cur_py = os.environ.get('PYTHONPATH', '')",
+                "    parts = [p for p in cur_py.split(os.pathsep) if p] if cur_py else []",
+                "    if _REPO not in parts:",
+                "        os.environ['PYTHONPATH'] = os.pathsep.join([_REPO, *parts])",
+                "    from src.cloud.cuda_worker_pool import CudaWorkerPool",
+                "    pool = CudaWorkerPool(gpu_ids=(0,), tts_replicas_per_gpu=1, nvenc_workers_per_gpu=1)",
+                "    try:",
+                "        info = pool.probe_gpu(0)",
+                "        assert info['env_cuda_visible_devices'] == '0'",
+                "        assert info['pid'] != os.getpid()",
+                "    finally:",
+                "        pool.shutdown()",
+                "",
+                "if __name__ == '__main__':",
+                "    main()",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(spawn_driver)],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Spawn driver failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"

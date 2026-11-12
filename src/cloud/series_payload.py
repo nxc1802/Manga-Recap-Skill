@@ -257,16 +257,28 @@ def package_series_payload(
     return out_path, digest
 
 
-def _build_bootstrap_prefix_lines(payload_manifest_hash: str) -> List[str]:
+def _build_bootstrap_header_lines() -> List[str]:
     """
-    Returns stdlib-only Kaggle container bootstrap statements that extract & verify
-    the payload SHA-256 inventory BEFORE running `pip install` or importing `src.*`.
-    Records `_boot_t0` and `_boot_sec` around extraction + verification + pip install.
+    Returns stdlib-only module top-level statements safe when Python `spawn`
+    re-imports the Kaggle kernel script as `__mp_main__`.
     """
     return [
         "import os, sys, json, hashlib, tarfile, shutil, subprocess, time",
         "from pathlib import Path",
         "sys.dont_write_bytecode = True",
+        "_KAGGLE_RUNTIME = '/kaggle/working/runtime'",
+        "if os.path.isdir(_KAGGLE_RUNTIME) and _KAGGLE_RUNTIME not in sys.path:",
+        "    sys.path.insert(0, _KAGGLE_RUNTIME)",
+    ]
+
+
+def _build_bootstrap_main_lines(payload_manifest_hash: str) -> List[str]:
+    """
+    Returns `main()`-scoped Kaggle container bootstrap statements that extract & verify
+    the payload SHA-256 inventory BEFORE running `pip install` or importing `src.*`.
+    Records `_boot_t0` and `_boot_sec` around extraction + verification + pip install.
+    """
+    return [
         "_boot_t0 = time.monotonic()",
         "working_dir = Path('/kaggle/working')",
         "os.environ.setdefault('HF_HOME', str(working_dir / 'cache' / 'hf'))",
@@ -303,8 +315,36 @@ def _build_bootstrap_prefix_lines(payload_manifest_hash: str) -> List[str]:
         "    if not target.is_relative_to(root) or hashlib.sha256(target.read_bytes()).hexdigest() != digest:",
         "        raise RuntimeError(f'Payload hash mismatch: {name}')",
         "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '-r', str(root / 'requirements.txt')], check=True)",
+        "if str(root) not in sys.path:",
+        "    sys.path.insert(0, str(root))",
+        "_cur_py = os.environ.get('PYTHONPATH', '')",
+        "_py_parts = [p for p in _cur_py.split(os.pathsep) if p] if _cur_py else []",
+        "if str(root) not in _py_parts:",
+        "    os.environ['PYTHONPATH'] = os.pathsep.join([str(root), *_py_parts])",
         "_boot_sec = max(0.0, time.monotonic() - _boot_t0)",
     ]
+
+
+def _wrap_kaggle_bootstrap_script(
+    payload_manifest_hash: str,
+    job_lines: Sequence[str],
+) -> str:
+    """
+    Wraps bootstrap + job execution inside `if __name__ == '__main__':` so Python
+    `multiprocessing.spawn` child workers (`run_name='__mp_main__'`) never re-run
+    runtime extraction, SHA-256 verification, `pip install`, or worker entrypoints.
+    """
+    lines = _build_bootstrap_header_lines()
+    lines.append("")
+    lines.append("def main() -> None:")
+    for stmt in _build_bootstrap_main_lines(payload_manifest_hash):
+        lines.append(f"    {stmt}")
+    for stmt in job_lines:
+        lines.append(f"    {stmt}")
+    lines.append("")
+    lines.append("if __name__ == '__main__':")
+    lines.append("    main()")
+    return "\n".join(lines)
 
 
 def generate_series_worker_script(
@@ -352,9 +392,7 @@ def generate_series_worker_script(
     if encoder not in {"libx264", "h264_nvenc"}:
         raise ValueError(f"Unsupported cloud encoder: {encoder_preference}")
 
-    lines = _build_bootstrap_prefix_lines(payload_manifest_hash)
-    lines.extend([
-        "sys.path.insert(0, str(root))",
+    job_lines = [
         "from src.cloud.series_payload import run_series_worker",
         "run_series_worker(",
         "    root,",
@@ -367,8 +405,8 @@ def generate_series_worker_script(
         f"    profile={str(profile)!r},",
         f"    autotune={bool(autotune)!r},",
         ")",
-    ])
-    return "\n".join(lines)
+    ]
+    return _wrap_kaggle_bootstrap_script(payload_manifest_hash, job_lines)
 
 
 def generate_benchmark_worker_script(
@@ -407,8 +445,7 @@ def generate_benchmark_worker_script(
     if not norm_variants:
         raise ValueError("Benchmark variants cannot be empty")
 
-    lines = _build_bootstrap_prefix_lines(payload_manifest_hash)
-    lines.extend([
+    job_lines = [
         "cmd = [",
         "    sys.executable,",
         "    str(root / 'scripts' / 'benchmark' / 'run_dual_t4_matrix.py'),",
@@ -422,13 +459,13 @@ def generate_benchmark_worker_script(
         f"    '--encoder', {encoder!r},",
         "    '--boot-sec', f'{_boot_sec:.4f}',",
         "]",
-    ])
+    ]
     if warmup:
-        lines.append("cmd.append('--warmup')")
+        job_lines.append("cmd.append('--warmup')")
     if not compile_feature:
-        lines.append("cmd.append('--no-compile')")
-    lines.append("subprocess.run(cmd, cwd=str(root), check=True)")
-    return "\n".join(lines)
+        job_lines.append("cmd.append('--no-compile')")
+    job_lines.append("subprocess.run(cmd, cwd=str(root), check=True)")
+    return _wrap_kaggle_bootstrap_script(payload_manifest_hash, job_lines)
 
 
 def run_series_worker(
@@ -460,6 +497,7 @@ def run_series_worker(
 
     out_p.mkdir(parents=True, exist_ok=True)
     prev_data_dir = os.environ.get("MANGA_RECAP_DATA_DIR")
+    prev_pythonpath = os.environ.get("PYTHONPATH")
     with tempfile.TemporaryDirectory(prefix="p8-series-", dir=str(out_p.parent)) as session_tmp:
         session_dir = Path(session_tmp)
         runtime_data = session_dir / "data"
@@ -470,6 +508,9 @@ def run_series_worker(
         work_dir.mkdir(parents=True, exist_ok=True)
 
         os.environ["MANGA_RECAP_DATA_DIR"] = str(runtime_data)
+        py_parts = [p for p in (prev_pythonpath or "").split(os.pathsep) if p]
+        if str(root_p) not in py_parts:
+            os.environ["PYTHONPATH"] = os.pathsep.join([str(root_p), *py_parts])
         try:
             require_series_setup(slug, project_dir=destination)
             require_voice_approval(destination)
@@ -544,6 +585,10 @@ def run_series_worker(
                 os.environ.pop("MANGA_RECAP_DATA_DIR", None)
             else:
                 os.environ["MANGA_RECAP_DATA_DIR"] = prev_data_dir
+            if prev_pythonpath is None:
+                os.environ.pop("PYTHONPATH", None)
+            else:
+                os.environ["PYTHONPATH"] = prev_pythonpath
 
 
 def verify_g8_dual_t4_evidence(
