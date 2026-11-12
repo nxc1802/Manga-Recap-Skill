@@ -1162,7 +1162,7 @@ class DualT4Orchestrator:
         intermediate_bytes_written = 0
         all_chapters_valid = True
 
-        def _snapshot_and_evaluate() -> None:
+        def _snapshot_and_evaluate() -> Tuple[int, ...]:
             nonlocal active_tts_gpus, active_render_gpus
             with sampler_state_lock:
                 vram_used = {}
@@ -1186,10 +1186,13 @@ class DualT4Orchestrator:
                     vram_budget_mb=vram_budget,
                 )
             decision = self.scheduler.evaluate_state(snap)
-            active_tts_gpus = decision.tts_gpu_ids
-            active_render_gpus = decision.render_gpu_ids
+            with sampler_state_lock:
+                active_tts_gpus = decision.tts_gpu_ids
+                active_render_gpus = decision.render_gpu_ids
+                render_gpus_now = active_render_gpus
             if decision.unload_tts_on_gpus:
                 pool.unload_tts_workers(decision.unload_tts_on_gpus)
+            return render_gpus_now
 
         # ---- Stage 1: CPU Source Prefetch -> source_prefetch_queue -> tts_queue ----
         def _prefetch_stage() -> None:
@@ -1454,6 +1457,8 @@ class DualT4Orchestrator:
                     script = ready.script
                     manifest = ready.manifest
 
+                    if self.force_recompute:
+                        (chap_dir / "visual_plan.json").unlink(missing_ok=True)
                     plan = resolve_visual_plan(
                         chap_dir,
                         manifest,
@@ -1567,6 +1572,16 @@ class DualT4Orchestrator:
         chapter_trackers_lock = threading.Lock()
         chapter_trackers: Dict[str, Dict[str, Any]] = {}
 
+        # Dedicated stealer threads feed each GPU's spawn worker slots
+        render_stealer_gpus: List[int] = []
+        if len(self.profile.gpu_ids) == 1:
+            render_stealer_gpus = [self.profile.gpu_ids[0]] * effective_nvenc
+        elif self.profile.profile_id == BenchmarkProfileId.B1:
+            render_stealer_gpus = [self.profile.gpu_ids[1]] * effective_nvenc
+        else:
+            for g in self.profile.gpu_ids:
+                render_stealer_gpus.extend([g] * effective_nvenc)
+
         def _render_dispatcher() -> None:
             try:
                 if self.profile.phase_barrier:
@@ -1617,7 +1632,7 @@ class DualT4Orchestrator:
                 _record_error(exc)
             finally:
                 # Signal render workers to finish once render_queue empties
-                total_slots = max(1, len(self.profile.gpu_ids) * effective_nvenc)
+                total_slots = max(1, len(render_stealer_gpus))
                 for _ in range(total_slots):
                     self.queues.render_queue.put(None)
 
@@ -1627,26 +1642,22 @@ class DualT4Orchestrator:
                 while True:
                     if abort_event.is_set():
                         break
+                    render_gpus_now = _snapshot_and_evaluate()
+                    # Defer before popping from render_queue when TTS still owns gpu_id
+                    if not all_tts_done_event.is_set() and gpu_id not in render_gpus_now:
+                        time.sleep(0.02)
+                        continue
                     try:
-                        item = self.queues.render_queue.get(timeout=0.1)
+                        # Non-blocking pop avoids sleeping in get() with a stale eligibility decision
+                        item = self.queues.render_queue.get_nowait()
                     except queue.Empty:
+                        time.sleep(0.01)
                         continue
                     if item is None:
                         self.queues.render_queue.task_done()
                         break
 
                     ch_num, shot_idx, stask = item
-                    _snapshot_and_evaluate()
-                    # Respect elastic GPU allocation when TTS is still active on gpu_id
-                    if (
-                        gpu_id not in active_render_gpus
-                        and active_render_gpus
-                        and not all_tts_done_event.is_set()
-                    ):
-                        self.queues.render_queue.put(item)
-                        self.queues.render_queue.task_done()
-                        time.sleep(0.02)
-                        continue
 
                     with sampler_state_lock:
                         in_flight_render += 1
@@ -1806,16 +1817,6 @@ class DualT4Orchestrator:
             threading.Thread(target=_render_dispatcher, name="P8-RenderDisp", daemon=True),
             threading.Thread(target=_validation_stage, name="P8-Validate", daemon=True),
         ]
-        # Dedicated stealer threads feed each GPU's spawn worker slots
-        render_stealer_gpus: List[int] = []
-        if len(self.profile.gpu_ids) == 1:
-            render_stealer_gpus = [self.profile.gpu_ids[0]] * effective_nvenc
-        elif self.profile.profile_id == BenchmarkProfileId.B1:
-            render_stealer_gpus = [self.profile.gpu_ids[1]] * effective_nvenc
-        else:
-            for g in self.profile.gpu_ids:
-                render_stealer_gpus.extend([g] * effective_nvenc)
-
         for idx, gid in enumerate(render_stealer_gpus):
             threads.append(
                 threading.Thread(

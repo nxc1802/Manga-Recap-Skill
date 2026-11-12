@@ -6,8 +6,10 @@ Deterministic unit & integration tests for P9 Dual-T4 Benchmark Matrix Harness (
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tarfile
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -17,10 +19,12 @@ import pytest
 from scripts.benchmark.run_dual_t4_matrix import (
     _dry_run_smi_querier,
     _dry_run_tts_worker_factory,
+    _prepare_clean_variant_workspace,
     main as matrix_main,
     run_benchmark_matrix,
 )
 from src.cloud.cuda_worker_pool import CudaWorkerPool, compute_usable_vram_budget
+from src.cloud.dual_t4_orchestrator import DualT4Orchestrator
 from src.cloud.elastic_scheduler import BenchmarkProfileId
 from src.cloud.kaggle_service import KaggleCloudService
 from src.cloud.series_payload import (
@@ -29,7 +33,10 @@ from src.cloud.series_payload import (
     verify_series_payload_manifest,
 )
 from src.render.artifact_validation import fingerprint
-from tests.unit.cloud.test_p8_dual_t4_architecture import _create_multi_chapter_series
+from tests.unit.cloud.test_p8_dual_t4_architecture import (
+    _RealMediaFakeGpuWorkerHandle,
+    _create_multi_chapter_series,
+)
 
 
 def _install_multi_chapter_p9_fixture(
@@ -477,3 +484,285 @@ def test_p9_cli_in_container_verifies_manifest_and_fail_closes(tmp_path, monkeyp
                 str(tmp_path / "ic_out_nogpu"),
             ]
         )
+
+
+def test_p9_cli_dispatch_syncs_nested_results_and_root_outputs(tmp_path, monkeypatch):
+    """
+    Regression test (#98-2): when Kaggle `kernels_output` downloads into
+    `<out_dir>/results/`, `--dispatch` must populate refreshed
+    `benchmark_matrix_results.json` and `benchmark_matrix_report.md` in BOTH
+    `out_dir` and `out_dir/results`.
+    """
+    _install_multi_chapter_p9_fixture(tmp_path, monkeypatch, approve_ch1=True)
+
+    class _FakeCliKaggleApi:
+        def __init__(self, svc: KaggleCloudService):
+            self._svc = svc
+            self._status_calls = 0
+
+        def dataset_create_new(self, folder, public=False, quiet=True):
+            return None
+
+        def dataset_status(self, ds_ref):
+            return SimpleNamespace(status="ready")
+
+        def dataset_list_files(self, ds_ref):
+            return SimpleNamespace(dataset_files=[SimpleNamespace(name="payload.tar.gz")])
+
+        def kernels_push(self, folder):
+            return SimpleNamespace(ref="/code/tester/p9-cli-dispatch")
+
+        def kernels_status(self, ref):
+            self._status_calls += 1
+            if self._status_calls == 1:
+                return SimpleNamespace(status="QUEUED")
+            return SimpleNamespace(status="COMPLETE")
+
+        def kernels_output(self, ref, target_dir):
+            out_res = Path(target_dir) / "results"
+            out_res.mkdir(parents=True, exist_ok=True)
+            payload_sha = self._svc._series_payload_manifest_hash
+            bench_payload = {
+                "schema_version": "4.2.0",
+                "generated_at_utc": "2026-11-12T00:00:00Z",
+                "dry_run": False,
+                "mock_mode": False,
+                "git_commit": "deadbeef",
+                "project_slug": "p8_series",
+                "chapters": ["1", "2", "3"],
+                "repeats": 1,
+                "warmup": False,
+                "all_valid": True,
+                "winner_profile_id": "B5",
+                "phase_timings": {
+                    "kernel_boot_sec": 12.3,
+                    "model_load_sec": 8.4,
+                    "warmup_sec": 0.0,
+                    "compute_sec": 42.0,
+                },
+                "summary_by_variant": {
+                    "B0": {
+                        "profile_id": "B0",
+                        "profile_name": "1-T4 Sequential Baseline",
+                        "e2e_compute_wall_sec": 30.0,
+                        "speedup_vs_b0": 1.0,
+                        "tts_rtf": 0.4,
+                        "segments_per_sec": 2.5,
+                        "render_fps": 30.0,
+                        "video_minutes_per_hour": 60.0,
+                        "gpu0_util_avg": 75.0,
+                        "gpu1_util_avg": 0.0,
+                        "gpu0_peak_vram_mb": 4200.0,
+                        "gpu1_peak_vram_mb": 0.0,
+                        "cpu_util_avg": 25.0,
+                        "disk_throughput_mb_s": 12.0,
+                        "stage_breakdown": {},
+                        "all_valid": True,
+                    },
+                    "B5": {
+                        "profile_id": "B5",
+                        "profile_name": "Elastic Dual-T4 + Coexistence",
+                        "e2e_compute_wall_sec": 12.0,
+                        "speedup_vs_b0": 2.5,
+                        "tts_rtf": 0.2,
+                        "segments_per_sec": 5.0,
+                        "render_fps": 60.0,
+                        "video_minutes_per_hour": 140.0,
+                        "gpu0_util_avg": 82.0,
+                        "gpu1_util_avg": 80.0,
+                        "gpu0_peak_vram_mb": 5200.0,
+                        "gpu1_peak_vram_mb": 3400.0,
+                        "cpu_util_avg": 30.0,
+                        "disk_throughput_mb_s": 18.0,
+                        "stage_breakdown": {},
+                        "all_valid": True,
+                    },
+                },
+                "runs": [
+                    {"profile_id": "B0", "e2e_compute_wall_sec": 30.0, "all_valid": True},
+                    {"profile_id": "B5", "e2e_compute_wall_sec": 12.0, "all_valid": True},
+                ],
+            }
+            bj = out_res / "benchmark_matrix_results.json"
+            bj.write_text(json.dumps(bench_payload), encoding="utf-8")
+            md = out_res / "benchmark_matrix_report.md"
+            md.write_text("STALE REMOTE REPORT\n", encoding="utf-8")
+            rm = out_res / "dual_t4_result_manifest.json"
+            rm.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "4.2.0",
+                        "project_slug": "p8_series",
+                        "chapters": ["1", "2", "3"],
+                        "job_type": "benchmark_matrix",
+                        "payload_manifest_sha256": payload_sha,
+                        "files": {
+                            "benchmark_matrix_results.json": fingerprint(bj),
+                            "benchmark_matrix_report.md": fingerprint(md),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    def _fake_auth(self):
+        self._api = _FakeCliKaggleApi(self)
+        self._username = "tester"
+
+    monkeypatch.setattr(KaggleCloudService, "_authenticate", _fake_auth)
+
+    out_dir = tmp_path / "cli_dispatch_out"
+    rc = matrix_main(
+        [
+            "--dispatch",
+            "--project",
+            "p8_series",
+            "--chapters",
+            "1,2,3",
+            "--variants",
+            "B0,B5",
+            "--repeats",
+            "1",
+            "--output-dir",
+            str(out_dir),
+            "--poll-interval",
+            "0",
+        ]
+    )
+    assert rc == 0
+
+    root_json = out_dir / "benchmark_matrix_results.json"
+    nested_json = out_dir / "results" / "benchmark_matrix_results.json"
+    root_md = out_dir / "benchmark_matrix_report.md"
+    nested_md = out_dir / "results" / "benchmark_matrix_report.md"
+
+    assert root_json.is_file()
+    assert nested_json.is_file()
+    assert root_md.is_file()
+    assert nested_md.is_file()
+
+    root_doc = json.loads(root_json.read_text(encoding="utf-8"))
+    nested_doc = json.loads(nested_json.read_text(encoding="utf-8"))
+    assert root_doc == nested_doc
+    assert "dataset_upload_sec" in root_doc["phase_timings"]
+    assert "queue_sec" in root_doc["phase_timings"]
+    assert "download_sec" in root_doc["phase_timings"]
+    assert root_doc["phase_timings"]["kernel_boot_sec"] == 12.3
+
+    root_md_txt = root_md.read_text(encoding="utf-8")
+    nested_md_txt = nested_md.read_text(encoding="utf-8")
+    assert root_md_txt == nested_md_txt
+    assert "STALE REMOTE REPORT" not in nested_md_txt
+    assert "`dataset_upload_sec`" in root_md_txt
+    assert "`queue_sec`" in root_md_txt
+    assert "`download_sec`" in root_md_txt
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg required for render eligibility regression test")
+def test_p9_orchestrator_defers_ineligible_render_stealer_without_reenqueue(tmp_path, monkeypatch):
+    """
+    Regression test (#98-1):
+    1. In B3 (`BALANCED` with TTS active on GPU 0), GPU 0 render stealer evaluates
+       eligibility BEFORE `render_queue.get()`, never popping and re-enqueuing items
+       behind `None` sentinels.
+    2. In B1 (dedicated GPU 1 render), `_render_dispatcher` emits exact sentinel count
+       matching `len(render_stealer_gpus)` so zero unconsumed `None` sentinels remain.
+    """
+    proj_dir = _install_multi_chapter_p9_fixture(tmp_path, monkeypatch, approve_ch1=True)
+
+    # 1. B3 race window: Chapter 3 TTS holds gate_event until Chapter 2 renders on GPU 1
+    b3_proj = tmp_path / "b3_proj"
+    _prepare_clean_variant_workspace(proj_dir, b3_proj, ["1", "2", "3"])
+    timeline: List[Any] = []
+    ch2_render_started_event = threading.Event()
+    tts_ch3_gate_lock = threading.Lock()
+    gate_state = {"ch3_waited": False}
+    orch_b3 = DualT4Orchestrator(
+        workspace_dir=b3_proj,
+        chapters=["1", "2", "3"],
+        profile=BenchmarkProfileId.B3,
+        encoder="libx264",
+        compile_feature=False,
+        force_recompute=True,
+        receipts_dir=tmp_path / "b3_receipts",
+        work_dir=tmp_path / "b3_work",
+        smi_querier=_gpu_smi_dual_t4,
+        worker_pool_factory=lambda **kw: CudaWorkerPool(
+            **kw,
+            worker_options={
+                "timeline": timeline,
+                "ch2_render_started_event": ch2_render_started_event,
+                "tts_ch3_gate_lock": tts_ch3_gate_lock,
+                "gate_state": gate_state,
+            },
+            worker_handle_factory=_RealMediaFakeGpuWorkerHandle,
+        ),
+    )
+
+    put_log_lock = threading.Lock()
+    put_log_b3: List[tuple[str, Any]] = []
+    orig_put_b3 = orch_b3.queues.render_queue.put
+
+    def _spy_put_b3(item, *args, **kwargs):
+        with put_log_lock:
+            put_log_b3.append((threading.current_thread().name, item))
+        return orig_put_b3(item, *args, **kwargs)
+
+    monkeypatch.setattr(orch_b3.queues.render_queue, "put", _spy_put_b3)
+    tel_b3 = orch_b3.run_pipeline()
+
+    assert tel_b3.all_valid is True
+    assert orch_b3.queues.render_queue.empty() is True
+    assert orch_b3.queues.render_queue.unfinished_tasks == 0
+    assert not any(tname.startswith("P8-Stealer") for tname, _ in put_log_b3)
+    sentinel_indices_b3 = [idx for idx, (_, it) in enumerate(put_log_b3) if it is None]
+    shot_indices_b3 = [idx for idx, (_, it) in enumerate(put_log_b3) if it is not None]
+    assert len(sentinel_indices_b3) == 4  # 2 GPUs * 2 nvenc workers
+    assert shot_indices_b3 and max(shot_indices_b3) < min(sentinel_indices_b3)
+    ch3_tts_starts = [entry[3] for entry in timeline if entry[0] == "tts_start" and entry[1] == "3"]
+    ch3_tts_ends = [entry[3] for entry in timeline if entry[0] == "tts_end" and entry[1] == "3"]
+    assert ch3_tts_starts and ch3_tts_ends
+    renders_during_ch3_tts = [
+        entry
+        for entry in timeline
+        if entry[0] == "render_start" and min(ch3_tts_starts) <= entry[3] < min(ch3_tts_ends)
+    ]
+    assert renders_during_ch3_tts, "Expected streaming render overlap while Ch.3 TTS was active"
+    assert {entry[2] for entry in renders_during_ch3_tts} == {1}
+
+    # 2. B1 sentinel count matches len(render_stealer_gpus) == effective_nvenc (2, not 4)
+    b1_proj = tmp_path / "b1_proj"
+    _prepare_clean_variant_workspace(proj_dir, b1_proj, ["1", "2", "3"])
+    orch_b1 = DualT4Orchestrator(
+        workspace_dir=b1_proj,
+        chapters=["1", "2", "3"],
+        profile=BenchmarkProfileId.B1,
+        encoder="libx264",
+        compile_feature=False,
+        force_recompute=True,
+        receipts_dir=tmp_path / "b1_receipts",
+        work_dir=tmp_path / "b1_work",
+        smi_querier=_gpu_smi_dual_t4,
+        worker_pool_factory=lambda **kw: CudaWorkerPool(
+            **kw,
+            worker_handle_factory=_RealMediaFakeGpuWorkerHandle,
+        ),
+    )
+
+    put_log_b1: List[tuple[str, Any]] = []
+    orig_put_b1 = orch_b1.queues.render_queue.put
+
+    def _spy_put_b1(item, *args, **kwargs):
+        with put_log_lock:
+            put_log_b1.append((threading.current_thread().name, item))
+        return orig_put_b1(item, *args, **kwargs)
+
+    monkeypatch.setattr(orch_b1.queues.render_queue, "put", _spy_put_b1)
+    tel_b1 = orch_b1.run_pipeline()
+
+    assert tel_b1.all_valid is True
+    assert orch_b1.queues.render_queue.empty() is True
+    assert orch_b1.queues.render_queue.unfinished_tasks == 0
+    assert not any(tname.startswith("P8-Stealer") for tname, _ in put_log_b1)
+    sentinel_indices_b1 = [idx for idx, (_, it) in enumerate(put_log_b1) if it is None]
+    assert len(sentinel_indices_b1) == 2

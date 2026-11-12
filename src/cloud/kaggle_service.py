@@ -911,6 +911,8 @@ class KaggleCloudService:
             raise RuntimeError("Benchmark matrix aborted: one or more variants failed artifact validation")
 
         atomic_write_json(bench_json_path, bench_data)
+        if results_root != dl_dir:
+            atomic_write_json(dl_dir / "benchmark_matrix_results.json", bench_data)
         return bench_data
 
     def produce_series_job(self, project_slug, chapters, **kwargs):

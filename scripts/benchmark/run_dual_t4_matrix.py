@@ -1056,9 +1056,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             atomic_write_json(out_dir / "benchmark_dispatch_receipt.json", res)
             print(f"[P9 DISPATCH] Pushed Kaggle Dual-T4 kernel: {res['kernel_ref']}")
             return 0
-        # Refresh Markdown report with host upload/queue/download timings included
+        # Refresh both JSON & Markdown reports at out_dir (and nested results/ when present)
         md_text = render_matrix_markdown(res)
-        (out_dir / "benchmark_matrix_report.md").write_text(md_text, encoding="utf-8")
+        report_targets = [out_dir]
+        nested_results = out_dir / "results"
+        if nested_results.is_dir():
+            report_targets.append(nested_results)
+        for target_dir in report_targets:
+            atomic_write_json(target_dir / "benchmark_matrix_results.json", res)
+            (target_dir / "benchmark_matrix_report.md").write_text(md_text, encoding="utf-8")
         print(
             f"[P9 DISPATCH COMPLETE] kernel={res.get('kernel_ref')}, "
             f"winner={res.get('winner_profile_id')}, all_valid={res.get('all_valid')}"
