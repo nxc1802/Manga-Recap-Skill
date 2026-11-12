@@ -302,12 +302,56 @@ def test_cloud_failure_timeout_never_syncs(unit_project,monkeypatch,state):
     assert (chapter/'chapter.json').read_bytes()==before
 
 
-@pytest.mark.parametrize('method', ['package_series_payload','generate_series_worker_script','sync_series_results'])
-def test_future_dual_t4_entrypoints_remain_disabled(method):
+def test_future_dual_t4_entrypoints_remain_disabled(unit_project, tmp_path):
+    """P8 Dual-T4 series entrypoints enforce strict fail-closed Q01-Q10, G6 & G8 gates."""
     from src.cloud.kaggle_service import KaggleCloudService
-    service=object.__new__(KaggleCloudService)
-    with pytest.raises(RuntimeError,match='disabled pending G7'):
-        getattr(service,method)('unit',['1'])
+    from src.cloud.series_payload import G8_REQUIRED_RECEIPTS
+    root, chapter = unit_project
+    service = object.__new__(KaggleCloudService)
+    service._api = None
+    service._username = 'unit-fixture'
+
+    # 1. package_series_payload & dispatch_series_job fail closed without Q01-Q10 or G6 approval
+    with pytest.raises(CliValidationError, match='Strict Form Gate'):
+        service.package_series_payload('missing_series', ['1'], tmp_path / 'bad.tar.gz')
+    with pytest.raises(CliValidationError, match='Gate G6'):
+        service.package_series_payload('unit', ['1'], tmp_path / 'unapproved.tar.gz', skip_preview=True)
+    with pytest.raises(ValueError, match='Gate G6'):
+        service.dispatch_series_job('unit', ['1'], skip_preview=True)
+
+    # Approve Chapter 1 preview -> package_series_payload + generate_series_worker_script succeed
+    approve_fixture(root, chapter)
+    archive = service.package_series_payload('unit', ['1'], tmp_path / 'series.tar.gz')
+    assert archive.is_file()
+    worker_script = service.generate_series_worker_script('unit', ['1'], encoder_preference='libx264')
+    compile(worker_script, 'series_worker.py', 'exec')
+    assert service._series_payload_manifest_hash in worker_script
+    assert worker_script.index('Payload inventory mismatch') < worker_script.index("pip', 'install'")
+
+    # 2. sync_series_results rejects missing G8 GPU0/GPU1 telemetry or failed semantic parity
+    bad_results = tmp_path / 'bad_results'
+    bad_results.mkdir()
+    with pytest.raises(ValueError, match='Missing trusted series dispatch input snapshot|Missing G8'):
+        service.sync_series_results('unit', ['1'], bad_results)
+
+    # Even with a valid result manifest, missing GPU1 real work in G8 receipts must fail closed
+    for fname in ('dual_t4_environment.json', 'dual_t4_gpu_trace.csv', 'dual_t4_worker_log.jsonl', 'dual_t4_artifact_report.json'):
+        if fname == 'dual_t4_environment.json':
+            atomic_write_json(bad_results / fname, {'gpu_count': 2, 'mock_mode': False, 'gpus': [{'gpu_id': 0, 'gpu_uuid': 'u0'}, {'gpu_id': 1, 'gpu_uuid': 'u1'}]})
+        elif fname == 'dual_t4_gpu_trace.csv':
+            (bad_results / fname).write_text('gpu_id,vram_used_mb\n0,500\n', encoding='utf-8')
+        elif fname == 'dual_t4_worker_log.jsonl':
+            (bad_results / fname).write_text(json.dumps({'event': 'tts_batch_completed', 'gpu_id': 0}) + '\n', encoding='utf-8')
+        else:
+            atomic_write_json(bad_results / fname, {'gpu_usage_evidence': {'0': {'tts_items': 1}, '1': {'tts_items': 0, 'render_shots': 0}}, 'per_chapter': {'1': {}}})
+    files_inv = {p.relative_to(bad_results).as_posix(): fingerprint(p) for p in bad_results.rglob('*') if p.is_file()}
+    atomic_write_json(bad_results / 'dual_t4_result_manifest.json', {
+        'schema_version': '4.2.0', 'project_slug': 'unit', 'chapters': ['1'], 'job_type': 'produce_series',
+        'payload_manifest_sha256': service._series_payload_manifest_hash, 'files': files_inv,
+    })
+    with pytest.raises(ValueError, match='G8'):
+        service.sync_series_results('unit', ['1'], bad_results)
+    assert len(G8_REQUIRED_RECEIPTS) == 5
 
 
 @pytest.mark.parametrize('mutation', ['voice_override','speed_override','segment_voice'])

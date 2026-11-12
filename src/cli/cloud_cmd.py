@@ -140,10 +140,14 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
 
         gpu = not getattr(args, "no_gpu", False)
         compile_feature = bool(getattr(args, "compile", False) or getattr(args, "compile_feature", False))
-        render_workers = int(getattr(args, "render_workers", 4))
-        video_mode = getattr(args, "video_mode", "auto")
-        burn_subtitles = getattr(args, "burn_subtitles", False)
-        fps = int(getattr(args, "fps", 30))
+        render_workers = int(getattr(args, "render_workers", 2))
+        raw_video_mode = getattr(args, "video_mode", None)
+        video_mode = raw_video_mode if raw_video_mode not in (None, "auto") else None
+        raw_burn = getattr(args, "burn_subtitles", False)
+        burn_subtitles = True if raw_burn is True else None
+        fps = getattr(args, "fps", None)
+        profile = getattr(args, "profile", "B5")
+        autotune = bool(getattr(args, "autotune", True))
 
         logger.info(f"Dispatching cloud series production for {project_slug} chapters={chapters} (GPU={gpu})...")
         try:
@@ -155,6 +159,8 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 skip_preview=skip_preview,
                 compile_feature=compile_feature,
                 render_workers=render_workers,
+                profile=profile,
+                autotune=autotune,
                 video_mode=video_mode,
                 burn_subtitles=burn_subtitles,
                 fps=fps,

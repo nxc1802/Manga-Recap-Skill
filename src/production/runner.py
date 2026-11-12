@@ -402,16 +402,31 @@ class SingleSessionProductionRunner:
                     render_res = handle_render(render_args)
                     c_prog.render_status = ProductionStageStatus.COMPLETED
                     c_prog.render_duration_seconds = round(time.monotonic() - t_ch_render, 3)
-                    c_prog.cached_clips_count = render_res.get("cached_clips_count", 0)
-                    c_prog.rendered_clips_count = render_res.get("rendered_clips_count", 0)
+                    export_paths = render_res.get("export_paths") or {}
+                    validation = render_res.get("validation") or {}
+                    c_prog.cached_clips_count = int(render_res.get("cached_shots_count", 0) or 0)
+                    c_prog.rendered_clips_count = int(
+                        render_res.get("rendered_shots_count")
+                        or render_res.get("shot_count")
+                        or (1 if render_res.get("video_path") else 0)
+                    )
                     c_prog.video_path = render_res.get("video_path")
                     c_prog.subtitle_path = render_res.get("subtitle_path")
-                    c_prog.export_video_path = render_res.get("export_video_path")
-                    c_prog.export_subtitle_path = render_res.get("export_subtitle_path")
+                    c_prog.export_video_path = (
+                        export_paths.get("video_padded")
+                        or export_paths.get("video")
+                        or c_prog.video_path
+                    )
+                    c_prog.export_subtitle_path = (
+                        export_paths.get("subtitle_padded")
+                        or export_paths.get("subtitle")
+                        or c_prog.subtitle_path
+                    )
                     c_prog.error = None
+                    frames = (validation.get("video") or {}).get("frames", 0)
                     logger.info(
                         f"[Render] Chapter {chap_num} rendered in {c_prog.render_duration_seconds:.2f}s "
-                        f"(rendered: {c_prog.rendered_clips_count}, cached: {c_prog.cached_clips_count})"
+                        f"(duration: {render_res.get('duration_seconds', 0)}s, frames: {frames})"
                     )
                 except Exception as e:
                     c_prog.render_status = ProductionStageStatus.FAILED

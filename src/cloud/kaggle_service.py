@@ -1,7 +1,6 @@
 """
 src/cloud/kaggle_service.py
-Single-session Kaggle adapter for the canonical Local/Cloud runtime.
-Real-artifact/live acceptance is tracked separately; Dual-T4 dispatch is disabled.
+Kaggle Cloud adapter for canonical single-chapter and Dual-T4 series execution.
 """
 
 from __future__ import annotations
@@ -410,12 +409,17 @@ class KaggleCloudService:
                            getattr(self, "_dispatch_input_hashes", None))
 
     # =========================================================================
-    # Multi-Chapter Dual-T4 Single-Session Series Production Methods (PR-03)
+    # Multi-Chapter Dual-T4 Single-Session Series Production Methods (P8)
     # =========================================================================
 
     def check_chapter_1_preview_approval(
         self, project_slug: str, skip_preview: bool = False
     ) -> Tuple[bool, Optional[str]]:
+        """
+        Enforces Chapter 1 human preview approval (Gate G6) fail-closed.
+        `skip_preview` is retained for signature compatibility only and NEVER waives G6.
+        """
+        _ = skip_preview
         from src.core.human_review import require_preview_approval
         try:
             require_preview_approval(get_project_dir(project_slug))
@@ -423,22 +427,263 @@ class KaggleCloudService:
         except Exception as exc:
             return False, str(exc)
 
-    def package_series_payload(self, *args, **kwargs):
-        raise RuntimeError("Dual-T4 series payload is disabled pending G7 real cloud correctness and G8")
+    def package_series_payload(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        out_tar_path: Union[str, Path],
+        *,
+        skip_preview: bool = False,
+        profile: str = "B5",
+    ) -> Path:
+        from src.cloud.series_payload import package_series_payload
 
-    def generate_series_worker_script(self, *args, **kwargs):
-        raise RuntimeError("Dual-T4 worker is disabled pending G7 real cloud correctness and G8")
+        path, digest = package_series_payload(
+            get_project_dir(project_slug),
+            chapters,
+            out_tar_path,
+            skip_preview=False,
+            profile=profile,
+        )
+        self._series_payload_manifest_hash = digest
+        with tarfile.open(path) as archive:
+            manifest = json.load(archive.extractfile("payload_manifest.json"))
+        self._series_dispatch_input_hashes = {
+            relative.removeprefix("project/"): value
+            for relative, value in manifest["files"].items()
+            if relative.startswith("project/")
+        }
+        self._series_chapters = list(manifest.get("chapters", []))
+        return path
 
-    def dispatch_series_job(self, project_slug, chapters, **kwargs):
+    def generate_series_worker_script(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        render_workers: int = 2,
+        encoder_preference: str = "auto",
+        compile_feature: bool = True,
+        profile: str = "B5",
+        autotune: bool = True,
+        video_mode: Optional[str] = None,
+        burn_subtitles: Optional[bool] = None,
+        fps: Optional[int] = None,
+    ) -> str:
+        from src.cloud.series_payload import generate_series_worker_script
+
+        digest = getattr(self, "_series_payload_manifest_hash", None)
+        if not digest:
+            raise ValueError("Package and hash the complete series runtime before generating a worker")
+        return generate_series_worker_script(
+            project_slug,
+            chapters,
+            payload_manifest_hash=digest,
+            project_dir=get_project_dir(project_slug),
+            render_workers=render_workers,
+            encoder_preference=encoder_preference,
+            compile_feature=compile_feature,
+            profile=profile,
+            autotune=autotune,
+            video_mode=video_mode,
+            burn_subtitles=burn_subtitles,
+            fps=fps,
+        )
+
+    def dispatch_series_job(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        *,
+        kernel_slug: Optional[str] = None,
+        gpu: bool = True,
+        wait: bool = True,
+        poll_interval: int = 6,
+        timeout_seconds: int = 3600,
+        skip_preview: bool = False,
+        compile_feature: bool = True,
+        render_workers: int = 2,
+        encoder_preference: str = "auto",
+        profile: str = "B5",
+        autotune: bool = True,
+        video_mode: Optional[str] = None,
+        burn_subtitles: Optional[bool] = None,
+        fps: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        from src.core.human_review import require_voice_approval
         from src.core.series_setup import require_series_setup
-        require_series_setup(project_slug)
-        ok, error = self.check_chapter_1_preview_approval(project_slug)
+
+        _ = skip_preview  # Never waives Gate G6.
+        proj_dir = get_project_dir(project_slug)
+        require_series_setup(project_slug, project_dir=proj_dir)
+        require_voice_approval(proj_dir)
+        ok, error = self.check_chapter_1_preview_approval(project_slug, skip_preview=False)
         if not ok:
-            raise ValueError(error)
-        raise RuntimeError("Dual-T4 series production is disabled pending G7 real cloud correctness and G8")
+            raise ValueError(error or "Chapter 1 human preview approval is required (G6)")
+        if not self._api:
+            raise RuntimeError("Kaggle API is not authenticated.")
+
+        norm_chapters = [str(c).strip() for c in chapters if str(c).strip()]
+        if not norm_chapters:
+            raise ValueError("No valid chapters specified for series cloud production")
+
+        kernel_slug = (
+            kernel_slug
+            or f"mr-{project_slug[:12]}-series-{int(time.time()) % 100000}".lower().replace("_", "-")
+        )[:45].rstrip("-")
+        staging_dir = Path(f"/tmp/kaggle_series_{project_slug}").resolve()
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        payload_tar = staging_dir / "payload.tar.gz"
+        self.package_series_payload(
+            project_slug,
+            norm_chapters,
+            payload_tar,
+            skip_preview=False,
+            profile=profile,
+        )
+
+        dataset_slug = f"mr-series-{self._series_payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
+        ds_staging = staging_dir / "dataset"
+        ds_staging.mkdir()
+        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
+        ds_ref = f"{self._username}/{dataset_slug}"
+        atomic_write_json(
+            ds_staging / "dataset-metadata.json",
+            {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
+        )
+        self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
+
+        ready = False
+        started = time.monotonic()
+        while time.monotonic() - started < 600:
+            time.sleep(5)
+            try:
+                status = self._api.dataset_status(ds_ref)
+            except Exception as err:
+                logger.info(f"Waiting for Kaggle series dataset propagation ({ds_ref}): {err}")
+                continue
+            status = getattr(status, "status", status)
+            if isinstance(status, dict):
+                status = status.get("status", "")
+            if str(status).strip().lower().split(".")[-1] == "ready":
+                try:
+                    entries = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
+                    if any(entry.name == "payload.tar.gz" for entry in entries) or entries:
+                        ready = True
+                        break
+                except Exception:
+                    pass
+            if str(status).strip().lower() in {"error", "failed"}:
+                raise RuntimeError(f"Kaggle series payload dataset failed: {status}")
+        if not ready:
+            raise TimeoutError("Kaggle series payload dataset did not become ready; kernel not launched")
+
+        worker_py = staging_dir / "worker.py"
+        worker_code = self.generate_series_worker_script(
+            project_slug=project_slug,
+            chapters=norm_chapters,
+            render_workers=render_workers,
+            encoder_preference=encoder_preference,
+            compile_feature=compile_feature,
+            profile=profile,
+            autotune=autotune,
+            video_mode=video_mode,
+            burn_subtitles=burn_subtitles,
+            fps=fps,
+        )
+        worker_py.write_text(worker_code, encoding="utf-8")
+
+        metadata = {
+            "id": f"{self._username}/{kernel_slug}",
+            "title": kernel_slug,
+            "code_file": "worker.py",
+            "language": "python",
+            "kernel_type": "script",
+            "is_private": True,
+            "enable_gpu": gpu,
+            "enable_tpu": False,
+            "enable_internet": True,
+            "machine_shape": "NvidiaTeslaT4" if gpu else "None",
+            "dataset_sources": [ds_ref],
+            "competition_sources": [],
+            "kernel_sources": [],
+            "model_sources": [],
+        }
+        (staging_dir / "kernel-metadata.json").write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8"
+        )
+
+        push_res = self._api.kernels_push(str(staging_dir))
+        assigned_ref = getattr(push_res, "ref", None)
+        target_kernel_ref = (
+            assigned_ref.replace("/code/", "").strip()
+            if assigned_ref
+            else f"{self._username}/{kernel_slug}"
+        )
+
+        if not wait:
+            return {
+                "status": "dispatched",
+                "kernel_ref": target_kernel_ref,
+                "staging_dir": str(staging_dir),
+                "job_type": "produce_series",
+                "chapters": norm_chapters,
+                "payload_manifest_sha256": self._series_payload_manifest_hash,
+            }
+
+        t0 = time.time()
+        last_status = "QUEUED"
+        completed_cleanly = False
+        while time.time() - t0 < timeout_seconds:
+            time.sleep(poll_interval)
+            status_obj = self._api.kernels_status(target_kernel_ref)
+            current_status = getattr(status_obj, "status", str(status_obj))
+            if isinstance(current_status, dict):
+                current_status = current_status.get("status", "UNKNOWN")
+            if current_status != last_status:
+                logger.info(f"Kaggle Series Status [{int(time.time() - t0)}s]: {current_status}")
+                last_status = current_status
+            norm = str(current_status).strip().upper().split(".")[-1]
+            if norm in {"COMPLETE", "COMPLETED"}:
+                completed_cleanly = True
+                break
+            if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR")):
+                fail_msg = getattr(status_obj, "failureMessage", "Unknown cloud error")
+                raise RuntimeError(f"Kaggle Dual-T4 series job failed: {fail_msg}")
+
+        if not completed_cleanly:
+            raise TimeoutError(
+                f"Kaggle Dual-T4 series job '{target_kernel_ref}' timed out after {timeout_seconds}s "
+                f"with status '{last_status}'. Output download aborted."
+            )
+
+        output_dir = Path(f"/tmp/kaggle_series_out_{project_slug}").resolve()
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self._api.kernels_output(target_kernel_ref, str(output_dir))
+        return self.sync_series_results(project_slug, norm_chapters, output_dir)
 
     def produce_series_job(self, project_slug, chapters, **kwargs):
         return self.dispatch_series_job(project_slug, chapters, **kwargs)
 
-    def sync_series_results(self, *args, **kwargs):
-        raise RuntimeError("Dual-T4 series synchronization is disabled pending G7 and G8")
+    def sync_series_results(
+        self,
+        project_slug: str,
+        chapters: List[str],
+        downloaded_dir: Union[str, Path],
+    ) -> Dict[str, Any]:
+        from src.cloud.series_payload import sync_series_results
+
+        root = Path(downloaded_dir)
+        if (root / "results").is_dir():
+            root = root / "results"
+        return sync_series_results(
+            get_project_dir(project_slug),
+            chapters,
+            root,
+            getattr(self, "_series_payload_manifest_hash", None),
+            getattr(self, "_series_dispatch_input_hashes", None),
+        )
