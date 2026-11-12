@@ -58,8 +58,8 @@ def handle_render(args: argparse.Namespace):
         if (project_dir / "release_state.json").is_file():
             from src.core.contracts import ReleaseState
             from src.core.state_machine import advance_release_state, load_release_record
-            rec = load_release_record(project_dir, chapter_number=chapter_num)
-            if rec.state == ReleaseState.HUMAN_APPROVED:
+            rec = load_release_record(project_dir)
+            if rec.chapter_number == chapter_num and rec.state == ReleaseState.HUMAN_APPROVED:
                 advance_release_state(project_dir, ReleaseState.PRODUCTION_READY, chapter_number=chapter_num)
         staged = stage_chapter_export(slug, chapter_num, result["video_path"], result["subtitle_path"])
         result["export_paths"] = {key: str(value) if value else None for key, value in staged.items()}

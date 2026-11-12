@@ -673,6 +673,35 @@ class TestCanonicalStateMachineL2AndBypasses:
         assert load_chapter_metadata(chapter).human_review_status == HumanReviewStatus.APPROVED
         assert load_release_record(root).state == ReleaseState.PRODUCTION_READY
 
+    def test_render_cmd_chapter2_after_chapter1_approval_and_final(self, project_l2):
+        root, chapter = project_l2
+        preview_res = render_chapter(root, "1", quality="preview")
+        approve_preview(
+            root,
+            "qa_human",
+            review_fingerprint(root),
+            fingerprint(preview_res["video_path"]),
+        )
+        res_ch1 = handle_render(argparse.Namespace(project="sm_proj", chapter="1", quality="final"))
+        assert Path(res_ch1["video_path"]).is_file()
+        assert load_release_record(root).state == ReleaseState.PRODUCTION_READY
+
+        # Prepare chapter 2 and render final via handle_render -> must not crash on chapter_number="1" release_state.json
+        chap2 = init_chapter_layout("sm_proj", "2")
+        shutil.copytree(chapter / "panels", chap2 / "panels", dirs_exist_ok=True)
+        shutil.copytree(chapter / "audio", chap2 / "audio", dirs_exist_ok=True)
+        for name in ("manifest.json", "script.json"):
+            data = read_json(chapter / name)
+            data["chapter_number"] = "2"
+            atomic_write_json(chap2 / name, data)
+
+        res_ch2 = handle_render(argparse.Namespace(project="sm_proj", chapter="2", quality="final"))
+        assert Path(res_ch2["video_path"]).is_file()
+        assert load_chapter_metadata(chap2).human_review_status == HumanReviewStatus.UNREVIEWED
+        rec = load_release_record(root)
+        assert rec.chapter_number == "1"
+        assert rec.state == ReleaseState.PRODUCTION_READY
+
     def test_compile_cmd_rejects_v3_preview_approval_and_accepts_human_approval(self, project_l2, tmp_path):
         root, chapter = project_l2
         preview_res = render_chapter(root, "1", quality="preview")
