@@ -266,6 +266,7 @@ def _build_bootstrap_header_lines() -> List[str]:
         "import os, sys, json, hashlib, tarfile, shutil, subprocess, time",
         "from pathlib import Path",
         "sys.dont_write_bytecode = True",
+        "os.environ['PYTHONDONTWRITEBYTECODE'] = '1'",
         "_KAGGLE_RUNTIME = '/tmp/mr_runtime'",
         "if os.path.isdir(_KAGGLE_RUNTIME) and _KAGGLE_RUNTIME not in sys.path:",
         "    sys.path.insert(0, _KAGGLE_RUNTIME)",
@@ -282,6 +283,7 @@ def _build_bootstrap_main_lines(payload_manifest_hash: str) -> List[str]:
     """
     return [
         "_boot_t0 = time.monotonic()",
+        "os.environ['PYTHONDONTWRITEBYTECODE'] = '1'",
         "working_dir = Path('/kaggle/working')",
         "os.environ.setdefault('HF_HOME', '/tmp/mr_hf_cache')",
         "os.environ.setdefault('TORCH_HOME', '/tmp/mr_torch_cache')",
@@ -452,6 +454,7 @@ def generate_benchmark_worker_script(
     job_lines = [
         "cmd = [",
         "    sys.executable,",
+        "    '-B',",
         "    str(root / 'scripts' / 'benchmark' / 'run_dual_t4_matrix.py'),",
         "    '--in-container',",
         "    '--runtime-root', str(root),",

@@ -6,7 +6,9 @@ Deterministic unit & integration tests for P9 Dual-T4 Benchmark Matrix Harness (
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tarfile
 import threading
@@ -314,6 +316,8 @@ def test_p9_dispatch_packages_one_session_verifies_sha256_and_separates_queue_up
         warmup=True,
     )
     assert worker_code.index("Payload hash mismatch") < worker_code.index("pip")
+    assert "'PYTHONDONTWRITEBYTECODE'" in worker_code
+    assert "'-B'" in worker_code
     assert "'--in-container'" in worker_code
     assert "'--warmup'" in worker_code
     assert "'B0,B3,B5'" in worker_code
@@ -766,3 +770,56 @@ def test_p9_orchestrator_defers_ineligible_render_stealer_without_reenqueue(tmp_
     assert not any(tname.startswith("P8-Stealer") for tname, _ in put_log_b1)
     sentinel_indices_b1 = [idx for idx, (_, it) in enumerate(put_log_b1) if it is None]
     assert len(sentinel_indices_b1) == 2
+
+
+def test_p9_in_container_subprocess_writes_no_pyc_before_manifest_check(tmp_path, monkeypatch):
+    """
+    Regression test (#146/#148):
+    Launching `run_dual_t4_matrix.py --in-container` via `subprocess.run([sys.executable, '-B', ...])`
+    WITHOUT pre-populating `PYTHONDONTWRITEBYTECODE` must NOT write `__pycache__/*.pyc`
+    into `rt_root`, so `verify_series_payload_manifest` passes cleanly.
+    """
+    proj_dir = _install_multi_chapter_p9_fixture(tmp_path, monkeypatch, approve_ch1=True)
+    tar_path = tmp_path / "bench_pyc.tar.gz"
+    out_tar, digest = package_series_payload(
+        proj_dir,
+        ["1", "2", "3"],
+        tar_path,
+        job_type="benchmark_matrix",
+        include_benchmark_harness=True,
+    )
+    rt_root = tmp_path / "rt_pyc_clean"
+    with tarfile.open(out_tar) as tf:
+        tf.extractall(rt_root, filter="data")
+
+    clean_env = dict(os.environ)
+    clean_env.pop("PYTHONDONTWRITEBYTECODE", None)
+    clean_env["PYTHONPATH"] = str(rt_root)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(rt_root / "scripts" / "benchmark" / "run_dual_t4_matrix.py"),
+            "--in-container",
+            "--runtime-root",
+            str(rt_root),
+            "--manifest-hash",
+            digest,
+            "--output-dir",
+            str(tmp_path / "ic_pyc_out"),
+        ],
+        cwd=str(rt_root),
+        env=clean_env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert "Series payload inventory differs from manifest" not in proc.stderr
+    assert "requires real NVIDIA GPU" in proc.stderr or proc.returncode == 0
+    assert list(rt_root.rglob("*.pyc")) == []
+    assert list(rt_root.rglob("__pycache__")) == []
+    for lock_file in rt_root.rglob("*.lock"):
+        lock_file.unlink(missing_ok=True)
+    assert verify_series_payload_manifest(rt_root, digest)["project_slug"] == "p8_series"
