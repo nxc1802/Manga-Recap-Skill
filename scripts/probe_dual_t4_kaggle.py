@@ -805,9 +805,11 @@ def _extract_nvenc_log_lines(stderr: str) -> List[str]:
 
 def _worker_nvenc(gpu_id: int) -> Dict[str, Any]:
     inv = _collect_ffmpeg_inventory()
+    torch_vis = _collect_torch_summary()
     report: Dict[str, Any] = {
         "requested_gpu_id": gpu_id,
         "env_cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "visible_cuda_devices": torch_vis.get("devices", []),
         "ffmpeg_available": inv["ffmpeg_available"],
         "h264_nvenc_listed": bool(inv["encoders_checked"].get("h264_nvenc")),
         "crop_listed": bool(inv["filters_checked"].get("crop")),
@@ -1206,14 +1208,17 @@ def dispatch_kaggle_probe(
     candidates = list(out_dir.rglob("dual_t4_probe.json"))
     if not candidates:
         available_files = [p.relative_to(out_dir).as_posix() for p in out_dir.rglob("*") if p.is_file()]
+        logs = sorted(out_dir.rglob("*.log"))
+        log_tail = _redact_secrets(logs[0].read_text(errors="ignore")[-2500:]) if logs else ""
         raise FileNotFoundError(
-            f"Kaggle kernel '{target_ref}' completed but dual_t4_probe.json was not found. Files: {available_files}"
+            f"Kaggle kernel '{target_ref}' completed but dual_t4_probe.json was not found. "
+            f"Files: {available_files}. Log tail:\n{log_tail}"
         )
 
     probe_data = json.loads(candidates[0].read_text(encoding="utf-8"))
     probe_data["kaggle_dispatch"] = {
         "kernel_ref": target_ref,
-        "machine_shape": metadata["machine_shape"],
+        "requested_machine_shape": metadata["machine_shape"],
         "enable_gpu": bool(enable_gpu),
         "elapsed_seconds": round(time.monotonic() - t0, 2),
     }
