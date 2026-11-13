@@ -1,0 +1,131 @@
+{
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "total_wall_clock_seconds": 626.069,
+  "sequential_estimate_seconds": 570.844,
+  "speedup_factor": 0.91,
+  "pipeline_overlap_seconds": 0.0,
+  "profile_id": "B4",
+  "gpu_0": {
+    "device_id": 0,
+    "device_name": "Tesla T4 GPU 0",
+    "assigned_task": "Elastic TTS + NVENC",
+    "peak_vram_mb": 3365.0,
+    "allocated_vram_mb": 0.0,
+    "total_active_seconds": 825.419,
+    "processed_items": 121,
+    "throughput_metric": 0.15,
+    "oom_events_count": 0
+  },
+  "gpu_1": {
+    "device_id": 1,
+    "device_name": "Tesla T4 GPU 1",
+    "assigned_task": "Elastic TTS + NVENC",
+    "peak_vram_mb": 2999.0,
+    "allocated_vram_mb": 0.0,
+    "total_active_seconds": 809.586,
+    "processed_items": 118,
+    "throughput_metric": 0.15,
+    "oom_events_count": 0
+  },
+  "per_chapter": {
+    "2": {
+      "chapter": "2",
+      "tts_duration_seconds": 53.306,
+      "render_duration_seconds": 220.876,
+      "segment_count": 37,
+      "video_frames_count": 9077,
+      "video_duration_seconds": 302.566667,
+      "tts_throughput_utt_per_sec": 0.69,
+      "render_fps": 41.1
+    },
+    "3": {
+      "chapter": "3",
+      "tts_duration_seconds": 9.729,
+      "render_duration_seconds": 286.933,
+      "segment_count": 34,
+      "video_frames_count": 8842,
+      "video_duration_seconds": 294.733333,
+      "tts_throughput_utt_per_sec": 3.49,
+      "render_fps": 30.82
+    }
+  },
+  "scheduler_transitions": [
+    {
+      "from_state": null,
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [
+        0
+      ],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "Pipeline idle/draining",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "DRAIN",
+      "to_state": "TTS_HEAVY",
+      "tts_gpu_ids": [
+        0,
+        1
+      ],
+      "render_gpu_ids": [],
+      "unload_tts_on_gpus": [],
+      "reason": "TTS backlog active with empty render queue",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "TTS_HEAVY",
+      "to_state": "RENDER_HEAVY",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [
+        0,
+        1
+      ],
+      "reason": "TTS queue empty while render shots/chapters wait for GPU encoding",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "RENDER_HEAVY",
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "All TTS/upstream chapters complete; draining tail render/validation work",
+      "pending_tts": 0,
+      "pending_render": 2
+    }
+  ],
+  "frozen_profile": null,
+  "stage_breakdown": {
+    "model_init_sec": 37.0965,
+    "tts_infer_sec": 22.6577,
+    "audio_norm_sec": 100.9739,
+    "render_sec": 393.5723,
+    "mux_sec": 8.7936,
+    "validation_sec": 132.7802
+  },
+  "gpu_util_avg": {
+    "0": 4.63,
+    "1": 3.97
+  },
+  "cpu_util_avg": 79.54,
+  "disk_throughput_mb_s": 0.682,
+  "all_valid": true,
+  "completed_at": "2026-11-12T09:22:15.556761+00:00"
+}

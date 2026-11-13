@@ -1,0 +1,133 @@
+{
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "total_wall_clock_seconds": 634.072,
+  "sequential_estimate_seconds": 586.805,
+  "speedup_factor": 0.93,
+  "pipeline_overlap_seconds": 0.0,
+  "profile_id": "B5",
+  "gpu_0": {
+    "device_id": 0,
+    "device_name": "Tesla T4 GPU 0",
+    "assigned_task": "Elastic TTS + NVENC",
+    "peak_vram_mb": 1697.0,
+    "allocated_vram_mb": 0.0,
+    "total_active_seconds": 807.139,
+    "processed_items": 122,
+    "throughput_metric": 0.15,
+    "oom_events_count": 0
+  },
+  "gpu_1": {
+    "device_id": 1,
+    "device_name": "Tesla T4 GPU 1",
+    "assigned_task": "Elastic TTS + NVENC",
+    "peak_vram_mb": 1757.0,
+    "allocated_vram_mb": 0.0,
+    "total_active_seconds": 795.122,
+    "processed_items": 117,
+    "throughput_metric": 0.15,
+    "oom_events_count": 0
+  },
+  "per_chapter": {
+    "2": {
+      "chapter": "2",
+      "tts_duration_seconds": 59.722,
+      "render_duration_seconds": 224.485,
+      "segment_count": 37,
+      "video_frames_count": 9029,
+      "video_duration_seconds": 300.966667,
+      "tts_throughput_utt_per_sec": 0.62,
+      "render_fps": 40.22
+    },
+    "3": {
+      "chapter": "3",
+      "tts_duration_seconds": 11.813,
+      "render_duration_seconds": 290.784,
+      "segment_count": 34,
+      "video_frames_count": 8806,
+      "video_duration_seconds": 293.533333,
+      "tts_throughput_utt_per_sec": 2.88,
+      "render_fps": 30.28
+    }
+  },
+  "scheduler_transitions": [
+    {
+      "from_state": null,
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [
+        0
+      ],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "Pipeline idle/draining",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "DRAIN",
+      "to_state": "TTS_HEAVY",
+      "tts_gpu_ids": [
+        0,
+        1
+      ],
+      "render_gpu_ids": [
+        1
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "TTS backlog active with empty render queue",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "TTS_HEAVY",
+      "to_state": "RENDER_HEAVY",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [
+        0,
+        1
+      ],
+      "reason": "TTS queue empty while render shots/chapters wait for GPU encoding",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "RENDER_HEAVY",
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0,
+        1
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "All TTS/upstream chapters complete; draining tail render/validation work",
+      "pending_tts": 0,
+      "pending_render": 2
+    }
+  ],
+  "frozen_profile": null,
+  "stage_breakdown": {
+    "model_init_sec": 32.6811,
+    "tts_infer_sec": 33.2044,
+    "audio_norm_sec": 98.1148,
+    "render_sec": 394.7358,
+    "mux_sec": 10.781,
+    "validation_sec": 132.7814
+  },
+  "gpu_util_avg": {
+    "0": 5.73,
+    "1": 5.04
+  },
+  "cpu_util_avg": 77.14,
+  "disk_throughput_mb_s": 0.672,
+  "all_valid": true,
+  "completed_at": "2026-11-12T09:32:51.556040+00:00"
+}

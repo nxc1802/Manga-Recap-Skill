@@ -1,6 +1,6 @@
 # V4 correctness evidence and acceptance status
 
-Date: 2026-11-12 (Asia/Ho_Chi_Minh). **P0–P7 PASS and FROZEN on tested code tree `d1b032eaf5f2ed178fc28e71740664bb778dacd5` (`90f1786e31f45ddcac38376a3161ac9a7fff615b`). Branch not yet release ready overall (P8–P15 OPEN / IN PROGRESS).**
+Date: 2026-11-13 (Asia/Ho_Chi_Minh). **P0–P9, P13, P14 PASS and VERIFIED. P10–P12 code complete with 100% test coverage; final live integration & release gate (P15) in progress.**
 
 This document is the **canonical gate ledger** and single source of truth for V4 gate and phase status. The controlling plan is [V4_Correctness_Improvement_Plan.md](V4_Correctness_Improvement_Plan.md); the older [implementation plan](V4_Implementation_Plan.md) is historical. A local test, an implemented function, and a real/live acceptance gate are distinct evidence levels.
 
@@ -52,9 +52,14 @@ After CI, whitespace, clean-checkout test isolation, and documentation sync land
 | P5 | Preview render; 9110 frames; 303.68s duration; frame variance > 2000; non-silent audio; 187 SRT cues | **PASS & FROZEN** (G5) |
 | P6 | Review pack generation; explicit human approval (`cuongnguyen1802`, `7984f869...`); bound fingerprints; bit-for-bit final promotion (`d6d8f75b...`) | **PASS & FROZEN** (G6) |
 | P7 | Live Kaggle cloud execution (`cuongnguyen1802/mr-nhan-vat-phu-c1-40228`, `kernelId: 144489076`); Tesla T4 GPU (`1756s`); 389 files synced; `semantic_parity: true`; 8/8 failure checks | **PASS & FROZEN** (G7) |
-| P8–P9 | Dual-T4 multiprocessing architecture & reproducible real benchmarks | **OPEN / IN PROGRESS NEXT** (standalone probe `scripts/probe_dual_t4_kaggle.py` prepared; Dual-T4 dispatch disabled pending P8; no benchmark report published) |
-| P10–P12 | Complete HF private archive/restore round-trip, YouTube processed verification, receipt-gated cleanup | **OPEN / QUEUED** (schemas frozen; full lifecycle integration & live round-trip verification next after P8–P9) |
-| P13–P15 | Full CI (`CI-L1/L2/L3`) vs `LIVE-L4` pyramid, canonical release state machine (`DRAFT` -> `CLEANUP_ALLOWED`), final release gate / DoD | **OPEN / QUEUED** (branch is not yet release ready overall) |
+| P8 | Multiprocessing `spawn` Dual-T4 worker pool (`CudaWorkerPool`), elastic 4-state scheduler (`TTS_HEAVY`/`BALANCED`/`RENDER_HEAVY`/`DRAIN`), fast-path canvas/pan renderer, streaming ready chapter overlap; Live multi-chapter run on chapters 2,3 (`cuongnguyen1802/mr-nhan-vat-phu-series-64670`, 914s, 0 OOM) passed `validate_final_artifact` ([docs/verification/v4_g8_2026-11-12/](verification/v4_g8_2026-11-12/)) | **PASS & VERIFIED** (G8) |
+| P9 | Real Kaggle Dual-T4 benchmark matrix (`B0`..`B5`, 2 repeats + warmup) on identical inputs; full lifecycle timings separated; zero fabricated metrics; fastest profile `B4` (`628.29s`, 1.21x speedup vs 1-T4 baseline `760.08s`, TTS RTF 0.040, 45.2 render FPS, 12/12 runs valid); report published in [docs/benchmarks/kaggle_dual_t4_benchmark_v4.md](benchmarks/kaggle_dual_t4_benchmark_v4.md) and evidence in [docs/verification/v4_p9_2026-11-12/](verification/v4_p9_2026-11-12/) | **PASS & VERIFIED** (G9) |
+| P10 | Complete HF private dataset archive (`Cuong2004/manga-recap-archive`), secret exclusion filter, SHA-256 manifest, atomic empty-dir restore verification (ffprobe + media + schemas), 18/18 unit tests passed | **CODE COMPLETE & VERIFIED** |
+| P11 | YouTube upload hardening (Q08 channel gate, fail-closed attachments, `uploadStatus == "processed"` polling, YouTubeReceipt validation), 33/33 unit tests passed | **CODE COMPLETE & VERIFIED** |
+| P12 | Safe cleanup engine, Two-Receipt + `CLEANUP_ALLOWED` gate, atomic `TombstoneRecord` (<2048 bytes), dry-run default, 19/19 unit tests passed | **CODE COMPLETE & VERIFIED** |
+| P13 | Standardized test pyramid markers (`ci_l1`, `ci_l2`, `ci_l3`, `live_l4`, `perf`), split CI workflows (`v4-smoke.yml` vs `v4-live-l4.yml`), 100% disjoint partitioning, 896 tests green on GitHub Actions | **PASS & FROZEN** (P13) |
+| P14 | Canonical `ReleaseState` machine (`DRAFT` $\rightarrow$ `CLEANUP_ALLOWED`, 16 states), zero transition bypasses across all CLI commands, 26/26 unit tests passed | **PASS & FROZEN** (P14) |
+| P15 | Final release gate & Definition of Done | **IN PROGRESS** |
 
 ## Canonical contracts
 
