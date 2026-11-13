@@ -1,0 +1,18 @@
+{
+  "status": "success",
+  "command": "archive",
+  "exit_code": 0,
+  "data": {
+    "status": "success",
+    "restored": true,
+    "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+    "repo_id": "Cuong2004/manga-recap-archive",
+    "revision": "5575202b5f2d28a2bbe2e61f684a5add8b5d83ee",
+    "target_dir": "/tmp/manga_recap_restore_verify",
+    "files_validated": 1156,
+    "schemas_validated": 19,
+    "media_headers_validated": 1129
+  },
+  "error": null,
+  "duration_seconds": 84.5596
+}

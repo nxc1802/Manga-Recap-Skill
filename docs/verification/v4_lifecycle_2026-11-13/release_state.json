@@ -1,0 +1,30 @@
+{
+  "schema_version": "4.1.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapter_number": "1",
+  "state": "CLEANUP_ALLOWED",
+  "evidence_hashes": {
+    "setup_snapshot_hash": "89391b5d9caf937da1d13ba2373eb4e6a6ceaaa83355b87f3bd365ab1182c31d",
+    "manifest_sha256": "b6660da236e0aa9fdd84e06557ac60dc245d746ec20165db4010d2d2bf332de9",
+    "panel_hashes_digest": "2067c0730098cd14c6ad7bf73aa5e2f6c1d500f717e362c258c0e7fca50ccd36",
+    "script_sha256": "022955d29885ee3d4a472c129b83611489cac1e6bd66770cb0d62eef4f9b2b95",
+    "audio_manifest_sha256": "493c0686bfdda4cd4f8625a04bc65b49d89cadd0bd2978494f5ea375619fff3c",
+    "visual_plan_input_fingerprint": "be1af2a4d90bb39676388045d2f83bc1003cb67d4d77dad011ded35d409d9ec7",
+    "visual_plan_sha256": "d2dfd806ef6621df6cb3244faf7d5853b38a4a7e992f10dd1550c3ad657bccfd",
+    "video_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "subtitle_sha256": "bf6cb2ccfc8b338260b99db43eff9308dc18b233c4b7ee7ca57b381b8f286d50",
+    "artifact_validation_sha256": "29d7c26dd27e44b0f9f62fa9eb2bdcfad29100034cd178b78e5e3b560763ab05",
+    "preview_approval_sha256": "66176e40a4f484adb0171ba912bb6710dc33e499f11cb1156b583e59cf862468",
+    "approval_artifact_hash": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "approval_config_fingerprint": "7984f869b60c41cecdbc441489ff8fc1a69c2727ff7224dbc70bfc19d84eb5dc",
+    "final_video_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "youtube_receipt_sha256": "68d38fac6b5169674fa0c896cd9f0a1dc4187f3d6667a30d3f067086aadb59ef",
+    "youtube_video_id": "bGpDJ15um7Q",
+    "youtube_verified_receipt_sha256": "f9c3a83a7a0f43c0fbf63d7235e13cf6825cfbe3fda3cb3f91b3dd387d17d60b",
+    "archive_commit_sha": "5575202b5f2d28a2bbe2e61f684a5add8b5d83ee",
+    "archive_manifest_sha256": "a1b9c753b90eeda88fc94422ccca2ec50a953964960bcf90ef444433efb3d251",
+    "archive_verified_sha256": "7d5cc8400f12fd2eb69d1ba6a79dfe96b9643b75ce93667f6f30f055dcf0106f",
+    "archive_restore_verified_receipt_sha256": "04d44c653b275410f4872fbbc72c40959d2edb524e055986f50c634dfcfcf6e5",
+    "cleanup_gate_digest": "e1f9cd232466e7b585b99f69ec857c94ab5ee514358cf3dfb12ef08b9864c888"
+  }
+}

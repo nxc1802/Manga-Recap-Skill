@@ -6,17 +6,18 @@ VieNeu-TTS audio, VisualPlan rendering and artifact validation. Persistence is
 local JSON/Markdown under `data/projects/`. The core has no cloud LLM/TTS API or
 database dependency. Kaggle can run the same neural/media runtime on a remote GPU.
 
-**V4 P0–P9, P13, and P14 are PASS and VERIFIED on branch `feat/v4-strict-form-motion-cloud-archive`. P10–P12 lifecycle engines are code-complete with 100% test coverage; final release gate (P15) in progress.**
+**V4 P0–P15 ALL PHASES ARE PASS, VERIFIED, AND RELEASE-READY on branch `feat/v4-strict-form-motion-cloud-archive`.**
 Exact-HEAD deterministic checks (`896 passed`, zero failures/skips across CI-L1, CI-L2, and CI-L3), GitHub Actions CI
-([PR #2 push run `43181189889`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43181189889)
-and [PR run `43181196058`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43181196058)),
+([PR #2 push run `43433807635`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43433807635)
+and [PR run `43433815849`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43433815849)),
 real Chapter 1 E2E verification (G0–G7: real VieNeu-TTS synthesis, canonical
 preview render, explicit human approval, bit-for-bit final promotion, live Kaggle
 Tesla T4 semantic parity, and 8/8 failure-path checks) recorded in
 [docs/verification/v4_e2e_2026-11-12/](docs/verification/v4_e2e_2026-11-12/README.md),
 live Kaggle Dual-T4 multi-chapter production (Gate G8, [docs/verification/v4_g8_2026-11-12/](docs/verification/v4_g8_2026-11-12/)),
-and real Kaggle Dual-T4 benchmark matrix (Gate G9, B0–B5 evaluated across 12 runs, [docs/benchmarks/kaggle_dual_t4_benchmark_v4.md](docs/benchmarks/kaggle_dual_t4_benchmark_v4.md)
-and [docs/verification/v4_p9_2026-11-12/](docs/verification/v4_p9_2026-11-12/README.md))
+real Kaggle Dual-T4 benchmark matrix (Gate G9, B0–B5 evaluated across 12 runs, [docs/benchmarks/kaggle_dual_t4_benchmark_v4.md](docs/benchmarks/kaggle_dual_t4_benchmark_v4.md)
+and [docs/verification/v4_p9_2026-11-12/](docs/verification/v4_p9_2026-11-12/README.md)),
+and complete lifecycle verification (P10–P15: YouTube upload & verified processed status, HF private dataset archive & round-trip restore, two-receipt safe cleanup with tombstone <2048 bytes, and release state machine `CLEANUP_ALLOWED` traversal, [docs/verification/v4_lifecycle_2026-11-13/](docs/verification/v4_lifecycle_2026-11-13/README.md))
 are fully verified. See the canonical [gate ledger](docs/V4_Correctness_Status.md) for detailed gate proofs.
 
 ## Branch contract
@@ -27,7 +28,7 @@ are fully verified. See the canonical [gate ledger](docs/V4_Correctness_Status.m
 | V4 deterministic baseline & CI (P0–P7) | Runtime Q01–Q10 checks, canonical contracts, shared Local/Cloud renderer, media validators, hash-bound approval and exact Chapter 1 promotion. Deterministic L1/L2 suite green (`794 passed` at `90f1786`); GitHub Actions CI (`43083930743`, `43083921539`) PASS. |
 | V4 P0–P7 live-verified & FROZEN | Exact-HEAD Chapter 1 E2E closed **G0–G7 PASS** on tested code tree `d1b032ea...` (`90f1786`; [v4_e2e_2026-11-12](docs/verification/v4_e2e_2026-11-12/README.md)): VieNeu-TTS v3 Turbo (`"Ngọc Huyền"`, 37 clips, `303.68s`), preview render (`9110` frames, `187` SRT cues), human approval (`cuongnguyen1802`), bit-for-bit final promotion (`d6d8f75b...`), live Kaggle T4 run (`cuongnguyen1802/mr-nhan-vat-phu-c1-40228`, `1756s`, `389` files synced, `semantic_parity: true`), and `8/8` failure-path checks. |
 | V4 Dual-T4 & Benchmarks (P8–P9) | Multi-chapter Dual-T4 production verified (**Gate G8 PASS**, [docs/verification/v4_g8_2026-11-12/](docs/verification/v4_g8_2026-11-12/)) and empirical B0–B5 benchmark matrix verified (**Gate G9 PASS**, [docs/benchmarks/kaggle_dual_t4_benchmark_v4.md](docs/benchmarks/kaggle_dual_t4_benchmark_v4.md)). |
-| V4 Lifecycle & Architecture (P10–P14) | HF private archive/restore (P10), YouTube upload & verification (P11), safe receipt-gated cleanup (P12), test pyramid L1/L2/L3 split with 896 tests passing on GitHub Actions (P13), and canonical ReleaseState machine with zero bypasses (P14) are code-complete and verified. Final release gate (P15) in progress. |
+| V4 Lifecycle & Architecture (P10–P15) | HF private archive/restore (P10), YouTube upload & verification (P11), safe receipt-gated cleanup (P12), test pyramid L1/L2/L3 split with 896 tests passing on GitHub Actions (P13), and canonical ReleaseState machine with zero bypasses (P14) are 100% verified live. Final release gate (P15) **PASS & VERIFIED**. |
 
 ## Correctness rules
 

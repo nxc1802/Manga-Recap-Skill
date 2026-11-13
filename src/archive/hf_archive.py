@@ -198,7 +198,7 @@ def resolve_hf_token(token: Optional[str] = None) -> str:
 def get_hf_api(token: Optional[str] = None) -> HfApi:
     """Returns an authenticated HfApi client."""
     resolved_token = resolve_hf_token(token)
-    return HfApi(token=resolved_token)
+    return HfApi(token=resolved_token or None)
 
 
 def ensure_archive_repo(api: HfApi, repo_id: str = DEFAULT_HF_REPO_ID) -> str:
@@ -851,13 +851,14 @@ def _validate_restored_media(f_path: Path, rel: Path, stage_dir: Path) -> float:
                 require_audio=True,
             )
         else:
+            require_audio = False if f_path.name.startswith("visual") else ((a_stream is not None) if is_clip else True)
             rep = validate_video(
                 f_path,
                 width=width,
                 height=height,
                 expected_duration=duration,
                 fps=fps,
-                require_audio=(a_stream is not None) if is_clip else True,
+                require_audio=require_audio,
             )
         return float(rep["duration"])
 
