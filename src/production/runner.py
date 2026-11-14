@@ -122,17 +122,10 @@ class SingleSessionProductionRunner:
 
     @staticmethod
     def _is_valid_wav_clip(path: Path) -> bool:
-        """Strictly validates that a WAV file exists, has valid RIFF/WAVE header, and audio frames."""
-        if not path.exists() or path.stat().st_size <= 44:
-            return False
         try:
-            with open(path, "rb") as f:
-                header = f.read(12)
-                if len(header) < 12 or header[:4] != b"RIFF" or header[8:12] != b"WAVE":
-                    return False
-            import wave
-            with wave.open(str(path), "rb") as wf:
-                return wf.getnframes() > 0 and wf.getframerate() > 0 and wf.getnchannels() > 0
+            from src.render.artifact_validation import validate_audio
+            validate_audio(path)
+            return True
         except Exception:
             return False
 
@@ -178,7 +171,7 @@ class SingleSessionProductionRunner:
             except Exception:
                 return False
 
-        return True
+        return False
 
     def _is_chapter_audio_complete(self, chapter_num: Union[str, int]) -> bool:
         """Checks if all segments in script.json already have valid audio clips on disk matching checksums."""
@@ -221,34 +214,12 @@ class SingleSessionProductionRunner:
             return False
 
     def _is_chapter_render_complete(self, chapter_num: Union[str, int]) -> bool:
-        """Checks if final MP4 video already exists and chapter status is completed."""
-        chap_dir = get_chapter_dir(self.manifest.project_slug, str(chapter_num))
-        if not chap_dir.exists():
-            fallback = self.project_dir / "chapters" / str(chapter_num)
-            if fallback.exists():
-                chap_dir = fallback
-            else:
-                return False
-
-        # Fix S1.3: Checkpoint must verify completion status with valid metadata
-        chap_meta_file = chap_dir / "chapter.json"
-        if not chap_meta_file.exists():
-            return False
         try:
-            chap_meta = load_chapter_metadata(chap_dir)
-            if (
-                chap_meta.technical_status != CheckpointStatus.COMPLETED
-                and chap_meta.overall_status != CheckpointStatus.COMPLETED
-            ):
-                return False
+            from src.render.chapter_renderer import validate_existing_chapter
+            validate_existing_chapter(get_project_dir(self.manifest.project_slug), chapter_num)
+            return True
         except Exception:
             return False
-
-        final_mp4 = chap_dir / "video" / "final.mp4"
-        if self._is_valid_mp4_video(final_mp4):
-            return True
-        staged_mp4 = get_output_dir(self.manifest.project_slug) / format_chapter_filename(chapter_num)
-        return bool(self._is_valid_mp4_video(staged_mp4))
 
     def run(self) -> ProductionJobManifest:
         """
@@ -258,11 +229,20 @@ class SingleSessionProductionRunner:
         Stage 3: Feature Compilation (Multi-Chapter Concatenation)
         Stage 4: Standalone Export Bundle & Telemetry Logging
         """
+        from src.core.series_setup import require_series_setup
+        from src.core.human_review import require_preview_approval
+        project = get_project_dir(self.manifest.config.project_slug)
+        require_series_setup(self.manifest.config.project_slug, project_dir=project)
+        require_preview_approval(project)
+        if self.manifest.config.tts_engine != "neural":
+            raise ValueError("Production requires real neural TTS")
         wall_start_time = time.monotonic()
         cfg = self.manifest.config
 
         # Check if already completed and not force
         if self.manifest.status == ProductionStageStatus.COMPLETED and not cfg.force:
+            if not all(self._is_chapter_render_complete(number) for number in cfg.target_chapters):
+                raise ValueError("Cached production manifest has stale or invalid artifacts")
             logger.info("Production job already marked as COMPLETED. Returning cached manifest.")
             return self.manifest
 
@@ -422,16 +402,31 @@ class SingleSessionProductionRunner:
                     render_res = handle_render(render_args)
                     c_prog.render_status = ProductionStageStatus.COMPLETED
                     c_prog.render_duration_seconds = round(time.monotonic() - t_ch_render, 3)
-                    c_prog.cached_clips_count = render_res.get("cached_clips_count", 0)
-                    c_prog.rendered_clips_count = render_res.get("rendered_clips_count", 0)
+                    export_paths = render_res.get("export_paths") or {}
+                    validation = render_res.get("validation") or {}
+                    c_prog.cached_clips_count = int(render_res.get("cached_shots_count", 0) or 0)
+                    c_prog.rendered_clips_count = int(
+                        render_res.get("rendered_shots_count")
+                        or render_res.get("shot_count")
+                        or (1 if render_res.get("video_path") else 0)
+                    )
                     c_prog.video_path = render_res.get("video_path")
                     c_prog.subtitle_path = render_res.get("subtitle_path")
-                    c_prog.export_video_path = render_res.get("export_video_path")
-                    c_prog.export_subtitle_path = render_res.get("export_subtitle_path")
+                    c_prog.export_video_path = (
+                        export_paths.get("video_padded")
+                        or export_paths.get("video")
+                        or c_prog.video_path
+                    )
+                    c_prog.export_subtitle_path = (
+                        export_paths.get("subtitle_padded")
+                        or export_paths.get("subtitle")
+                        or c_prog.subtitle_path
+                    )
                     c_prog.error = None
+                    frames = (validation.get("video") or {}).get("frames", 0)
                     logger.info(
                         f"[Render] Chapter {chap_num} rendered in {c_prog.render_duration_seconds:.2f}s "
-                        f"(rendered: {c_prog.rendered_clips_count}, cached: {c_prog.cached_clips_count})"
+                        f"(duration: {render_res.get('duration_seconds', 0)}s, frames: {frames})"
                     )
                 except Exception as e:
                     c_prog.render_status = ProductionStageStatus.FAILED

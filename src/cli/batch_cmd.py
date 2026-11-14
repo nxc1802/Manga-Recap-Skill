@@ -29,7 +29,6 @@ from src.core.storage import (
     get_project_dir,
     load_chapter_metadata,
     read_json,
-    safe_cleanup_chapter_intermediates,
     stage_chapter_export,
     update_checkpoint,
 )
@@ -104,19 +103,25 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
       allowing subsequent chapters to proceed without crashing the process.
     - Single-Chapter Retry: --retry-chapter resumes only specified chapter.
     """
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("batch", args)
     project_slug = getattr(args, "project", "")
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required for batch processing.")
 
     project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
+    fallback_dir = get_project_data_dir(project_slug)
+    eff_dir = project_dir if project_dir.exists() else (fallback_dir if fallback_dir.exists() else project_dir)
+
+    # Strict Form Gate
+    from src.core.series_setup import require_series_setup
+    require_series_setup(project_slug, project_dir=eff_dir)
+
+    if not eff_dir.exists():
+        raise StorageFileNotFoundError(
+            f"Project '{project_slug}' directory not found at {eff_dir}"
+        )
+    project_dir = eff_dir
 
     proj_json_path = project_dir / "project.json"
     if not proj_json_path.exists():
@@ -162,7 +167,11 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
     force = getattr(args, "force", False)
     skip_preview = getattr(args, "skip_preview", True)
     allow_placeholders = getattr(args, "allow_placeholders", False)
-    cleanup = getattr(args, "cleanup", False)
+    if getattr(args, "cleanup", False):
+        raise CliValidationError(
+            "batch --cleanup bypasses the Two-Receipt Safe Cleanup Gate and is disabled. "
+            "Run 'manga-recap clean --no-dry-run --confirm-project <slug>' after archive and YouTube verification."
+        )
     output_dir = get_output_dir(project_slug)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -190,6 +199,8 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 with contextlib.suppress(Exception):
                     meta = load_chapter_metadata(chap_dir)
                     if meta.overall_status == CheckpointStatus.COMPLETED:
+                        from src.render.chapter_renderer import validate_existing_chapter
+                        validate_existing_chapter(project_dir, chap_num)
                         cached_chaps.append(str(chap_num))
                         vid_path = chap_dir / "video" / f"chapter_{chap_num}_final.mp4"
                         if not vid_path.exists():
@@ -213,6 +224,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                         continue
 
         # 2. Sequential Chapter Pipeline with Error Isolation
+        active_stage: Optional[StageType] = None
         try:
             logger.info(f"--- [Batch] Starting Chapter {chap_num} ({project_slug}) ---")
 
@@ -223,27 +235,22 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
             if not script_path.exists():
                 raise StorageFileNotFoundError(f"script.json not found in chapter directory: {chap_dir}")
 
-            # Operational Stage 1: Ingest
-            c_meta = load_chapter_metadata(chap_dir)
-            ing_cp = c_meta.stages.get(StageType.INGEST)
-            if not ing_cp or ing_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(chap_dir, StageType.INGEST, CheckpointStatus.RUNNING)
-                update_checkpoint(chap_dir, StageType.INGEST, CheckpointStatus.COMPLETED)
-
-            # Operational Stage 2: Agent (Validate script.json)
+            # Read-only preflight validation of manifest, panels, and script.json
+            active_stage = StageType.AGENT
             val_args = argparse.Namespace(project=project_slug, chapter=chap_num, strict=False)
             val_res = handle_validate(val_args)
             if not val_res.get("valid", True) and val_res.get("errors"):
                 err_msg = "; ".join(f"{e.get('target')}: {e.get('message')}" for e in val_res["errors"])
                 raise CliValidationError(f"Script validation failed: {err_msg}")
-            c_meta = load_chapter_metadata(chap_dir)
-            agent_cp = c_meta.stages.get(StageType.AGENT)
-            if not agent_cp or agent_cp.status != CheckpointStatus.COMPLETED:
-                update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.RUNNING)
-                update_checkpoint(chap_dir, StageType.AGENT, CheckpointStatus.COMPLETED, artifacts=["script.json"])
 
-            if getattr(args, "kaggle", False):
+            if getattr(args, "kaggle", False) and str(chap_num) == "1":
+                # Full-series production promotes the reviewed chapter-one file;
+                # it must never replace that review with a newly generated preview.
+                active_stage = StageType.RENDER
+                render_res = handle_render(argparse.Namespace(project=project_slug, chapter="1", quality="final"))
+            elif getattr(args, "kaggle", False):
                 logger.info(f"[Batch] Offloading Chapter {chap_num} to Kaggle Cloud GPU (TTS + Hardware NVENC)...")
+                active_stage = StageType.RENDER
                 from src.cloud.kaggle_service import KaggleCloudService
                 service = KaggleCloudService()
                 if not service.is_authenticated:
@@ -261,6 +268,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 }
             else:
                 # Operational Stage 3: Audio (VieNeu-TTS)
+                active_stage = StageType.AUDIO
                 tts_args = argparse.Namespace(
                     project=project_slug,
                     chapter=chap_num,
@@ -277,6 +285,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     update_checkpoint(chap_dir, StageType.AUDIO, CheckpointStatus.COMPLETED)
 
                 # Operational Stage 4: Render (Final 1080p, skip_preview=True)
+                active_stage = StageType.RENDER
                 render_args = argparse.Namespace(
                     project=project_slug,
                     chapter=chap_num,
@@ -286,15 +295,14 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                     hw_accel=getattr(args, "hw_accel", None),
                     workers=getattr(args, "render_workers", getattr(args, "workers", None)),
                     bgm=getattr(args, "bgm", None),
-                    burn_subtitles=getattr(args, "burn_subtitles", True),
-                    animation=getattr(args, "animation", True),
-                    video_mode=getattr(args, "video_mode", "auto"),
+                    burn_subtitles=getattr(args, "burn_subtitles", None),
+                    animation=getattr(args, "animation", None),
+                    video_mode=getattr(args, "video_mode", None),
                     force=force,
                     skip_preview=skip_preview,
                     approved=True,
                     allow_placeholders=allow_placeholders,
                     keep_temp=getattr(args, "keep_temp", None),
-                    cleanup=cleanup,
                     subtitle_lines=getattr(args, "subtitle_lines", None),
                     subtitle_font_size=getattr(args, "subtitle_font_size", None),
                     subtitle_chunking=getattr(args, "subtitle_chunking", None),
@@ -302,6 +310,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 render_res = handle_render(render_args)
 
             # Operational Stage 5: Export (Stage MP4 and SRT to output/)
+            active_stage = StageType.EXPORT
             src_video = Path(render_res["video_path"]) if render_res.get("video_path") else (chap_dir / "video" / f"chapter_{chap_num}_final.mp4")
             src_srt = Path(render_res["subtitle_path"]) if render_res.get("subtitle_path") else (chap_dir / "subtitles" / f"chapter_{chap_num}.srt")
 
@@ -312,9 +321,6 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 subtitle_path=src_srt,
             )
             dest_video = staged.get("video_padded") or staged.get("video") or (output_dir / f"chapter_{chap_num}.mp4")
-
-            if cleanup and src_video.exists():
-                safe_cleanup_chapter_intermediates(chap_dir, output_video_path=src_video)
 
             c_meta = load_chapter_metadata(chap_dir)
             exp_cp = c_meta.stages.get(StageType.EXPORT)
@@ -337,13 +343,13 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
 
         except Exception as chap_err:
             logger.error(f"[Batch] Chapter {chap_num} execution failed: {chap_err}")
-            # Isolate failure: mark chapter checkpoint as FAILED
+            # Isolate failure: mark active chapter checkpoint as FAILED
             if chap_dir.exists() and (chap_dir / "chapter.json").exists():
                 with contextlib.suppress(Exception):
                     c_meta = load_chapter_metadata(chap_dir)
-                    target_stg = StageType.RENDER
+                    target_stg = active_stage or c_meta.current_stage
                     stg_cp = c_meta.stages.get(target_stg)
-                    if not stg_cp or stg_cp.status == CheckpointStatus.PENDING:
+                    if not stg_cp or stg_cp.status != CheckpointStatus.RUNNING:
                         update_checkpoint(chap_dir, target_stg, CheckpointStatus.RUNNING)
                     update_checkpoint(
                         chap_dir,
@@ -386,7 +392,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 logger.error(f"[Batch] Compilation failed: {comp_err}")
                 compile_result = {"error": str(comp_err)}
 
-    all_succeeded = len(failed_chaps) == 0
+    all_succeeded = len(failed_chaps) == 0 and not (compile_result and compile_result.get("error"))
     return {
         "success": all_succeeded,
         "project_slug": project_slug,

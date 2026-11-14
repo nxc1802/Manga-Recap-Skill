@@ -1,0 +1,818 @@
+{
+  "schema_version": "4.2.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "profile_id": "B2",
+  "encoder": "h264_nvenc",
+  "compiled_feature_video": null,
+  "all_valid": true,
+  "gpu_usage_evidence": {
+    "0": {
+      "tts_tasks": 6,
+      "tts_items": 36,
+      "render_shots": 86,
+      "oom_events": 0,
+      "crash_events": 0,
+      "peak_vram_mb": 1823.0,
+      "avg_gpu_util_pct": 5.07
+    },
+    "1": {
+      "tts_tasks": 5,
+      "tts_items": 35,
+      "render_shots": 82,
+      "oom_events": 0,
+      "crash_events": 0,
+      "peak_vram_mb": 1639.0,
+      "avg_gpu_util_pct": 4.54
+    }
+  },
+  "per_chapter": {
+    "2": {
+      "video_path": "/tmp/mr_work/bench-vcxjwdkz/runs/B2_r1/data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/2/video/final.mp4",
+      "subtitle_path": "/tmp/mr_work/bench-vcxjwdkz/runs/B2_r1/data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/2/subtitles/final.srt",
+      "validation": {
+        "valid": true,
+        "schema_version": "4.1.0",
+        "chapter_number": "2",
+        "video": {
+          "valid": true,
+          "duration": 298.88,
+          "frames": 8966,
+          "samples": [
+            {
+              "at": 0.1,
+              "variance": 5454.79480022192,
+              "mean": 118.794189453125
+            },
+            {
+              "at": 0.5,
+              "variance": 2443.6241769194603,
+              "mean": 107.990478515625
+            },
+            {
+              "at": 0.9,
+              "variance": 3422.7632138729095,
+              "mean": 174.96923828125
+            }
+          ],
+          "sha256": "203e89b0fa2167140cd155a7bcb44265812cf9efb790234aa7b58da99c5bfecb"
+        },
+        "subtitles": {
+          "valid": true,
+          "cue_count": 186,
+          "sha256": "a2aeea64ba40fa6bea0e8cb86f4bb1ce8beee227675a40fb791646b8da1bf423"
+        },
+        "audio": [
+          {
+            "valid": true,
+            "duration": 7.44,
+            "sample_count": 357120,
+            "sample_rate": 48000,
+            "rms": 0.11211221310599283,
+            "sha256": "1bc40033d777717688502c88d2ef9c3c4da63de8fc1324d3661a4a145e220b5e"
+          },
+          {
+            "valid": true,
+            "duration": 7.12,
+            "sample_count": 341760,
+            "sample_rate": 48000,
+            "rms": 0.10879205869458775,
+            "sha256": "552f9cb9fa0ed75b44e34d0a18e4d714a9a903f5f18f5d449ef59cbecf100983"
+          },
+          {
+            "valid": true,
+            "duration": 8.56,
+            "sample_count": 410880,
+            "sample_rate": 48000,
+            "rms": 0.11442761977662232,
+            "sha256": "56aae0a0ce16060fe6d443ada7e56ef9950e049eaf0b89111b17bc3859d16267"
+          },
+          {
+            "valid": true,
+            "duration": 7.28,
+            "sample_count": 349440,
+            "sample_rate": 48000,
+            "rms": 0.11365473756848722,
+            "sha256": "b2924bab0e4c027073737f0fb705cfc1be89fa180d9e7e2235d052cea35702d7"
+          },
+          {
+            "valid": true,
+            "duration": 8.32,
+            "sample_count": 399360,
+            "sample_rate": 48000,
+            "rms": 0.11369969754596276,
+            "sha256": "7823c4de9b19344c1887b8436238370788bd04b5ab3a22c07600af6eae0fee28"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.10924161138216541,
+            "sha256": "3e7780c3b050454c7c65c1217b0b6f022c7693bf47e6a1ef03a09cf7d43f953d"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.11611960900810486,
+            "sha256": "0c528b09155346f36bf22c9e9a81f224d5f6c69c556f8f163280ce87281b73fd"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.10622117796736927,
+            "sha256": "55d04f973b71a485e61db40d272487a93542fbdfb3444f0080efed34c07620a6"
+          },
+          {
+            "valid": true,
+            "duration": 7.36,
+            "sample_count": 353280,
+            "sample_rate": 48000,
+            "rms": 0.11523688742197277,
+            "sha256": "46fb5e9cf51b42ffa8e9556976683aba38ca9bdabd9fb7de9fa849ea90795d78"
+          },
+          {
+            "valid": true,
+            "duration": 8.56,
+            "sample_count": 410880,
+            "sample_rate": 48000,
+            "rms": 0.11539189027179451,
+            "sha256": "7d7dcdf182e949d2be4cb4343b0c3a999b8db173682f63fc3673a2b090c38787"
+          },
+          {
+            "valid": true,
+            "duration": 8.72,
+            "sample_count": 418560,
+            "sample_rate": 48000,
+            "rms": 0.11414029059770002,
+            "sha256": "71481470cc7fde635ee5c8f3db98bd27f240fd5f9baa893fbc20b8195cc3dd17"
+          },
+          {
+            "valid": true,
+            "duration": 8.0,
+            "sample_count": 384000,
+            "sample_rate": 48000,
+            "rms": 0.11400171831506559,
+            "sha256": "5ae49dcf7766a9ca7e7eb57745286f6cb19a6e49bd42302ffa33c8ff31e62b55"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.11219991805190789,
+            "sha256": "ece66c1236281578ee25ba72f6a99084b5448addc2d6a48830b8d66ca68317ec"
+          },
+          {
+            "valid": true,
+            "duration": 8.64,
+            "sample_count": 414720,
+            "sample_rate": 48000,
+            "rms": 0.11344733717544954,
+            "sha256": "0db15b16618478d46413f2e6ec6f1387b0e3a729d05e4092088bc7e9dedfa216"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.11304863503343981,
+            "sha256": "7a75e4c58733f64ddc2be537ca76427cbe25adbc5c3f5cba1d6792a28322d77c"
+          },
+          {
+            "valid": true,
+            "duration": 9.52,
+            "sample_count": 456960,
+            "sample_rate": 48000,
+            "rms": 0.11238338506572428,
+            "sha256": "9c066456f641c650861282a81378d8746839a6e03624eaad739b79f0c1133fc8"
+          },
+          {
+            "valid": true,
+            "duration": 6.8,
+            "sample_count": 326400,
+            "sample_rate": 48000,
+            "rms": 0.11126640221563759,
+            "sha256": "47e2e978ee8ef61b6d6827804703e2c927e49e0e9a15d5235c5cfb1dcbd8afb5"
+          },
+          {
+            "valid": true,
+            "duration": 7.76,
+            "sample_count": 372480,
+            "sample_rate": 48000,
+            "rms": 0.11331521832259539,
+            "sha256": "cfcdc6c0893ddccce1b4fc8ab1a3fb347c77f33dcd687ce3a067a399c2dc7936"
+          },
+          {
+            "valid": true,
+            "duration": 9.44,
+            "sample_count": 453120,
+            "sample_rate": 48000,
+            "rms": 0.1137353370982775,
+            "sha256": "61c6df5a7161e685e662f3d148333c7170438924274fd81fe83b40a59eece19a"
+          },
+          {
+            "valid": true,
+            "duration": 9.04,
+            "sample_count": 433920,
+            "sample_rate": 48000,
+            "rms": 0.1169357535423489,
+            "sha256": "0089bbaa102bd420746e5dee0acd9ea3552589f1f595c440d4c2ab309979b019"
+          },
+          {
+            "valid": true,
+            "duration": 8.24,
+            "sample_count": 395520,
+            "sample_rate": 48000,
+            "rms": 0.11273566399057398,
+            "sha256": "5043a775ceed8f2eeff581fd21f9a1d4797a96fb5f1de74f966fc1fef438d03a"
+          },
+          {
+            "valid": true,
+            "duration": 8.16,
+            "sample_count": 391680,
+            "sample_rate": 48000,
+            "rms": 0.11578396379867976,
+            "sha256": "e294962fafd8039cc0b6cb449f5e93cba6a17cded0fb49dcad9574eb4940af57"
+          },
+          {
+            "valid": true,
+            "duration": 7.68,
+            "sample_count": 368640,
+            "sample_rate": 48000,
+            "rms": 0.11730172863423514,
+            "sha256": "0326a97046b9bc21688bb0c1405613092dd01fff8a33e6ad1dc1279f57f69980"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.109791224165344,
+            "sha256": "508c3c46db847687dab6479a6091ce39c5ac312723f85931fee10722dd1070e6"
+          },
+          {
+            "valid": true,
+            "duration": 7.44,
+            "sample_count": 357120,
+            "sample_rate": 48000,
+            "rms": 0.11165804308903607,
+            "sha256": "dda6d0222b907fa8711bf743e21f4e59679878fec4423966b2eae66f75e3e3f5"
+          },
+          {
+            "valid": true,
+            "duration": 9.6,
+            "sample_count": 460800,
+            "sample_rate": 48000,
+            "rms": 0.11595159594244032,
+            "sha256": "6cf3b9b2e696d645c9399a45b39027df247397c94ff31dd9d55e0abd2bba9eac"
+          },
+          {
+            "valid": true,
+            "duration": 7.04,
+            "sample_count": 337920,
+            "sample_rate": 48000,
+            "rms": 0.11746439226379739,
+            "sha256": "395b221357a400146612f69165fb8a0fd765533622c57e26f18daec29093bead"
+          },
+          {
+            "valid": true,
+            "duration": 9.2,
+            "sample_count": 441600,
+            "sample_rate": 48000,
+            "rms": 0.10568266173344706,
+            "sha256": "e23bb4ab26aedfb1ef25f5730d5dec14a5956f635d225363136e412f39bcea93"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.1096438053033906,
+            "sha256": "d8fdece7cb749d0ba95c3a3ecf37fcb068883524431220ab500cf14ffebd690a"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.11595442400807862,
+            "sha256": "0d28fc874a04efaadc5c2058766242dc323710f7b9de127b06b32c877791de67"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.11162121038835461,
+            "sha256": "8af67927f147ba50988593951d1a3ae048e11b4b9f4d2998546b5662eb930622"
+          },
+          {
+            "valid": true,
+            "duration": 8.72,
+            "sample_count": 418560,
+            "sample_rate": 48000,
+            "rms": 0.11581241522582132,
+            "sha256": "369bc9a16d6d4e34b0bae8f48b5bf8c411e6cbb780bdcdbc6c4f6cc9ad74fb7b"
+          },
+          {
+            "valid": true,
+            "duration": 7.84,
+            "sample_count": 376320,
+            "sample_rate": 48000,
+            "rms": 0.11405164957910914,
+            "sha256": "ee98f1c83b2c16ee10ec3449031f272a3a9b942f5868a7f65576563fc8f2f4a6"
+          },
+          {
+            "valid": true,
+            "duration": 8.56,
+            "sample_count": 410880,
+            "sample_rate": 48000,
+            "rms": 0.11491974702099111,
+            "sha256": "7bce0663aebc07b7981956e22a082954c6fddb35a54077d6ba647b01c1cb5535"
+          },
+          {
+            "valid": true,
+            "duration": 7.84,
+            "sample_count": 376320,
+            "sample_rate": 48000,
+            "rms": 0.116566706581854,
+            "sha256": "7cc5fd41fb7bb39a921768d4b2d1c8a9bbba4135ba9b43266fa2d6076e9dbe0b"
+          },
+          {
+            "valid": true,
+            "duration": 7.68,
+            "sample_count": 368640,
+            "sample_rate": 48000,
+            "rms": 0.11278943656430329,
+            "sha256": "979c240a1bb8fe380279f0c931c3dc7906d657fc3ec012a1812eb4a9decc489f"
+          },
+          {
+            "valid": true,
+            "duration": 5.92,
+            "sample_count": 284160,
+            "sample_rate": 48000,
+            "rms": 0.11094191919815898,
+            "sha256": "aeb71f9856ff838a5c12b587f6859f797947f8332b0030e1f256afc3224722ff"
+          }
+        ],
+        "plan_fingerprint": "4f0e988ed4e87b592487fb59b1c8faf25a1d4d8ffdc45d86f0811cceb25c2834",
+        "script_fingerprint": "e55fc1c66b901ef443cc23d7cd4a59a7463609a73aafd1d32d652a0221ef683d",
+        "evidence_fingerprint": "444ac37a0e45192ec399c8c4abbb96312235038778e380f42c61431a4b874e00"
+      }
+    },
+    "3": {
+      "video_path": "/tmp/mr_work/bench-vcxjwdkz/runs/B2_r1/data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/3/video/final.mp4",
+      "subtitle_path": "/tmp/mr_work/bench-vcxjwdkz/runs/B2_r1/data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/3/subtitles/final.srt",
+      "validation": {
+        "valid": true,
+        "schema_version": "4.1.0",
+        "chapter_number": "3",
+        "video": {
+          "valid": true,
+          "duration": 292.166667,
+          "frames": 8765,
+          "samples": [
+            {
+              "at": 0.1,
+              "variance": 2987.0246080756187,
+              "mean": 79.007080078125
+            },
+            {
+              "at": 0.5,
+              "variance": 7507.437984466553,
+              "mean": 190.626953125
+            },
+            {
+              "at": 0.9,
+              "variance": 2534.784124135971,
+              "mean": 132.66552734375
+            }
+          ],
+          "sha256": "b43075330ebd560eab70e90288acc672ea60adab5bdd814610d89d0c23daa3a5"
+        },
+        "subtitles": {
+          "valid": true,
+          "cue_count": 180,
+          "sha256": "b0ab720d6364fcafffa0db22bda13ed2c2a66ee314d0b24a2a1f05ce00a9b154"
+        },
+        "audio": [
+          {
+            "valid": true,
+            "duration": 9.52,
+            "sample_count": 456960,
+            "sample_rate": 48000,
+            "rms": 0.11337177859824003,
+            "sha256": "db394a4d565c4ec7bce054bb6277f39ef93fc27e1491a090a27f72d4f3c897a5"
+          },
+          {
+            "valid": true,
+            "duration": 7.36,
+            "sample_count": 353280,
+            "sample_rate": 48000,
+            "rms": 0.1151076430198235,
+            "sha256": "52502dac5db6a6b15be6c7451bc8dd9f54e241a4d798df4ab4583915edfae345"
+          },
+          {
+            "valid": true,
+            "duration": 8.24,
+            "sample_count": 395520,
+            "sample_rate": 48000,
+            "rms": 0.11002195004069489,
+            "sha256": "fc9d9f2846ee0c959b19b82540e5276ec144137421543601f26a4dc99d41b6b7"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.11164734673681814,
+            "sha256": "27f0c693c88711d4a696ac0be8f89c104f32ff6a0d4351218405351599043935"
+          },
+          {
+            "valid": true,
+            "duration": 8.64,
+            "sample_count": 414720,
+            "sample_rate": 48000,
+            "rms": 0.10983790188249382,
+            "sha256": "e893de0602d41237740df920d4c861cc68739be8128b797f862a2825f7b34d34"
+          },
+          {
+            "valid": true,
+            "duration": 9.12,
+            "sample_count": 437760,
+            "sample_rate": 48000,
+            "rms": 0.11033561137865754,
+            "sha256": "be420e681bb24dd0f4969f8184dbe1f64cda662018d2b3410964855c309b6de6"
+          },
+          {
+            "valid": true,
+            "duration": 8.72,
+            "sample_count": 418560,
+            "sample_rate": 48000,
+            "rms": 0.12105966766784891,
+            "sha256": "523a8e0d75f44532ef19f7167dc764053af04b12a4b99806fd74445619e0519e"
+          },
+          {
+            "valid": true,
+            "duration": 8.32,
+            "sample_count": 399360,
+            "sample_rate": 48000,
+            "rms": 0.11870023643699092,
+            "sha256": "2d16e9a56fae7c3aed0a37409eb75db5e795ae9b2319f0bf0ad85ab8f626c32c"
+          },
+          {
+            "valid": true,
+            "duration": 9.04,
+            "sample_count": 433920,
+            "sample_rate": 48000,
+            "rms": 0.11209129441544366,
+            "sha256": "bfff7c9f536a332e0af9b01e122732060c6abae48d46e95feb877b1a25e45aa0"
+          },
+          {
+            "valid": true,
+            "duration": 10.32,
+            "sample_count": 495360,
+            "sample_rate": 48000,
+            "rms": 0.11379735321067934,
+            "sha256": "5541f5e9f97cc86e2350a642aee9f7e6a08990d50bdb2cc3c7eea9f289113395"
+          },
+          {
+            "valid": true,
+            "duration": 8.16,
+            "sample_count": 391680,
+            "sample_rate": 48000,
+            "rms": 0.11268597235379327,
+            "sha256": "4d456d6b4cd4bb29610ac527defb1429d64cf46c5ee4a738a1c70d5ea63d21fe"
+          },
+          {
+            "valid": true,
+            "duration": 8.4,
+            "sample_count": 403200,
+            "sample_rate": 48000,
+            "rms": 0.1120282175298725,
+            "sha256": "62ece14af76857976f34c73beaa7188215027631ef031e20aceb87f9837d4ca2"
+          },
+          {
+            "valid": true,
+            "duration": 9.84,
+            "sample_count": 472320,
+            "sample_rate": 48000,
+            "rms": 0.11810857343897672,
+            "sha256": "c5bff657e55f1dca3c76c91100ecfb9fd8433c103eb934ff5cf05565c5e1e718"
+          },
+          {
+            "valid": true,
+            "duration": 8.0,
+            "sample_count": 384000,
+            "sample_rate": 48000,
+            "rms": 0.11470176232254033,
+            "sha256": "8a4f93e348206df63d6ed1015956f845816260fb412c07c609e10a4434506e90"
+          },
+          {
+            "valid": true,
+            "duration": 8.48,
+            "sample_count": 407040,
+            "sample_rate": 48000,
+            "rms": 0.1196732695617972,
+            "sha256": "cd17dd20a635cad522c8add2d5c786a47dad3e0be2d60d76b692f920fb7a0257"
+          },
+          {
+            "valid": true,
+            "duration": 8.88,
+            "sample_count": 426240,
+            "sample_rate": 48000,
+            "rms": 0.11831937933500858,
+            "sha256": "3da939a61d236895d216761c4af7fd0716996c3b94a157046131721fb2ede527"
+          },
+          {
+            "valid": true,
+            "duration": 8.48,
+            "sample_count": 407040,
+            "sample_rate": 48000,
+            "rms": 0.11218902594777572,
+            "sha256": "f43bd7aee7395f4483017aa44358d95794acbf58adbc81616fdd12a721d1d57b"
+          },
+          {
+            "valid": true,
+            "duration": 8.48,
+            "sample_count": 407040,
+            "sample_rate": 48000,
+            "rms": 0.10948525298845942,
+            "sha256": "8268b0f2bc05984e9a0166d7dbc1b4ebb802d979bf139f3238106169dbd2aaa2"
+          },
+          {
+            "valid": true,
+            "duration": 9.92,
+            "sample_count": 476160,
+            "sample_rate": 48000,
+            "rms": 0.1133612384175169,
+            "sha256": "7fe76ba6aaff420903a64d4100184cd96bcd6a8a306a00897f8198ecb36790dc"
+          },
+          {
+            "valid": true,
+            "duration": 9.12,
+            "sample_count": 437760,
+            "sample_rate": 48000,
+            "rms": 0.1150552490992233,
+            "sha256": "aabd52c2f9afafc16be52f7e317306d8fbddd823341999c3e23c8b42fd14dfe3"
+          },
+          {
+            "valid": true,
+            "duration": 7.92,
+            "sample_count": 380160,
+            "sample_rate": 48000,
+            "rms": 0.10888452250484952,
+            "sha256": "b6ccb1769ee1cb5147ab9980380cdde47f00e880d98f9cfd39c001c9c9422d22"
+          },
+          {
+            "valid": true,
+            "duration": 9.04,
+            "sample_count": 433920,
+            "sample_rate": 48000,
+            "rms": 0.11524393750972467,
+            "sha256": "a8f07b5ed8b8d47096b238ca02789c47d69e206c3bf93958c9f0ebb09eea12ed"
+          },
+          {
+            "valid": true,
+            "duration": 8.96,
+            "sample_count": 430080,
+            "sample_rate": 48000,
+            "rms": 0.11218900074543818,
+            "sha256": "38dfb3b74ad9b6ab890e659ae5bef0d4f259e8a28ee136d109a92f0459d6831f"
+          },
+          {
+            "valid": true,
+            "duration": 9.2,
+            "sample_count": 441600,
+            "sample_rate": 48000,
+            "rms": 0.11608377718816207,
+            "sha256": "f86f945d12dc5e87af84e639d9046b88e7692d8b050fd5eadd8bcd3662bc4a83"
+          },
+          {
+            "valid": true,
+            "duration": 7.84,
+            "sample_count": 376320,
+            "sample_rate": 48000,
+            "rms": 0.11416253320401361,
+            "sha256": "c9ab4f92959a91c5b4aa45cee2fa80dd0596579badc1edf449cd5e3f9249ce2e"
+          },
+          {
+            "valid": true,
+            "duration": 8.48,
+            "sample_count": 407040,
+            "sample_rate": 48000,
+            "rms": 0.1137650527725216,
+            "sha256": "e693617816973839201fa007d852033ca2fecc76207c50217fd4ef043fa08cb1"
+          },
+          {
+            "valid": true,
+            "duration": 7.6,
+            "sample_count": 364800,
+            "sample_rate": 48000,
+            "rms": 0.1117822283637803,
+            "sha256": "26be8d9c07dc0794a329c8e00e54b4806a920122adb27d739f69ca2d3adc3ee3"
+          },
+          {
+            "valid": true,
+            "duration": 8.0,
+            "sample_count": 384000,
+            "sample_rate": 48000,
+            "rms": 0.1067989562267329,
+            "sha256": "b19a85b5654708072213b741a13dc836d3f0fbacaab7aadcc3c35f0ce35b7fc4"
+          },
+          {
+            "valid": true,
+            "duration": 7.52,
+            "sample_count": 360960,
+            "sample_rate": 48000,
+            "rms": 0.11388733749527906,
+            "sha256": "66fa9e9e2a9b0019d4b118257efdeb9c901cb2d1ba5180f2fd563e554436d3d2"
+          },
+          {
+            "valid": true,
+            "duration": 7.36,
+            "sample_count": 353280,
+            "sample_rate": 48000,
+            "rms": 0.11105248390045319,
+            "sha256": "9985680564b419c7524a972b98b898c7c4cc7c29834405f7143a8375cd7ee25a"
+          },
+          {
+            "valid": true,
+            "duration": 9.36,
+            "sample_count": 449280,
+            "sample_rate": 48000,
+            "rms": 0.11683298493788188,
+            "sha256": "3d9263a659d514580122ad6fe3ac2a66a510c26bc9c91468918b4926d2e7d1b8"
+          },
+          {
+            "valid": true,
+            "duration": 9.68,
+            "sample_count": 464640,
+            "sample_rate": 48000,
+            "rms": 0.11217711619204848,
+            "sha256": "01177bbbc84884d2b141cda816f19257b980901d65df00a6673468dfd908605f"
+          },
+          {
+            "valid": true,
+            "duration": 7.76,
+            "sample_count": 372480,
+            "sample_rate": 48000,
+            "rms": 0.11496247727343303,
+            "sha256": "841cf704dca4a11470da679bf8d7ddda7a8ade4369c5220de320ac3cbf5fd73b"
+          },
+          {
+            "valid": true,
+            "duration": 8.8,
+            "sample_count": 422400,
+            "sample_rate": 48000,
+            "rms": 0.1137748299753716,
+            "sha256": "1735b63f2d9e3685b122981e4546c5585baa5f094aebd70eb6465b1e015e75c1"
+          }
+        ],
+        "plan_fingerprint": "87348ac5aecb7157cd14c2a177ee76415e79e99a0174ebc8f09e4858db01e22b",
+        "script_fingerprint": "20138ed394b93fae3c842d7bae614048650707be383bdfebbb7379b76392b51b",
+        "evidence_fingerprint": "a518b3977ce18ed3ef65df888170246c320c0294851f1ac41bad40a940eeedb4"
+      }
+    }
+  },
+  "telemetry": {
+    "chapters": [
+      "2",
+      "3"
+    ],
+    "total_wall_clock_seconds": 634.406,
+    "sequential_estimate_seconds": 586.735,
+    "speedup_factor": 0.92,
+    "pipeline_overlap_seconds": 0.0,
+    "profile_id": "B2",
+    "gpu_0": {
+      "device_id": 0,
+      "device_name": "Tesla T4 GPU 0",
+      "assigned_task": "Elastic TTS + NVENC",
+      "peak_vram_mb": 1823.0,
+      "allocated_vram_mb": 0.0,
+      "total_active_seconds": 807.917,
+      "processed_items": 122,
+      "throughput_metric": 0.15,
+      "oom_events_count": 0
+    },
+    "gpu_1": {
+      "device_id": 1,
+      "device_name": "Tesla T4 GPU 1",
+      "assigned_task": "Elastic TTS + NVENC",
+      "peak_vram_mb": 1639.0,
+      "allocated_vram_mb": 0.0,
+      "total_active_seconds": 795.101,
+      "processed_items": 117,
+      "throughput_metric": 0.15,
+      "oom_events_count": 0
+    },
+    "per_chapter": {
+      "2": {
+        "chapter": "2",
+        "tts_duration_seconds": 59.368,
+        "render_duration_seconds": 225.746,
+        "segment_count": 37,
+        "video_frames_count": 8966,
+        "video_duration_seconds": 298.88,
+        "tts_throughput_utt_per_sec": 0.62,
+        "render_fps": 39.72
+      },
+      "3": {
+        "chapter": "3",
+        "tts_duration_seconds": 11.5,
+        "render_duration_seconds": 290.122,
+        "segment_count": 34,
+        "video_frames_count": 8765,
+        "video_duration_seconds": 292.166667,
+        "tts_throughput_utt_per_sec": 2.96,
+        "render_fps": 30.21
+      }
+    },
+    "scheduler_transitions": [
+      {
+        "from_state": null,
+        "to_state": "DRAIN",
+        "tts_gpu_ids": [
+          0
+        ],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [],
+        "reason": "Pipeline idle/draining",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "DRAIN",
+        "to_state": "TTS_HEAVY",
+        "tts_gpu_ids": [
+          0,
+          1
+        ],
+        "render_gpu_ids": [],
+        "unload_tts_on_gpus": [],
+        "reason": "TTS backlog active with empty render queue",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "TTS_HEAVY",
+        "to_state": "RENDER_HEAVY",
+        "tts_gpu_ids": [],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [
+          0,
+          1
+        ],
+        "reason": "TTS queue empty while render shots/chapters wait for GPU encoding",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "RENDER_HEAVY",
+        "to_state": "DRAIN",
+        "tts_gpu_ids": [],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [],
+        "reason": "All TTS/upstream chapters complete; draining tail render/validation work",
+        "pending_tts": 0,
+        "pending_render": 2
+      }
+    ],
+    "frozen_profile": null,
+    "stage_breakdown": {
+      "model_init_sec": 32.5174,
+      "tts_infer_sec": 32.7255,
+      "audio_norm_sec": 102.3609,
+      "render_sec": 395.6955,
+      "mux_sec": 10.3658,
+      "validation_sec": 132.9545
+    },
+    "gpu_util_avg": {
+      "0": 5.07,
+      "1": 4.54
+    },
+    "cpu_util_avg": 76.98,
+    "disk_throughput_mb_s": 0.67,
+    "all_valid": true,
+    "completed_at": "2026-11-12T07:55:16.529623+00:00"
+  },
+  "generated_at_utc": "2026-11-12T07:55:16.533413+00:00"
+}

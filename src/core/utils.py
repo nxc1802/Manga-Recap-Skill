@@ -1,3 +1,4 @@
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -25,25 +26,33 @@ def slugify_project_title(project_title: str) -> str:
 def get_project_data_dir(project_slug: str) -> Path:
     """
     Returns the project data directory.
-    Canonical path is config.storage_dir / project_slug (i.e. data/projects/{project_slug}).
-    If (config.storage_dir / project_slug).exists(), return that.
-    Else if (config.data_dir / project_slug).exists(), return config.data_dir / project_slug (legacy fallback).
-    Otherwise return config.storage_dir / project_slug.
+    When MANGA_RECAP_DATA_DIR is set, resolves strictly within that root
+    (<MANGA_RECAP_DATA_DIR>/projects/{slug} with legacy fallback <MANGA_RECAP_DATA_DIR>/{slug})
+    so isolated test/cloud runs never fall back to repo-local data/.
+    Otherwise uses config.storage_dir / project_slug with config.data_dir fallback.
     """
     from src.core.config import config
 
+    env_data_dir = os.getenv("MANGA_RECAP_DATA_DIR")
+    if env_data_dir:
+        data_dir = Path(env_data_dir)
+        storage_dir = data_dir / "projects"
+    else:
+        storage_dir = config.storage_dir
+        data_dir = config.data_dir
+
     slug = slugify_project_title(str(project_slug))
-    canonical_slug = config.storage_dir / slug
+    canonical_slug = storage_dir / slug
     if canonical_slug.exists():
         return canonical_slug
-    if (config.storage_dir / str(project_slug)).exists():
-        return config.storage_dir / str(project_slug)
+    if (storage_dir / str(project_slug)).exists():
+        return storage_dir / str(project_slug)
 
-    legacy_slug = config.data_dir / slug
+    legacy_slug = data_dir / slug
     if legacy_slug.exists():
         return legacy_slug
-    if (config.data_dir / str(project_slug)).exists():
-        return config.data_dir / str(project_slug)
+    if (data_dir / str(project_slug)).exists():
+        return data_dir / str(project_slug)
 
     return canonical_slug
 
@@ -88,7 +97,6 @@ def format_sequence_id(seq_id: str) -> str:
     if parts[0].isdigit():
         parts[0] = f"{int(parts[0]):03d}"
         return "_".join(parts)
-import os
 import csv
 import shutil
 import subprocess

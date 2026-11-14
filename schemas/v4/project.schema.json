@@ -1,0 +1,324 @@
+{
+  "$defs": {
+    "AudioSettings": {
+      "description": "Project-level audio synthesis defaults.",
+      "properties": {
+        "default_voice": {
+          "default": "Ngọc Huyền",
+          "title": "Default Voice",
+          "type": "string"
+        },
+        "default_speed": {
+          "default": 1.0,
+          "exclusiveMinimum": 0.2,
+          "maximum": 3.0,
+          "title": "Default Speed",
+          "type": "number"
+        },
+        "sample_rate": {
+          "default": 48000,
+          "description": "Master uncompressed audio sample rate (Hz)",
+          "title": "Sample Rate",
+          "type": "integer"
+        },
+        "bgm_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bgm Path"
+        },
+        "bgm_volume": {
+          "default": 0.15,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Bgm Volume",
+          "type": "number"
+        },
+        "voice_volume": {
+          "default": 1.0,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Voice Volume",
+          "type": "number"
+        },
+        "ducking_factor": {
+          "default": 0.3,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Ducking Factor",
+          "type": "number"
+        }
+      },
+      "title": "AudioSettings",
+      "type": "object"
+    },
+    "PacingMode": {
+      "enum": [
+        "concise",
+        "balanced",
+        "detailed",
+        "off"
+      ],
+      "title": "PacingMode",
+      "type": "string"
+    },
+    "RenderSettings": {
+      "description": "Project-level video rendering defaults.",
+      "properties": {
+        "target_width": {
+          "default": 1280,
+          "minimum": 320,
+          "title": "Target Width",
+          "type": "integer"
+        },
+        "target_height": {
+          "default": 720,
+          "minimum": 240,
+          "title": "Target Height",
+          "type": "integer"
+        },
+        "fps": {
+          "default": 30,
+          "maximum": 60,
+          "minimum": 15,
+          "title": "Fps",
+          "type": "integer"
+        },
+        "video_codec": {
+          "default": "libx264",
+          "title": "Video Codec",
+          "type": "string"
+        },
+        "audio_codec": {
+          "default": "aac",
+          "title": "Audio Codec",
+          "type": "string"
+        },
+        "crf": {
+          "default": 20,
+          "maximum": 51,
+          "minimum": 0,
+          "title": "Crf",
+          "type": "integer"
+        },
+        "preset": {
+          "default": "medium",
+          "title": "Preset",
+          "type": "string"
+        },
+        "burn_subtitles": {
+          "default": false,
+          "title": "Burn Subtitles",
+          "type": "boolean"
+        },
+        "video_mode": {
+          "default": "auto",
+          "title": "Video Mode",
+          "type": "string"
+        },
+        "render_pan_mode": {
+          "default": "static",
+          "title": "Render Pan Mode",
+          "type": "string"
+        },
+        "subtitle": {
+          "$ref": "#/$defs/SubtitleSettings"
+        }
+      },
+      "title": "RenderSettings",
+      "type": "object"
+    },
+    "ScriptPacingConfig": {
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/PacingMode",
+          "default": "balanced"
+        },
+        "target_total_minutes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target Total Minutes"
+        },
+        "tolerance": {
+          "default": 0.2,
+          "maximum": 0.5,
+          "minimum": 0.05,
+          "title": "Tolerance",
+          "type": "number"
+        },
+        "preserve_important_dialogue": {
+          "default": true,
+          "title": "Preserve Important Dialogue",
+          "type": "boolean"
+        },
+        "adaptive_scene_density": {
+          "default": true,
+          "title": "Adaptive Scene Density",
+          "type": "boolean"
+        }
+      },
+      "title": "ScriptPacingConfig",
+      "type": "object"
+    },
+    "SubtitleChunkingMode": {
+      "enum": [
+        "sentence-aware",
+        "fixed-chars"
+      ],
+      "title": "SubtitleChunkingMode",
+      "type": "string"
+    },
+    "SubtitleSettings": {
+      "properties": {
+        "max_lines": {
+          "default": 1,
+          "maximum": 2,
+          "minimum": 1,
+          "title": "Max Lines",
+          "type": "integer"
+        },
+        "font_size": {
+          "default": 26,
+          "maximum": 48,
+          "minimum": 16,
+          "title": "Font Size",
+          "type": "integer"
+        },
+        "chunking": {
+          "$ref": "#/$defs/SubtitleChunkingMode",
+          "default": "sentence-aware"
+        },
+        "max_chars_per_line": {
+          "default": 42,
+          "maximum": 80,
+          "minimum": 20,
+          "title": "Max Chars Per Line",
+          "type": "integer"
+        }
+      },
+      "title": "SubtitleSettings",
+      "type": "object"
+    }
+  },
+  "description": "Schema for data/projects/<project_slug>/project.json.",
+  "properties": {
+    "setup_revision": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Setup Revision"
+    },
+    "setup_snapshot_hash": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Setup Snapshot Hash"
+    },
+    "project_id": {
+      "title": "Project Id",
+      "type": "string"
+    },
+    "slug": {
+      "title": "Slug",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "source_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Url"
+    },
+    "language": {
+      "default": "vi",
+      "title": "Language",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "render_settings": {
+      "$ref": "#/$defs/RenderSettings"
+    },
+    "audio_settings": {
+      "$ref": "#/$defs/AudioSettings"
+    },
+    "script_pacing": {
+      "$ref": "#/$defs/ScriptPacingConfig"
+    },
+    "chapters": {
+      "description": "Registered chapter identifiers",
+      "items": {
+        "type": "string"
+      },
+      "title": "Chapters",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "3.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "slug",
+    "title"
+  ],
+  "title": "ProjectConfig",
+  "type": "object"
+}

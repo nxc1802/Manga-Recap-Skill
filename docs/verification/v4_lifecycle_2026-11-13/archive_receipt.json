@@ -1,0 +1,18 @@
+{
+  "schema_version": "4.0.0",
+  "receipt_type": "huggingface_archive",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "repo_id": "Cuong2004/manga-recap-archive",
+  "commit_sha": "5575202b5f2d28a2bbe2e61f684a5add8b5d83ee",
+  "remote_url": "https://huggingface.co/datasets/Cuong2004/manga-recap-archive/tree/5575202b5f2d28a2bbe2e61f684a5add8b5d83ee/series/nhan-vat-phu-trong-the-gioi-dien-loan",
+  "created_at": "2026-11-13T14:56:54.699778+00:00",
+  "verified_file_count": 1156,
+  "total_bytes": 514313185,
+  "manifest_sha256": "a1b9c753b90eeda88fc94422ccca2ec50a953964960bcf90ef444433efb3d251",
+  "status": "verified",
+  "verification_revision": "5575202b5f2d28a2bbe2e61f684a5add8b5d83ee",
+  "last_verified_at": "2026-11-13T15:42:30.379507+00:00",
+  "restore_verified_at": "2026-11-13T16:06:26.749856+00:00",
+  "restored_revision": "5575202b5f2d28a2bbe2e61f684a5add8b5d83ee",
+  "restored_verified_files": 1156
+}

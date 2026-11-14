@@ -1,0 +1,142 @@
+name: V4 Live L4 & PERF-P8/P9 Acceptance (Manual Only)
+
+# Manual workflow_dispatch ONLY — never runs on push or pull_request.
+# Never mock live services or claim dry-run results as live acceptance evidence.
+#
+# Required repository/environment secrets:
+#   Kaggle:
+#     - KAGGLE_API_TOKEN (or KAGGLE_USERNAME + KAGGLE_KEY)
+#   Hugging Face Archive:
+#     - HF_TOKEN (and optional vars.HF_ARCHIVE_REPO)
+#   YouTube OAuth:
+#     - YOUTUBE_CLIENT_SECRETS_JSON (OAuth 2.0 client_secrets.json contents)
+#     - YOUTUBE_TOKEN_JSON (authorized YouTube OAuth token JSON contents)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Acceptance workload to execute"
+        required: true
+        default: "live_l4"
+        type: choice
+        options:
+          - live_l4
+          - perf_p8_p9
+          - both
+      project_slug:
+        description: "Existing prepared project slug for live Kaggle/HF/YouTube L4 run"
+        required: false
+        default: ""
+        type: string
+      chapter:
+        description: "Chapter number for live L4 verification"
+        required: false
+        default: "1"
+        type: string
+      kaggle_benchmark_variants:
+        description: "Comma-separated P9 Dual-T4 benchmark variants (e.g. B0,B1,B2,B3,B4,B5)"
+        required: false
+        default: "B0,B1,B2,B3,B4,B5"
+        type: string
+
+jobs:
+  live-l4:
+    name: "LIVE-L4: Kaggle / Hugging Face / YouTube Real Verification"
+    if: ${{ inputs.mode == 'live_l4' || inputs.mode == 'both' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify required LIVE-L4 secrets are configured (fail closed)
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          YOUTUBE_CLIENT_SECRETS_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          if [ -z "${KAGGLE_API_TOKEN}" ] && { [ -z "${KAGGLE_USERNAME}" ] || [ -z "${KAGGLE_KEY}" ]; }; then
+            echo "ERROR: Missing Kaggle credentials (KAGGLE_API_TOKEN or KAGGLE_USERNAME + KAGGLE_KEY)." >&2
+            exit 1
+          fi
+          if [ -z "${HF_TOKEN}" ]; then
+            echo "ERROR: Missing HF_TOKEN for live Hugging Face archive verification." >&2
+            exit 1
+          fi
+          if [ -z "${YOUTUBE_CLIENT_SECRETS_JSON}" ] || [ -z "${YOUTUBE_TOKEN_JSON}" ]; then
+            echo "ERROR: Missing YouTube OAuth secrets (YOUTUBE_CLIENT_SECRETS_JSON / YOUTUBE_TOKEN_JSON)." >&2
+            exit 1
+          fi
+      - name: Install live runner dependencies
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt || true
+          python -m pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx beautifulsoup4 python-dotenv huggingface_hub kaggle google-api-python-client google-auth-oauthlib
+          python -m pip install --disable-pip-version-check --no-deps -e .
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Stage OAuth credentials and execute LIVE-L4 probe
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          YOUTUBE_CLIENT_SECRETS_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRETS_JSON }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          mkdir -p credentials
+          printf '%s' "${YOUTUBE_CLIENT_SECRETS_JSON}" > credentials/client_secrets.json
+          printf '%s' "${YOUTUBE_TOKEN_JSON}" > credentials/youtube_token.json
+          export YOUTUBE_CLIENT_SECRETS_FILE="credentials/client_secrets.json"
+          export YOUTUBE_CREDENTIALS_FILE="credentials/youtube_token.json"
+          python -m pytest acceptance/l4 -o python_files="*_spec.py" -m live_l4 --collect-only -q
+          python scripts/probe_dual_t4_kaggle.py --help >/dev/null
+          if [ -n "${{ inputs.project_slug }}" ]; then
+            manga-recap youtube verify --project "${{ inputs.project_slug }}" --chapter "${{ inputs.chapter }}" --json
+          fi
+
+  perf-p8-p9:
+    name: "PERF-P8/P9: Dual-T4 Benchmark Matrix (Kaggle Hardware)"
+    if: ${{ inputs.mode == 'perf_p8_p9' || inputs.mode == 'both' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify required Kaggle credentials are configured (fail closed)
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          if [ -z "${KAGGLE_API_TOKEN}" ] && { [ -z "${KAGGLE_USERNAME}" ] || [ -z "${KAGGLE_KEY}" ]; }; then
+            echo "ERROR: Missing Kaggle credentials (KAGGLE_API_TOKEN or KAGGLE_USERNAME + KAGGLE_KEY)." >&2
+            exit 1
+          fi
+      - name: Install benchmark runner dependencies
+        run: |
+          python -m pip install --disable-pip-version-check pytest pydantic pillow numpy pyyaml httpx huggingface_hub kaggle
+          python -m pip install --disable-pip-version-check --no-deps -e .
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Dispatch PERF-P8/P9 Dual-T4 Benchmark Matrix
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python -m pytest acceptance/p8 -o python_files="*_spec.py" -m perf --collect-only -q
+          if [ -z "${{ inputs.project_slug }}" ]; then
+            echo "ERROR: project_slug input is required for live Kaggle Dual-T4 benchmark dispatch." >&2
+            exit 1
+          fi
+          PYTHONPATH=. python scripts/benchmark/run_dual_t4_matrix.py \
+            --dispatch \
+            --project "${{ inputs.project_slug }}" \
+            --chapter "${{ inputs.chapter }}" \
+            --variants "${{ inputs.kaggle_benchmark_variants }}"

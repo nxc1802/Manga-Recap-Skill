@@ -320,7 +320,8 @@ def calculate_utterance_fingerprint(
     Calculates canonical SHA-256 fingerprint of (text + voice + speed + emotion + cue + engine).
     Guarantees TTS re-synthesis when any input parameter changes.
     """
-    raw = f"{text}|{voice}|{speed:.2f}|{emotion or ''}|{emotion_cue or ''}|{engine_mode}"
+    raw = json.dumps(["4.1.0", text, voice, float(speed), emotion or "", emotion_cue or "", engine_mode],
+                     ensure_ascii=False, separators=(",", ":"), allow_nan=False)
     return calculate_sha256(raw)
 
 
@@ -376,6 +377,38 @@ def atomic_write_json(file_path: Path, data: Union[BaseModel, Dict[str, Any], Li
             with contextlib.suppress(Exception):
                 tmp_path.unlink()
         raise StorageWriteError(f"Failed to atomically write JSON to {target}: {exc}") from exc
+
+
+def atomic_write_json_pair(first_path: Path, first_data, second_path: Path, second_data) -> None:
+    """Prepare and fsync both files before publishing either revision.
+
+    Caller holds the setup FileLock. A crash between renames is detectable by
+    revision/hash mismatch; readers must never auto-repair or infer consent.
+    """
+    prepared = []
+    try:
+        for target, payload in ((Path(first_path), first_data), (Path(second_path), second_data)):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if isinstance(payload, BaseModel):
+                payload = payload.model_dump(mode="json")
+            fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.prepared.", dir=target.parent)
+            prepared.append((Path(tmp), target))
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2, default=_json_serial_fallback)
+                handle.flush()
+                os.fsync(handle.fileno())
+        for tmp, target in prepared:
+            os.replace(tmp, target)
+            dir_fd = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+    except Exception as exc:
+        raise StorageWriteError(f"Setup transaction failed: {exc}") from exc
+    finally:
+        for tmp, _ in prepared:
+            tmp.unlink(missing_ok=True)
 
 
 def read_json(file_path: Path) -> Dict[str, Any]:
@@ -639,6 +672,8 @@ def reset_stage_checkpoint(
 
         if meta.overall_status == CheckpointStatus.COMPLETED:
             meta.overall_status = CheckpointStatus.PENDING
+        meta.technical_status = meta.overall_status
+        meta.human_review_status = HumanReviewStatus.UNREVIEWED
         meta.updated_at = utc_iso_now()
 
         atomic_write_json(chap_file, meta)
@@ -761,6 +796,13 @@ def safe_cleanup_chapter_intermediates(
         "characters.json",
         "voice_selection.json",
         "preview_approval.json",
+        "release_state.json",
+        "series_setup_answers.json",
+        "visual_plan.json",
+        "artifact_validation.json",
+        "archive_manifest.json",
+        "archive_receipt.json",
+        "youtube_receipt.json",
     }
 
     TEMP_PATTERNS = [

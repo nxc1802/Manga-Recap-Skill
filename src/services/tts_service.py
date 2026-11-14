@@ -46,7 +46,18 @@ class TTSService:
     """Service facade for local speech synthesis, duration calculation, and script parsing."""
 
     def __init__(self):
-        self.engine = get_tts_engine()
+        self._engine = None
+
+    @property
+    def engine(self):
+        if self._engine is None:
+            from src.tts.engine import EngineMode
+            self._engine = get_tts_engine(force_mode=EngineMode.NEURAL)
+        return self._engine
+
+    @engine.setter
+    def engine(self, value):
+        self._engine = value
 
     def resolve_voice_name(self, voice_name: Optional[str] = None) -> str:
         """Resolves arbitrary voice string or alias to a valid VieNeu voice_id."""
@@ -225,98 +236,15 @@ class TTSService:
         if list_file_path.exists():
             list_file_path.unlink()
 
-    async def process_chapter_audio(
-        self,
-        chapter_id: str,
-        chapter_num: str,
-        speed: float = 1.0,
-        voice_name: Optional[str] = None,
-        progress_callback=None,
-    ) -> bool:
-        """Processes script segments for a chapter and generates audio files via local storage."""
-        resolved_voice = self.resolve_voice_name(voice_name)
-        logger.info(f"Starting audio generation for Chapter {chapter_num} (Voice: {resolved_voice})...")
-        try:
-            from src.core.utils import (
-                format_sequence_id,
-                get_project_data_dir,
-                get_project_title_by_chapter_id,
-                load_csv_script_for_chapter,
-            )
-            project_title = get_project_title_by_chapter_id(chapter_id)
-            project_dir = get_project_data_dir(project_title)
-
-            panels_data = load_csv_script_for_chapter(project_dir, chapter_num)
-            if not panels_data:
-                chap_dir = project_dir / "chapters" / str(chapter_num)
-                script_json = chap_dir / "script.json"
-                if script_json.exists():
-                    from src.core.storage import read_json
-                    s_data = read_json(script_json)
-                    panels_data = s_data.get("segments", [])
-
-            if not panels_data:
-                logger.warning(f"No local script data found for Chapter {chapter_num}.")
-                return False
-
-            audio_dir = project_dir / "chapters" / str(chapter_num) / "audio" / "clips"
-            audio_dir.mkdir(parents=True, exist_ok=True)
-
-            sem = asyncio.Semaphore(5)
-            async def synthesize_item(item):
-                async with sem:
-                    seq_id = format_sequence_id(item.get("sequence_id") or str(item.get("sequence_number", 0)))
-                    text = item.get("text", "") or item.get("narrator_text", "")
-                    if not text:
-                        return None
-                    out_path = audio_dir / f"audio_{chapter_num}_{seq_id}.wav"
-                    engine_mode = getattr(self.engine, "mode", "neural") if hasattr(self, "engine") else "neural"
-                    calculated_fp = calculate_utterance_fingerprint(
-                        text=text,
-                        voice=resolved_voice,
-                        speed=speed,
-                        emotion=item.get("emotion"),
-                        emotion_cue=item.get("emotion_cue"),
-                        engine_mode=engine_mode,
-                    )
-                    can_reuse = False
-                    if out_path.exists() and out_path.stat().st_size > 44:
-                        if (
-                            item.get("fingerprint") == calculated_fp
-                            and item.get("checksum") is not None
-                            and item.get("checksum") == calculate_sha256(out_path)
-                        ):
-                            can_reuse = True
-
-                    if can_reuse:
-                        dur = self.get_audio_duration_ms(str(out_path))
-                        return str(out_path), dur
-
-                    dur = await self.generate_panel_audio(text, out_path, speed, resolved_voice)
-                    if out_path.exists():
-                        item["checksum"] = calculate_sha256(out_path)
-                        item["fingerprint"] = calculated_fp
-                    if progress_callback:
-                        await progress_callback("tts_panel", f"Generated audio for {seq_id}", {"duration_ms": dur})
-                    return str(out_path), dur
-
-            tasks = [synthesize_item(item) for item in panels_data]
-            await asyncio.gather(*tasks)
-
-            chap_path = project_dir / "chapters" / str(chapter_num)
-            chapter_json = chap_path / "chapter.json"
-            if chapter_json.exists():
-                try:
-                    from src.core.storage import update_checkpoint
-                    update_checkpoint(chap_path, stage="tts", status="completed")
-                except Exception as exc:
-                    logger.error(f"Failed to update checkpoint for chapter {chapter_num}: {exc}")
-
-            logger.info(f"Audio generation for Chapter {chapter_num} completed successfully.")
-            return True
-        except Exception as e:
-            logger.error(f"Error in process_chapter_audio: {e}")
-            return False
+    async def process_chapter_audio(self, chapter_id, chapter_num, speed=None,
+                                    voice_name=None, progress_callback=None):
+        import argparse
+        from src.core.execution_policy import resolve_legacy_chapter
+        from src.cli.tts_cmd import handle_tts
+        project = resolve_legacy_chapter(chapter_id, chapter_num)
+        handle_tts(argparse.Namespace(project=project.name, chapter=str(chapter_num),
+            speed=speed, voice=voice_name, engine="neural"))
+        return True
 
 
 tts_service = TTSService()

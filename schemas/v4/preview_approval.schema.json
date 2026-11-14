@@ -1,0 +1,62 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.1.0",
+      "default": "4.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "human_review_status": {
+      "const": "approved",
+      "title": "Human Review Status",
+      "type": "string"
+    },
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "chapter_number": {
+      "const": "1",
+      "default": "1",
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "approved_at": {
+      "format": "date-time",
+      "title": "Approved At",
+      "type": "string"
+    },
+    "reviewer": {
+      "minLength": 1,
+      "title": "Reviewer",
+      "type": "string"
+    },
+    "config_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Config Fingerprint",
+      "type": "string"
+    },
+    "artifact_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Artifact Hash",
+      "type": "string"
+    },
+    "artifact_path": {
+      "const": "video/preview.mp4",
+      "default": "video/preview.mp4",
+      "title": "Artifact Path",
+      "type": "string"
+    }
+  },
+  "required": [
+    "human_review_status",
+    "project_slug",
+    "approved_at",
+    "reviewer",
+    "config_fingerprint",
+    "artifact_hash"
+  ],
+  "title": "HumanApproval",
+  "type": "object"
+}

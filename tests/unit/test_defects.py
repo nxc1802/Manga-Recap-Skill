@@ -12,6 +12,7 @@ import subprocess
 from unittest.mock import patch, MagicMock
 import pytest
 
+from src.cli.exit_codes import CliValidationError
 from src.core.utils import (
     DependencyNotFoundError,
     FFmpegExecutionError,
@@ -21,6 +22,22 @@ from src.core.utils import (
     run_ffmpeg,
 )
 from src.pipeline import pipeline, MangaRecapPipeline
+
+
+def _seed_cleanup_gate(proj_dir: Path, slug: str, chapter: str = "1") -> None:
+    from unit.test_safe_cleanup import add_hf_receipt, add_release_state, add_youtube_receipt
+    from unit.test_series_setup import _make_valid_answers_dict
+    from src.core.series_setup import record_series_setup
+    from src.core.storage import init_project_layout
+
+    if not (proj_dir / "project.json").exists():
+        init_project_layout(slug, "Test Project")
+    answers = _make_valid_answers_dict()
+    answers["Q08"]["user_answer"] = {"account": "review_truyen", "privacy": "private"}
+    record_series_setup(slug, answers, project_dir=proj_dir)
+    add_hf_receipt(proj_dir, slug)
+    add_youtube_receipt(proj_dir / "chapters" / str(chapter), slug, chapter=str(chapter))
+    add_release_state(proj_dir, slug, state="CLEANUP_ALLOWED", chapter=str(chapter))
 
 
 class TestDefect1CleanupTempFiles:
@@ -35,6 +52,7 @@ class TestDefect1CleanupTempFiles:
     def test_cleanup_temp_files_execution(self, tmp_path, monkeypatch):
         # Configure storage dir to tmp_path
         from src.core.config import config
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "data" / "projects")
 
         proj_dir = tmp_path / "data" / "projects" / "test_proj"
@@ -54,6 +72,12 @@ class TestDefect1CleanupTempFiles:
         concat_temp.write_text("temp concat")
         final_video.write_text("final video")
 
+        # Without Two-Receipt gate, cleanup_temp_files must fail closed
+        with pytest.raises(CliValidationError, match="Two-Receipt Gate failed"):
+            pipeline.cleanup_temp_files(chapter="1", suffix="final", project="test_proj")
+        assert raw_temp.exists()
+
+        _seed_cleanup_gate(proj_dir, "test_proj", chapter="1")
         cleaned = pipeline.cleanup_temp_files(chapter="1", suffix="final", project="test_proj")
         assert not raw_temp.exists(), "chapter_1_raw_temp.mp4 should be cleaned up"
         assert not subs_temp.exists(), "chapter_1_subs_temp.srt should be cleaned up"
@@ -75,6 +99,7 @@ class TestDefect1CleanupTempFiles:
 
     def test_cleanup_temp_files_accepts_keep_temp_argument(self, tmp_path, monkeypatch):
         from src.core.config import config
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path / "data"))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "data" / "projects")
 
         proj_dir = tmp_path / "data" / "projects" / "test_proj"
@@ -82,6 +107,7 @@ class TestDefect1CleanupTempFiles:
         chap_dir.mkdir(parents=True, exist_ok=True)
         raw_temp = chap_dir / "chapter_1_raw_temp.mp4"
         raw_temp.write_text("temp video")
+        _seed_cleanup_gate(proj_dir, "test_proj", chapter="1")
 
         # When keep_temp is True, files must not be deleted
         cleaned_kept = pipeline.cleanup_temp_files(chapter=1, project="test_proj", keep_temp=True)

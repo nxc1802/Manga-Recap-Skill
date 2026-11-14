@@ -9,6 +9,8 @@ Covers:
 
 from __future__ import annotations
 
+from v4_fixtures import init_confirmed_project
+
 import io
 import json
 import os
@@ -47,8 +49,25 @@ from src.pipeline import MangaRecapPipeline, pipeline
 class TestDefect1CleanupTempFilesAdversarial:
     """Stress tests and boundary condition exploration for temp file cleanup."""
 
+    @staticmethod
+    def _seed_two_receipt_gate(proj_dir: Path, slug: str, chapter: str = "1") -> None:
+        from unit.test_safe_cleanup import add_hf_receipt, add_release_state, add_youtube_receipt
+        from unit.test_series_setup import _make_valid_answers_dict
+        from src.core.series_setup import record_series_setup
+        from src.core.storage import init_project_layout
+
+        if not (proj_dir / "project.json").exists():
+            init_project_layout(slug, f"Adv {slug}")
+        answers = _make_valid_answers_dict()
+        answers["Q08"]["user_answer"] = {"account": "review_truyen", "privacy": "private"}
+        record_series_setup(slug, answers, project_dir=proj_dir)
+        add_hf_receipt(proj_dir, slug)
+        add_youtube_receipt(proj_dir / "chapters" / str(chapter), slug, chapter=str(chapter))
+        add_release_state(proj_dir, slug, state="CLEANUP_ALLOWED", chapter=str(chapter))
+
     def test_cleanup_temp_files_removes_known_intermediates_preserves_finals(self, tmp_path, monkeypatch):
         """Verifies intermediate scratch files are wiped while raw panels, clips, and finals survive."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
 
         proj_name = "adversarial_proj"
@@ -83,6 +102,7 @@ class TestDefect1CleanupTempFilesAdversarial:
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text("payload")
 
+        self._seed_two_receipt_gate(proj_dir, proj_name, chapter="1")
         cleaned = pipeline.cleanup_temp_files(chapter="1", project=proj_name)
 
         # Assert all targets were unlinked
@@ -127,12 +147,14 @@ class TestDefect1CleanupTempFilesAdversarial:
 
     def test_cleanup_temp_files_nonexistent_directory_safety(self, tmp_path, monkeypatch):
         """Verifies calling cleanup on nonexistent chapter or project does not raise unhandled errors."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
         cleaned = pipeline.cleanup_temp_files(chapter="99999", project="ghost_project")
         assert cleaned == []
 
     def test_cleanup_temp_files_permission_error_graceful_recovery(self, tmp_path, monkeypatch):
         """Verifies that an unlink error on one file does not halt cleanup of remaining files."""
+        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
         monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
 
         proj_dir = tmp_path / "projects" / "p_perm"
@@ -143,6 +165,7 @@ class TestDefect1CleanupTempFilesAdversarial:
         temp2 = chap_dir / "clip_2_raw_temp.mp4"
         temp1.write_text("t1")
         temp2.write_text("t2")
+        self._seed_two_receipt_gate(proj_dir, "p_perm", chapter="1")
 
         original_unlink = Path.unlink
 
@@ -207,59 +230,11 @@ class TestDefect2FFmpegEnforcementAdversarial:
                 # str(exc_info.value) contains trailing 500 chars snippet
                 assert "STREAM_CORRUPT" in str(exc_info.value)
 
-    def test_cli_compile_missing_ffmpeg_yields_dependency_exit_code_4(self, tmp_path, monkeypatch):
-        """Verifies manga-recap compile emits exit code 4 and DEPENDENCY_ERROR envelope when FFmpeg missing."""
-        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
-        init_project_layout("adv_p", "Adv Project")
-        init_chapter_layout("adv_p", "1")
-
-        with patch("shutil.which", return_value=None):
-            with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p", "--chapters", "1", "--json"]):
-                out_buf = io.StringIO()
-                with patch("sys.stdout", out_buf):
-                    code = main()
-
-                assert code == ExitCode.DEPENDENCY_ERROR
-                assert code == 4
-
-                payload = json.loads(out_buf.getvalue())
-                assert payload["exit_code"] == 4
-                assert payload["status"] == "error"
-                assert payload["error"]["code"] == "DEPENDENCY_ERROR"
-
-    def test_cli_compile_ffmpeg_failure_yields_general_error_exit_code_1(self, tmp_path, monkeypatch):
-        """Verifies manga-recap compile emits exit code 1 and captures stderr when FFmpeg transcode fails."""
-        monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(tmp_path))
-        monkeypatch.setattr(config, "storage_dir", tmp_path / "projects")
-
-        init_project_layout("adv_p2", "Adv Project 2")
-        init_chapter_layout("adv_p2", "1")
-        chap_dir = tmp_path / "projects" / "adv_p2" / "chapters" / "1"
-        (chap_dir / "video").mkdir(parents=True, exist_ok=True)
-        (chap_dir / "video" / "chapter_1_final_v1.mp4").write_text("dummy")
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "FFmpeg codec crash: out of memory / corrupted bitstream"
-        mock_result.stdout = ""
-
-        with patch("shutil.which", return_value="/usr/local/bin/ffmpeg"):
-            with patch("subprocess.run", return_value=mock_result):
-                with patch.object(sys, "argv", ["manga-recap", "compile", "-p", "adv_p2", "--chapters", "1", "--approved", "--json"]):
-                    out_buf = io.StringIO()
-                    with patch("sys.stdout", out_buf):
-                        code = main()
-
-                    assert code == ExitCode.GENERAL_ERROR
-                    assert code == 1
-
-                    payload = json.loads(out_buf.getvalue())
-                    assert payload["exit_code"] == 1
-                    assert payload["status"] == "error"
-                    assert payload["error"]["code"] == "GENERAL_ERROR"
-                    assert "FFmpeg codec crash" in payload["error"]["message"]
+    # Canonical replacement recorded in v4_regression_migration.json.
+    pass
 
 
 # ==============================================================================

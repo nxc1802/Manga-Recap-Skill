@@ -66,6 +66,9 @@ def resolve_segment_voice(
 
 def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     """Synthesizes speech audio for chapter script segments using local VieNeu-TTS engine."""
+    from src.core.execution_policy import enforce_execution_policy
+    enforce_execution_policy("tts", args)
+    from src.render.artifact_validation import validate_audio
     project_slug = getattr(args, "project", "")
     chapter_num = getattr(args, "chapter", None)
     voice_override = getattr(args, "voice", None)
@@ -117,6 +120,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             chapter_number=str(chapter_num),
             gpu=True,
             wait=True,
+            job_type="tts",
         )
         update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.COMPLETED)
         return {
@@ -136,6 +140,8 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     try:
         script_raw = read_json(script_path)
         script_obj = RecapScript.model_validate(script_raw)
+        from src.render.visual_policy import validate_narration_evidence
+        validate_narration_evidence(chap_dir, script_obj)
 
         audio_clips_dir = chap_dir / "audio" / "clips"
         audio_clips_dir.mkdir(parents=True, exist_ok=True)
@@ -164,26 +170,23 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             except Exception:
                 pass
 
-        default_voice = voice_override or approved_voice or script_obj.default_voice or "Ngọc Huyền"
-        default_speed = speed_override or approved_speed or 1.0
-        
-        # Resolve requested engine mode
-        requested_engine = getattr(args, "engine", "neural")
-        if getattr(args, "mock", False):
-            requested_engine = "mock"
-        elif os.getenv("PYTEST_CURRENT_TEST") and not os.getenv("VIENEU_FORCE_NEURAL"):
-            # When running in automated test suite without explicit neural flag, use mock backend
-            if requested_engine == "neural":
-                requested_engine = "mock"
-
+        from src.core.series_setup import require_series_setup
+        from src.tts.catalog import resolve_voice_id
+        confirmed = require_series_setup(project_slug, project_dir=project_dir)
+        default_voice = resolve_voice_id(str(confirmed.answers["Q03"].user_answer))
+        default_speed = float(str(confirmed.answers["Q04"].user_answer).lower().rstrip("x"))
+        if voice_override and resolve_voice_id(voice_override) != default_voice:
+            raise CliValidationError("Voice override conflicts with confirmed Q03")
+        if speed_override and speed_override != default_speed:
+            raise CliValidationError("Speed override conflicts with confirmed Q04")
+        approved_voice, approved_character_mapping = default_voice, {}
+        if getattr(args, "mock", False) or getattr(args, "engine", "neural") != "neural":
+            raise CliValidationError("Production TTS requires the real neural engine")
         force_reload = getattr(args, "force_reload", False)
         from src.tts.engine import EngineMode
-        if requested_engine == "neural":
-            engine = get_tts_engine(force_mode=EngineMode.NEURAL, force_reload=force_reload)
-        elif requested_engine == "mock":
-            engine = get_tts_engine(force_mode=EngineMode.MOCK, force_reload=force_reload)
-        else:
-            engine = get_tts_engine(force_reload=force_reload)
+        engine = get_tts_engine(force_mode=EngineMode.NEURAL, force_reload=force_reload)
+        if getattr(engine, "mode", None) != "neural":
+            raise CliValidationError("Neural engine unavailable; refusing fallback audio")
 
         synthesized_count = 0
         cached_count = 0
@@ -200,7 +203,9 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                 approved_character_mapping=approved_character_mapping,
                 default_voice=default_voice,
             )
-            speed = speed_override or default_speed
+            if resolve_voice_id(voice) != default_voice:
+                raise CliValidationError("Segment voice conflicts with confirmed single narrator")
+            speed = default_speed
             seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
             engine_mode = getattr(engine, "mode", "neural")
             calculated_fingerprint = calculate_utterance_fingerprint(
@@ -223,7 +228,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                     and (seg.synthesized_voice == voice or seg.voice_id == voice)
                 ):
                     try:
-                        dur = get_wav_duration_seconds(seg_audio_file)
+                        dur = validate_audio(seg_audio_file)["duration"]
                         if dur > 0:
                             actual_checksum = calculate_sha256(seg_audio_file)
                             if seg.checksum == actual_checksum:
@@ -255,6 +260,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                     emotion_cue=s.emotion_cue,
                     force=force_resynth,
                 )
+                dur = validate_audio(s_file)["duration"]
                 s.synthesized_voice = v
                 if v_s == "manual":
                     s.voice_id = v
@@ -309,6 +315,10 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             reset_stage_checkpoint(chap_dir, StageType.RENDER)
             reset_stage_checkpoint(chap_dir, StageType.FINALIZE)
 
+        if not script_obj.segments:
+            raise CliValidationError("Empty script cannot complete audio stage")
+        for segment in script_obj.segments:
+            validate_audio(chap_dir / segment.audio_path)
         # Checkpoint -> COMPLETED
         update_checkpoint(
             chap_dir,

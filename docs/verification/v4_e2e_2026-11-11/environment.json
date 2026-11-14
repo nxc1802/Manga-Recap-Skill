@@ -1,0 +1,18 @@
+{
+  "git_sha": "c890afeeeb2512e91f9044e7357d01568335120f",
+  "git_branch": "feat/v4-strict-form-motion-cloud-archive",
+  "python_executable": "/Volumes/WorkSpace/Factory/Manga Review/venv/bin/python",
+  "python_version": "3.12.13 (main, Jun 23 2026, 15:44:24) [Clang 22.1.3 ]",
+  "platform": "macOS-26.6-arm64-arm-64bit",
+  "os": "Darwin",
+  "os_release": "25.6.0",
+  "architecture": "arm64",
+  "ffmpeg_version": "ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+  "ffprobe_version": "ffprobe version 9.0.2 Copyright (c) 2007-2026 the FFmpeg developers",
+  "vieneu_version": "3.8.3",
+  "onnxruntime_version": "1.31.1",
+  "soundfile_version": "0.14.0",
+  "pydantic_version": "2.14.2",
+  "pytest_version": "9.2.0",
+  "device": "mps"
+}

@@ -1,0 +1,26 @@
+{
+  "schema_version": "4.1.0",
+  "all_checks_passed": true,
+  "checks": {
+    "tampered_local_input": {
+      "passed": true,
+      "rejected_with": "Local input changed while cloud job ran: project.json"
+    },
+    "corrupted_artifact_hash": {
+      "passed": true,
+      "rejected_with": "Cloud output hash mismatch"
+    },
+    "untrusted_manifest_sha": {
+      "passed": true,
+      "rejected_with": "Cloud result does not match dispatched job"
+    },
+    "visual_plan_semantic_mismatch": {
+      "passed": true,
+      "rejected_with": "Cloud VisualPlan semantic parity failed"
+    },
+    "audio_metadata_mismatch": {
+      "passed": true,
+      "rejected_with": "Cloud audio metadata mismatch"
+    }
+  }
+}

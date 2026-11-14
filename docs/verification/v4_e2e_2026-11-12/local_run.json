@@ -1,0 +1,71 @@
+{
+  "schema_version": "4.1.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapter_number": "1",
+  "setup": {
+    "setup_revision": 1,
+    "snapshot_hash": "89391b5d9caf937da1d13ba2373eb4e6a6ceaaa83355b87f3bd365ab1182c31d",
+    "answers": {
+      "Q01": {
+        "source": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/raw",
+        "chapters": "1"
+      },
+      "Q02": "kaggle",
+      "Q03": "Ngọc Huyền",
+      "Q04": 1.0,
+      "Q05": false,
+      "Q06": "static",
+      "Q07": true,
+      "Q08": {
+        "account": "default",
+        "privacy": "unlisted"
+      },
+      "Q09": "final",
+      "Q10": {
+        "none": true
+      }
+    }
+  },
+  "tts": {
+    "engine": "neural",
+    "voice": "Ngọc Huyền",
+    "clips_count": 37,
+    "total_duration_seconds": 303.68,
+    "valid": true
+  },
+  "visual_plan": {
+    "shots_count": 97,
+    "total_duration_seconds": 303.68,
+    "input_fingerprint": "be1af2a4d90bb39676388045d2f83bc1003cb67d4d77dad011ded35d409d9ec7",
+    "motions": [
+      "static"
+    ]
+  },
+  "render": {
+    "preview_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "frames": 9110,
+    "duration": 303.68,
+    "subtitles_cues": 187,
+    "subtitles_sha256": "bf6cb2ccfc8b338260b99db43eff9308dc18b233c4b7ee7ca57b381b8f286d50",
+    "final_promoted": true,
+    "final_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "export_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b"
+  },
+  "thumbnail": {
+    "sha256": "09afbc3d2606804a8e3d6550fae55ea10c56d165ee77b8a14025562cbc9dcef2",
+    "title": "NHÂN VẬT PHỤ",
+    "subtitle": "THẾ GIỚI ĐIÊN LOẠN",
+    "color_preset": "yellow_black"
+  },
+  "approval": {
+    "schema_version": "4.1.0",
+    "human_review_status": "approved",
+    "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+    "chapter_number": "1",
+    "approved_at": "2026-11-11T23:34:39.947928Z",
+    "reviewer": "cuongnguyen1802",
+    "config_fingerprint": "7984f869b60c41cecdbc441489ff8fc1a69c2727ff7224dbc70bfc19d84eb5dc",
+    "artifact_hash": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "artifact_path": "video/preview.mp4"
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "SetupAnswerItem": {
+      "additionalProperties": false,
+      "description": "User-confirmed response item for a single setup question.",
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "question_title": {
+          "title": "Question Title",
+          "type": "string"
+        },
+        "user_answer": {
+          "title": "User Answer"
+        },
+        "answer_source": {
+          "const": "user",
+          "default": "user",
+          "title": "Answer Source",
+          "type": "string"
+        },
+        "raw_input": {
+          "anyOf": [
+            {},
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Input"
+        },
+        "confirmed_at": {
+          "title": "Confirmed At",
+          "type": "string"
+        },
+        "normalized": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized"
+        }
+      },
+      "required": [
+        "question_id",
+        "question_title",
+        "user_answer",
+        "confirmed_at"
+      ],
+      "title": "SetupAnswerItem",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Persistent cryptographic record of the 10-question series setup.",
+  "properties": {
+    "schema_version": {
+      "const": "4.0.0",
+      "default": "4.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "setup_revision": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Setup Revision",
+      "type": "integer"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "title": "Updated At",
+      "type": "string"
+    },
+    "user_confirmed_at": {
+      "title": "User Confirmed At",
+      "type": "string"
+    },
+    "reviewer": {
+      "default": "user",
+      "minLength": 1,
+      "title": "Reviewer",
+      "type": "string"
+    },
+    "answers": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SetupAnswerItem"
+      },
+      "title": "Answers",
+      "type": "object"
+    },
+    "snapshot_hash": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Snapshot Hash",
+      "type": "string"
+    },
+    "legacy_migrated": {
+      "default": false,
+      "title": "Legacy Migrated",
+      "type": "boolean"
+    },
+    "migration_notes": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Migration Notes"
+    }
+  },
+  "required": [
+    "project_slug",
+    "created_at",
+    "updated_at",
+    "user_confirmed_at",
+    "answers",
+    "snapshot_hash"
+  ],
+  "title": "SeriesSetupAnswers",
+  "type": "object"
+}

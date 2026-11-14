@@ -1,0 +1,23 @@
+{
+  "schema_version": "4.0.0",
+  "receipt_type": "youtube_verification",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapter_number": "1",
+  "video_id": "bGpDJ15um7Q",
+  "video_url": "https://www.youtube.com/watch?v=bGpDJ15um7Q",
+  "account": "default",
+  "channel_title": "Đầu Tư Nhàn Rỗi Và Thông Minhh",
+  "channel_id": "UCpTOfO8g5i1Jxg77gee7T9Q",
+  "title": "[Review Truyện] Nhân Vật Phụ Trong Thế Giới Điên Loạn - Tập 1",
+  "upload_status": "processed",
+  "has_captions": true,
+  "has_custom_thumbnail": true,
+  "verified_at": "2026-11-13T14:06:39.403323+00:00",
+  "privacy_status": "unlisted",
+  "captions_uploaded": true,
+  "thumbnail_uploaded": true,
+  "captions_required": true,
+  "thumbnail_required": true,
+  "uploaded_at": "2026-11-13T14:04:58.344631+00:00",
+  "status": "verified"
+}

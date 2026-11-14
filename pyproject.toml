@@ -18,6 +18,7 @@ dependencies = [
     "beautifulsoup4",
     "vieneu>=3.8.3",
     "pytest",
+    "huggingface_hub>=0.26.0",
 ]
 
 [project.scripts]

@@ -1,0 +1,106 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.0.0",
+      "default": "4.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tombstone_version": {
+      "const": "4.0.0",
+      "default": "4.0.0",
+      "title": "Tombstone Version",
+      "type": "string"
+    },
+    "project_slug": {
+      "minLength": 1,
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "archive_timestamp": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Archive Timestamp"
+    },
+    "cleanup_timestamp": {
+      "minLength": 1,
+      "title": "Cleanup Timestamp",
+      "type": "string"
+    },
+    "hf_repo_id": {
+      "minLength": 1,
+      "title": "Hf Repo Id",
+      "type": "string"
+    },
+    "hf_commit_sha": {
+      "pattern": "^[a-f0-9]{40}$",
+      "title": "Hf Commit Sha",
+      "type": "string"
+    },
+    "hf_remote_url": {
+      "minLength": 1,
+      "title": "Hf Remote Url",
+      "type": "string"
+    },
+    "manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Manifest Sha256",
+      "type": "string"
+    },
+    "youtube_videos": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Youtube Videos",
+      "type": "object"
+    },
+    "youtube_videos_total": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Youtube Videos Total"
+    },
+    "youtube_videos_truncated": {
+      "default": false,
+      "title": "Youtube Videos Truncated",
+      "type": "boolean"
+    },
+    "reclaimed_bytes": {
+      "minimum": 0,
+      "title": "Reclaimed Bytes",
+      "type": "integer"
+    },
+    "cleaned_files_count": {
+      "minimum": 0,
+      "title": "Cleaned Files Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "project_slug",
+    "cleanup_timestamp",
+    "hf_repo_id",
+    "hf_commit_sha",
+    "hf_remote_url",
+    "manifest_sha256",
+    "reclaimed_bytes",
+    "cleaned_files_count"
+  ],
+  "title": "TombstoneRecord",
+  "type": "object"
+}

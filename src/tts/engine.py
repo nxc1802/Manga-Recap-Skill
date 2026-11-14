@@ -296,10 +296,86 @@ class MockTTSBackend(BaseTTSBackend):
         return [(v.description, v.voice_id) for v in CATALOG_VOICES.values()]
 
 
+_VALID_EMOTION_CUES = frozenset({"[cười]", "[thở dài]", "[hắng giọng]"})
+
+
+def _prepare_tts_text(text: str, emotion_cue: Optional[str] = None) -> str:
+    """Normalizes input text and prepends supported VieNeu emotion cue once."""
+    input_text = text.strip()
+    if emotion_cue and emotion_cue in _VALID_EMOTION_CUES:
+        if emotion_cue not in input_text:
+            input_text = f"{emotion_cue} {input_text}"
+    return input_text
+
+
+def _validate_tts_speed(speed: Any) -> float:
+    """Validates explicit speech speed within [0.5, 2.0]."""
+    if speed is None:
+        raise ValueError("Neural TTS speed must be explicit and in 0.5..2.0")
+    target_speed = float(speed)
+    if not math.isfinite(target_speed) or not 0.5 <= target_speed <= 2.0:
+        raise ValueError("Neural TTS speed must be explicit and in 0.5..2.0")
+    return target_speed
+
+
+def _normalize_native_wav_file(
+    raw_path: Path,
+    output_path: Path,
+    target_speed: float,
+    *,
+    consume_raw: bool = False,
+) -> Dict[str, Any]:
+    """
+    Validates native WAV output, applies FFmpeg atempo/resample ONLY when needed,
+    atomically writes 48 kHz 16-bit mono PCM WAV to output_path, and returns audio report.
+    """
+    from src.render.artifact_validation import validate_audio
+
+    output_path = Path(output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    validate_audio(raw_path)
+
+    with wave.open(str(raw_path), "rb") as source:
+        native_format = (source.getframerate(), source.getnchannels(), source.getsampwidth())
+
+    if native_format == (48000, 1, 2) and abs(target_speed - 1.0) <= 1e-8:
+        if consume_raw and raw_path.parent == output_path.parent:
+            os.replace(raw_path, output_path)
+            report = validate_audio(output_path)
+        else:
+            tmp_out = output_path.with_name(f".{output_path.stem}.tmp.{uuid.uuid4().hex[:8]}.wav")
+            try:
+                shutil.copyfile(raw_path, tmp_out)
+                report = validate_audio(tmp_out)
+                os.replace(tmp_out, output_path)
+            finally:
+                tmp_out.unlink(missing_ok=True)
+        _cache_audio_metrics(output_path, report["duration"], report["sha256"])
+        return report
+
+    tmp_out = output_path.with_name(f".{output_path.stem}.tmp.{uuid.uuid4().hex[:8]}.wav")
+    try:
+        cmd = ["ffmpeg", "-v", "error", "-y", "-i", str(raw_path)]
+        if abs(target_speed - 1.0) > 1e-8:
+            cmd += ["-af", f"atempo={target_speed}"]
+        cmd += ["-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(tmp_out)]
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode:
+            raise RuntimeError(
+                f"Native TTS audio normalization failed: {result.stderr.decode(errors='replace')[-2000:]}"
+            )
+        report = validate_audio(tmp_out)
+        os.replace(tmp_out, output_path)
+        _cache_audio_metrics(output_path, report["duration"], report["sha256"])
+        return report
+    finally:
+        tmp_out.unlink(missing_ok=True)
+
+
 class NeuralTTSBackend(BaseTTSBackend):
     """
     Offline neural inference backend wrapping `vieneu.Vieneu(mode="v3turbo")`.
-    Runs locally on Apple Silicon (CPU/MPS) via ONNX Runtime without network calls.
+    Runs locally on Apple Silicon (CPU/MPS) via ONNX Runtime or CUDA PyTorch without network calls.
     """
 
     def __init__(self, mode: str = "v3turbo", precision: str = "fp32"):
@@ -343,16 +419,11 @@ class NeuralTTSBackend(BaseTTSBackend):
         emotion_cue: Optional[str] = None,
         **kwargs: Any,
     ) -> float:
-        import numpy as np
-
         output_path = Path(output_path).resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         resolved_voice = resolve_voice_id(voice)
-
-        input_text = text.strip()
-        if emotion_cue and emotion_cue in ["[cười]", "[thở dài]", "[hắng giọng]"]:
-            if emotion_cue not in input_text:
-                input_text = f"{emotion_cue} {input_text}"
+        target_speed = _validate_tts_speed(speed)
+        input_text = _prepare_tts_text(text, emotion_cue=emotion_cue)
 
         t_infer_0 = time.monotonic()
         with self._infer_lock:
@@ -364,20 +435,63 @@ class NeuralTTSBackend(BaseTTSBackend):
         self.total_inference_seconds += (time.monotonic() - t_infer_0)
         self.utterance_count += 1
 
-        # File packaging and speed adjustment run OUTSIDE the infer lock!
-        target_speed = max(0.5, min(2.0, float(speed)))
-        if abs(target_speed - 1.0) <= 0.01:
-            wav_bytes, dur, checksum = _encode_wav_16bit_pcm(audio_data, 48000)
-            output_path.write_bytes(wav_bytes)
-            self._last_checksum = checksum
-            _cache_audio_metrics(output_path, dur, checksum)
-            return dur
-        else:
-            pcm_bytes = (np.clip(audio_data, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
-            dur, checksum = _apply_speed_to_file(pcm_bytes, target_speed, output_path, 48000)
-            self._last_checksum = checksum
-            _cache_audio_metrics(output_path, dur, checksum)
-            return dur
+        # The SDK owns the native waveform/container contract. Never stamp an
+        # assumed sample rate onto an opaque inference result.
+        raw_path = output_path.with_name(f".{output_path.stem}.native.{uuid.uuid4().hex[:8]}.wav")
+        try:
+            with self._infer_lock:
+                self._sdk.save(audio_data, str(raw_path))
+            report = _normalize_native_wav_file(
+                raw_path,
+                output_path,
+                target_speed,
+                consume_raw=True,
+            )
+            return report["duration"]
+        finally:
+            raw_path.unlink(missing_ok=True)
+
+    def synthesize_batch_native(
+        self,
+        tasks: List[Dict[str, Any]],
+        *,
+        batch_size: int = 8,
+        cpu_workers: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Executes native batch synthesis (when supported by SDK) with length bucketing,
+        OOM halving backoff, and offloaded CPU post-processing.
+        """
+        if not tasks:
+            return []
+        from src.tts.cuda_worker import run_sdk_batch_tasks
+
+        lock = getattr(self, "_infer_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._infer_lock = lock
+        mode = getattr(self, "mode", "v3turbo")
+
+        normalized_inputs: List[Dict[str, Any]] = []
+        for idx, task in enumerate(tasks):
+            if task.get("seq_id") is None:
+                normalized_inputs.append({**task, "seq_id": f"{idx:03d}"})
+            else:
+                normalized_inputs.append(task)
+
+        results = run_sdk_batch_tasks(
+            self._sdk,
+            normalized_inputs,
+            mode=mode,
+            batch_size=batch_size,
+            cpu_workers=cpu_workers,
+            sdk_lock=lock,
+        )
+        self.total_inference_seconds = getattr(self, "total_inference_seconds", 0.0) + sum(
+            float(r.get("inference_seconds", 0.0)) for r in results
+        )
+        self.utterance_count = getattr(self, "utterance_count", 0) + len(results)
+        return results
 
     def _apply_speed(self, wav_path: Path, speed: float) -> None:
         """Applies pitch-preserving time stretching via ffmpeg atempo filter."""
@@ -537,10 +651,11 @@ class VieNeuEngine:
             if not tmp_path.exists() or tmp_path.stat().st_size <= 44:
                 raise RuntimeError(f"TTS synthesis produced invalid or empty file at {tmp_path}")
 
+            if self.mode == EngineMode.NEURAL.value:
+                from src.render.artifact_validation import validate_audio
+                dur = validate_audio(tmp_path)["duration"]
             tmp_path.replace(output_path)
-            checksum = getattr(self.backend, "_last_checksum", None)
-            if not checksum:
-                checksum = calculate_sha256(output_path)
+            checksum = calculate_sha256(output_path)
             _cache_audio_metrics(output_path, dur, checksum)
             return dur, checksum, False
         except Exception:
@@ -579,6 +694,78 @@ class VieNeuEngine:
                 return list(pool.map(_worker, tasks))
         else:
             return [_worker(t) for t in tasks]
+
+    def synthesize_batch_native(
+        self,
+        tasks: List[Dict[str, Any]],
+        *,
+        batch_size: int = 8,
+        cpu_workers: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """
+        Native batch synthesis wrapper returning per-utterance metadata dicts in
+        original input order. Uses NeuralTTSBackend.synthesize_batch_native when
+        running on neural backend (no silent mock fallback).
+        """
+        if not tasks:
+            return []
+
+        if hasattr(self.backend, "synthesize_batch_native"):
+            return self.backend.synthesize_batch_native(
+                tasks,
+                batch_size=batch_size,
+                cpu_workers=cpu_workers,
+            )
+
+        if not isinstance(self.backend, MockTTSBackend):
+            raise RuntimeError("TTS backend does not support synthesize_batch_native")
+
+        from src.render.artifact_validation import validate_audio
+
+        results: List[Dict[str, Any]] = []
+        for idx, task in enumerate(tasks):
+            seq_id = task.get("seq_id") if task.get("seq_id") is not None else f"{idx:03d}"
+            raw_text = task.get("text")
+            if not isinstance(raw_text, str) or not raw_text.strip():
+                raise ValueError(f"Task {seq_id}: text must be a non-empty string")
+            raw_out = task.get("output_path")
+            if raw_out is None or not str(raw_out).strip():
+                raise ValueError(f"Task {seq_id}: output_path is required")
+            out_path = Path(raw_out).resolve()
+            if out_path.exists() and out_path.is_dir():
+                raise ValueError(f"Task {seq_id}: output_path points to a directory: {out_path}")
+            target_speed = _validate_tts_speed(task.get("speed", 1.0))
+
+            t0 = time.monotonic()
+            dur, _, _ = self.synthesize_utterance(
+                text=raw_text,
+                voice=task.get("voice") or "Ngọc Huyền",
+                output_path=out_path,
+                speed=target_speed,
+                emotion=task.get("emotion"),
+                emotion_cue=task.get("emotion_cue"),
+            )
+            infer_sec = round(time.monotonic() - t0, 6)
+            t1 = time.monotonic()
+            report = validate_audio(out_path)
+            post_sec = round(time.monotonic() - t1, 6)
+            results.append(
+                {
+                    "seq_id": seq_id,
+                    "output_path": str(out_path),
+                    "duration": report["duration"],
+                    "sha256": report["sha256"],
+                    "sample_rate": report["sample_rate"],
+                    "rms": report["rms"],
+                    "valid": bool(report["valid"]),
+                    "inference_seconds": infer_sec,
+                    "postprocess_seconds": post_sec,
+                    "batch_used": False,
+                    "effective_batch_size": 1,
+                    "batching_mode": "mock_sequential",
+                }
+            )
+        return results
 
     def synthesize_to_file(
         self,

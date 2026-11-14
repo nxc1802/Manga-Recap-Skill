@@ -8,6 +8,8 @@ Authored by M3 Challenger 1 to empirically challenge and verify:
 4. Schema & Checkpoint Integrity: PanelManifest compliance and CLI manga-recap segment exit codes / JSON envelopes
 """
 
+from v4_fixtures import init_confirmed_project
+
 import json
 import os
 from pathlib import Path
@@ -311,8 +313,8 @@ class TestContactSheetConformance:
                 assert s_img.size == (1920, 1920)
                 assert s_img.format == "JPEG"
 
-                # Check crimson badge pixel color at center of badge (46, 24)
-                px = s_img.getpixel((46, 24))
+                # Sample the badge background away from white glyphs/outline.
+                px = s_img.getpixel((70, 30))
                 r, g, b = px[:3]
                 # Crimson red has high red, low green/blue
                 assert r > 150, f"Expected red > 150, got {r}"
@@ -336,7 +338,7 @@ class TestCliSegmentIntegrationAndSchema:
         if proj_dir.exists():
             import shutil
             shutil.rmtree(proj_dir)
-        init_project_layout(slug, title="Adv M3 Segmentation Project")
+        init_confirmed_project(slug, title="Adv M3 Segmentation Project")
         chap_dir = init_chapter_layout(slug, "1")
         yield slug, chap_dir
         if proj_dir.exists():

@@ -1,0 +1,84 @@
+{
+  "date": "2026-11-11",
+  "source_commit": "0d10ff13b18313f76eddb9b81271208ab68a5dcd",
+  "source_tree": "7b9e2cf867b103889138fcdc84529947fb0e23a4",
+  "source_note": "Tests executed against the working contents subsequently committed as this SHA; no source/test changes during this final run. Evidence documentation and historical-spec whitespace committed separately; no runtime or active test changes.",
+  "pull_commit": "ba11e81ac64733327c4bfc1dbe2bb9845ac6b87c",
+  "checks": [
+    {
+      "command": "python3 -m pytest -q --disable-warnings --junitxml=/tmp/v4-final.xml",
+      "exit_code": 0,
+      "passed": 793,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "duration_seconds": 90.62,
+      "junit_sha256": "71460bad3bb36cad074ad8d70799d345be250bb49549a8ee5f98583d37eccc5e"
+    },
+    {
+      "command": "python3 -m compileall -q src tests",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONPATH=. python3 scripts/freeze_contracts.py --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check HEAD~2 HEAD",
+      "exit_code": 0
+    }
+  ],
+  "regression_migration": {
+    "ledger": "v4_regression_migration.json",
+    "original_failed_error_nodes": 183,
+    "class_counts": {
+      "B": 74,
+      "A": 6,
+      "D": 9,
+      "C": 93,
+      "E": 1
+    },
+    "consolidated_legacy_nodes": 128,
+    "note": "Obsolete/duplicate scenarios consolidated with replacement mappings, explicit fixtures migrated; future/live specs outside default tests are unexecuted/unaccepted, not passing. No xfail/mass skip added."
+  },
+  "environment": {
+    "test_python": "3.14.8 (main, Sep 30 2026, 17:55:09) [Clang 21.0.0 (clang-2100.3.34.2)]",
+    "os": "macOS-26.6-arm64-arm-64bit-Mach-O",
+    "ffmpeg": "9.0.2",
+    "ffprobe": "9.0.2",
+    "test_python_vieneu_installed": false,
+    "available_neural_environment": {
+      "python": "venv/bin/python (3.12.13)",
+      "vieneu_version": "3.8.3",
+      "cache_directory_observed": "models--pnnbao-ump--VieNeu-TTS-v3-Turbo",
+      "model_integrity_verified": false,
+      "model_loaded": false,
+      "synthesis_attempted": false,
+      "device_verified": false
+    }
+  },
+  "evidence_level": "L1/L2 only: isolated signals/images/approvals and real encode/decode; no neural/human/live acceptance",
+  "real_e2e": {
+    "status": "BLOCKED",
+    "required_tool": "ask_question",
+    "tool_available": false,
+    "real_workspace_setup_file_count": 0,
+    "reason": "AGENTS.md requires explicit Q01-Q10 through ask_question; unavailable tool => stop without jobs",
+    "real_neural_synthesis": false,
+    "real_chapter_render": false,
+    "human_review": false,
+    "final_promotion": false,
+    "live_kaggle_run": false,
+    "live_semantic_parity": false,
+    "live_failure_path": false
+  },
+  "gates": {
+    "G4": "OPEN",
+    "G5": "OPEN",
+    "G6": "OPEN",
+    "G7": "OPEN"
+  },
+  "dual_t4": "disabled pending real G7 PASS",
+  "benchmark": "not run or published as production evidence",
+  "github_ci": "not run for this local checkpoint"
+}

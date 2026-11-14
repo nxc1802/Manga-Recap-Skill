@@ -52,6 +52,23 @@ def create_pcm_wav(path: Path, duration: float = 3.0, sample_rate: int = 48000, 
         wf.writeframes(struct.pack(f"<{num_frames}h", *frames))
 
 
+SYNTHETIC_WAV_SPECS = (
+    ("audio_1_001.wav", 3.5, 440.0),
+    ("audio_1_002_1.wav", 5.2, 554.37),
+    ("audio_1_003.wav", 4.0, 330.0),
+)
+
+
+def ensure_synthetic_audio_clips(fixture_root: Path) -> None:
+    """Materialize deterministic synthetic WAV clips if ignored/absent in a clean checkout."""
+    audio_dir = fixture_root / "chapters" / "1" / "audio" / "clips"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    for w_name, w_dur, w_freq in SYNTHETIC_WAV_SPECS:
+        w_path = audio_dir / w_name
+        if not w_path.exists():
+            create_pcm_wav(w_path, duration=w_dur, sample_rate=48000, freq=w_freq)
+
+
 def main():
     root = Path(__file__).resolve().parent / "synthetic"
     root.mkdir(parents=True, exist_ok=True)
@@ -98,13 +115,8 @@ def main():
 
     # 3. Generate Audio Clips
     audio_dir = chap_dir / "audio" / "clips"
-    wav_specs = [
-        ("audio_1_001.wav", 3.5, 440.0),
-        ("audio_1_002_1.wav", 5.2, 554.37),
-        ("audio_1_003.wav", 4.0, 330.0),
-    ]
     wav_meta = {}
-    for w_name, w_dur, w_freq in wav_specs:
+    for w_name, w_dur, w_freq in SYNTHETIC_WAV_SPECS:
         w_path = audio_dir / w_name
         create_pcm_wav(w_path, duration=w_dur, sample_rate=48000, freq=w_freq)
         wav_meta[w_name] = {

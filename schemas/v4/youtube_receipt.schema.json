@@ -1,0 +1,163 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "4.0.0",
+      "default": "4.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "receipt_type": {
+      "default": "youtube_upload",
+      "enum": [
+        "youtube_upload",
+        "youtube_verification"
+      ],
+      "title": "Receipt Type",
+      "type": "string"
+    },
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "chapter_number": {
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "video_id": {
+      "title": "Video Id",
+      "type": "string"
+    },
+    "video_url": {
+      "title": "Video Url",
+      "type": "string"
+    },
+    "account": {
+      "title": "Account",
+      "type": "string"
+    },
+    "channel_title": {
+      "title": "Channel Title",
+      "type": "string"
+    },
+    "channel_id": {
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "upload_status": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Upload Status"
+    },
+    "has_captions": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Has Captions"
+    },
+    "has_custom_thumbnail": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Has Custom Thumbnail"
+    },
+    "verified_at": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Verified At"
+    },
+    "privacy_status": {
+      "enum": [
+        "private",
+        "unlisted",
+        "public"
+      ],
+      "title": "Privacy Status",
+      "type": "string"
+    },
+    "captions_uploaded": {
+      "title": "Captions Uploaded",
+      "type": "boolean"
+    },
+    "thumbnail_uploaded": {
+      "title": "Thumbnail Uploaded",
+      "type": "boolean"
+    },
+    "captions_required": {
+      "title": "Captions Required",
+      "type": "boolean"
+    },
+    "thumbnail_required": {
+      "title": "Thumbnail Required",
+      "type": "boolean"
+    },
+    "uploaded_at": {
+      "title": "Uploaded At",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "uploaded",
+        "verified"
+      ],
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_slug",
+    "chapter_number",
+    "video_id",
+    "video_url",
+    "account",
+    "channel_title",
+    "channel_id",
+    "privacy_status",
+    "captions_uploaded",
+    "thumbnail_uploaded",
+    "captions_required",
+    "thumbnail_required",
+    "uploaded_at",
+    "status"
+  ],
+  "title": "YouTubeReceipt",
+  "type": "object"
+}

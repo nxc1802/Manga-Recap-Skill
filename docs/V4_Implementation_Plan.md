@@ -1,6 +1,6 @@
 # V4 Implementation Plan — Strict Setup, Visual Motion, Dual-T4 Production, HF Archive
 
-Status: IMPLEMENTATION PLAN (not a claim that features 2–4 have shipped).
+Status: HISTORICAL PLAN. Runtime implementation is not production verification. See [correctness remediation](V4_Correctness_Improvement_Plan.md) and [current evidence](V4_Correctness_Status.md).
 Baseline: `aea2ca9fb56723fa866c4454ad38e2f036ce82ec` (2026-11-10).
 Work branch: `feat/v4-strict-form-motion-cloud-archive`.
 Owner interfaces: Agent `SKILL.md`; Python `src/cli/`, `src/core/`, `src/render/`, `src/cloud/`, `src/production/`, `src/youtube/`; new `src/archive/`.

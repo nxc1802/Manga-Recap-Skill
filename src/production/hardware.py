@@ -47,10 +47,64 @@ def probe_available_encoders() -> List[str]:
         return []
 
 
+def probe_ffmpeg_capabilities(ffmpeg_bin: str = "ffmpeg") -> Dict[str, bool]:
+    """Probes FFmpeg encoders and filters needed by P8 fast-path rendering."""
+    caps: Dict[str, bool] = {
+        "h264_nvenc": False,
+        "libx264": False,
+        "h264_videotoolbox": False,
+        "crop": False,
+        "scale": False,
+        "overlay": False,
+        "subtitles": False,
+        "ass": False,
+        "scale_cuda": False,
+        "zoompan": False,
+    }
+    resolved = ffmpeg_bin if ("/" in ffmpeg_bin or "\\" in ffmpeg_bin) else shutil.which(ffmpeg_bin)
+    if not resolved or not shutil.which(resolved):
+        return caps
+
+    try:
+        enc_res = subprocess.run([resolved, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=5, check=False)
+        if enc_res.returncode == 0:
+            past_sep = False
+            found_encoders = set()
+            for line in enc_res.stdout.splitlines():
+                s = line.strip()
+                if s.startswith("------"):
+                    past_sep = True
+                    continue
+                if past_sep and s:
+                    parts = s.split()
+                    if len(parts) >= 2 and parts[0].startswith("V"):
+                        found_encoders.add(parts[1])
+            for enc_name in ("h264_nvenc", "libx264", "h264_videotoolbox"):
+                caps[enc_name] = enc_name in found_encoders
+    except Exception as e:
+        logger.warning(f"Failed to probe ffmpeg encoders for capabilities: {e}")
+
+    try:
+        flt_res = subprocess.run([resolved, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=5, check=False)
+        if flt_res.returncode == 0:
+            found_filters = set()
+            for line in flt_res.stdout.splitlines():
+                s = line.strip()
+                parts = s.split()
+                if len(parts) >= 3 and "->" in parts[2]:
+                    found_filters.add(parts[1])
+            for flt_name in ("crop", "scale", "overlay", "subtitles", "ass", "scale_cuda", "zoompan"):
+                caps[flt_name] = flt_name in found_filters
+    except Exception as e:
+        logger.warning(f"Failed to probe ffmpeg filters for capabilities: {e}")
+
+    return caps
+
+
 def smoke_test_encoder(encoder: str) -> bool:
     """
     Executes a 0.1s null-muxer test to verify encoder functionality on current hardware/driver.
-    Uses lavfi synthetic black frame: does not touch disk.
+    Uses 256x256 lavfi synthetic black frame for NVENC minimum-dimension safety without touching disk.
     """
     if not shutil.which("ffmpeg"):
         return False
@@ -61,7 +115,9 @@ def smoke_test_encoder(encoder: str) -> bool:
         "-f",
         "lavfi",
         "-i",
-        "color=c=black:s=64x64:d=0.1",
+        "color=c=black:s=256x256:d=0.1",
+        "-pix_fmt",
+        "yuv420p",
         "-c:v",
         encoder,
         "-f",
@@ -76,40 +132,76 @@ def smoke_test_encoder(encoder: str) -> bool:
         return False
 
 
-def get_encoder_codec_args(encoder: str, preset: str = "medium", crf: str = "23") -> List[str]:
+def get_encoder_codec_args(
+    encoder: str,
+    preset: str = "medium",
+    crf: str = "23",
+    *,
+    quality_mode: Optional[str] = None,
+    gpu_index: int = 0,
+    profile: str = "high",
+) -> List[str]:
     """
-    Returns verified FFmpeg CLI flags for the resolved encoder.
+    Returns verified FFmpeg CLI flags for the resolved encoder with uniform stream profile.
     """
     enc = (encoder or "libx264").strip().lower()
+    qmode = (quality_mode or "").strip().lower() or None
+
     if enc in ("h264_nvenc", "nvenc"):
+        nv_preset = "p3" if qmode == "preview" else "p4"
+        nv_cq = str(crf)
+        if qmode == "preview" and nv_cq == "23":
+            nv_cq = "24"
+        elif qmode == "final" and nv_cq == "23":
+            nv_cq = "20"
         return [
             "-c:v",
             "h264_nvenc",
+            "-gpu",
+            str(int(gpu_index)),
             "-preset",
-            "p4",
+            nv_preset,
+            "-profile:v",
+            profile,
+            "-rc",
+            "vbr",
             "-cq",
-            str(crf),
+            nv_cq,
             "-b:v",
             "4500k",
         ]
     elif enc in ("h264_videotoolbox", "videotoolbox"):
+        bitrate = "3500k" if qmode == "preview" else "4500k"
         return [
             "-c:v",
             "h264_videotoolbox",
+            "-profile:v",
+            profile,
             "-b:v",
-            "4500k",
+            bitrate,
             "-prio_speed",
             "1",
         ]
     else:
         # Default libx264 CPU encoding
+        x264_preset = preset
+        x264_crf = str(crf)
+        if qmode == "preview":
+            if x264_preset == "medium":
+                x264_preset = "veryfast"
+            if x264_crf == "23":
+                x264_crf = "24"
+        elif qmode == "final" and x264_crf == "23":
+            x264_crf = "20"
         return [
             "-c:v",
             "libx264",
             "-preset",
-            preset,
+            x264_preset,
+            "-profile:v",
+            profile,
             "-crf",
-            str(crf),
+            x264_crf,
         ]
 
 

@@ -379,9 +379,10 @@ def generate_markdown_review_pack(data: Dict[str, Any], chap_dir: Path) -> str:
     lines.append("## 9. Editorial Decision & Feedback Protocol")
     lines.append("")
     lines.append("### To Approve:")
-    lines.append("Run final render with approval flag or record in `preview_approval.json`:")
+    lines.append("After a human has watched and approved the preview, record the exact hashes from `review_pack.json`:")
     lines.append("```bash")
-    lines.append(f"manga-recap render -p {data['project_slug']} -c {data['chapter_number']} --quality final --approved --json")
+    binding = data.get("review_binding", {})
+    lines.append(f"manga-recap review-approve -p {data['project_slug']} --reviewer HUMAN_NAME --config-fingerprint {binding.get('config_fingerprint', 'CONFIG_HASH')} --artifact-hash {binding.get('artifact_hash', 'ARTIFACT_HASH')} --json")
     lines.append("```")
     lines.append("")
     lines.append("### To Request Edits:")
@@ -567,7 +568,24 @@ def handle_review_pack(args: argparse.Namespace) -> Dict[str, Any]:
     # 4. Extract data
     data = build_review_pack_data(project_dir, chap_dir, project_slug, str(chapter_num))
 
+    if str(chapter_num) == "1":
+        from src.core.human_review import require_preview_approval
+        try:
+            require_preview_approval(project_dir)
+            data["human_review_status"] = "approved"
+        except Exception:
+            data["human_review_status"] = "unreviewed"
+
     generated_files: Dict[str, str] = {}
+
+    if str(chapter_num) == "1" and (chap_dir / "video" / "preview.mp4").is_file():
+        from src.core.human_review import review_fingerprint
+        from src.render.artifact_validation import fingerprint
+        data["review_binding"] = {
+            "artifact_path": "video/preview.mp4",
+            "config_fingerprint": review_fingerprint(project_dir),
+            "artifact_hash": fingerprint(chap_dir / "video" / "preview.mp4"),
+        }
 
     # 5. Write Markdown
     if pack_format in {"md", "all"}:

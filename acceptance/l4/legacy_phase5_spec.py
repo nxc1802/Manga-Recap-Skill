@@ -71,6 +71,8 @@ def phase5_env(tmp_path, monkeypatch):
 
     # Seed real repository assets from data/projects/warrior_grandpa_live
     source_proj = Path("data/projects/warrior_grandpa_live")
+    if not source_proj.exists():
+        pytest.skip("data/projects/warrior_grandpa_live not present in workspace")
     if source_proj.exists():
         # Copy characters, voice selection, project config
         for f in ["characters.json", "voice_selection.json", "story_summary.md", "project.json"]:

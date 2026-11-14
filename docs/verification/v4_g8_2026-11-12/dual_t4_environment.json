@@ -1,0 +1,39 @@
+{
+  "schema_version": "4.2.0",
+  "generated_at_utc": "2026-11-12T06:30:18.490603+00:00",
+  "platform": "Linux-6.18.55+-x86_64-with-glibc2.39",
+  "python_version": "3.13.16",
+  "spawn_method": "spawn",
+  "profile_id": "B5",
+  "encoder": "h264_nvenc",
+  "gpu_count": 2,
+  "gpus": [
+    {
+      "gpu_id": 0,
+      "gpu_uuid": "GPU-8c9a5265-4e7e-07fa-9f40-ccd49ed7cc49",
+      "name": "Tesla T4",
+      "vram_total_mb": 15360.0,
+      "usable_vram_budget_mb": 13824.0
+    },
+    {
+      "gpu_id": 1,
+      "gpu_uuid": "GPU-e6fa10da-4ce9-d6a0-796a-33067a950cef",
+      "name": "Tesla T4",
+      "vram_total_mb": 15360.0,
+      "usable_vram_budget_mb": 13824.0
+    }
+  ],
+  "ffmpeg_capabilities": {
+    "h264_nvenc": true,
+    "libx264": true,
+    "h264_videotoolbox": false,
+    "crop": true,
+    "scale": true,
+    "overlay": true,
+    "subtitles": true,
+    "ass": true,
+    "scale_cuda": true,
+    "zoompan": true
+  },
+  "mock_mode": false
+}

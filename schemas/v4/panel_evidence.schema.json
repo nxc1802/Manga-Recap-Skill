@@ -1,0 +1,276 @@
+{
+  "$defs": {
+    "ContactSheetInfo": {
+      "description": "Contact sheet grid image for Agent multi-panel visual review.",
+      "properties": {
+        "sheet_id": {
+          "title": "Sheet Id",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "panel_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Panel Ids",
+          "type": "array"
+        },
+        "columns": {
+          "default": 4,
+          "title": "Columns",
+          "type": "integer"
+        },
+        "rows": {
+          "default": 4,
+          "title": "Rows",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sheet_id",
+        "relative_path",
+        "panel_ids"
+      ],
+      "title": "ContactSheetInfo",
+      "type": "object"
+    },
+    "PanelItem": {
+      "description": "Segmented panel crop information.",
+      "properties": {
+        "panel_id": {
+          "description": "e.g. 'panel_001'",
+          "title": "Panel Id",
+          "type": "string"
+        },
+        "sequence_number": {
+          "minimum": 1,
+          "title": "Sequence Number",
+          "type": "integer"
+        },
+        "filename": {
+          "description": "e.g. 'panel_001.jpg'",
+          "title": "Filename",
+          "type": "string"
+        },
+        "relative_path": {
+          "description": "panels/panel_001.jpg",
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "source_image": {
+          "description": "Original raw image filename",
+          "title": "Source Image",
+          "type": "string"
+        },
+        "crop_box": {
+          "description": "(left, top, right, bottom) pixel coordinates",
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "integer"
+            }
+          ],
+          "title": "Crop Box",
+          "type": "array"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "aspect_ratio": {
+          "exclusiveMinimum": 0.0,
+          "title": "Aspect Ratio",
+          "type": "number"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PanelStatus",
+          "default": "active"
+        },
+        "evidence_metadata": {
+          "additionalProperties": true,
+          "title": "Evidence Metadata",
+          "type": "object"
+        },
+        "ocr_text_en": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ocr Text En"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Notes"
+        }
+      },
+      "required": [
+        "panel_id",
+        "sequence_number",
+        "filename",
+        "relative_path",
+        "source_image",
+        "crop_box",
+        "width",
+        "height",
+        "aspect_ratio",
+        "sha256"
+      ],
+      "title": "PanelItem",
+      "type": "object"
+    },
+    "PanelStatus": {
+      "description": "Classification of segmented panels in manifest.",
+      "enum": [
+        "active",
+        "context_only",
+        "skip",
+        "needs_review"
+      ],
+      "title": "PanelStatus",
+      "type": "string"
+    },
+    "RawImageInfo": {
+      "description": "Scraped / imported raw page image.",
+      "properties": {
+        "filename": {
+          "title": "Filename",
+          "type": "string"
+        },
+        "relative_path": {
+          "title": "Relative Path",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "sha256": {
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "relative_path",
+        "width",
+        "height",
+        "sha256"
+      ],
+      "title": "RawImageInfo",
+      "type": "object"
+    }
+  },
+  "description": "Schema for data/projects/<project_slug>/chapters/<chapter_num>/manifest.json.",
+  "properties": {
+    "project_slug": {
+      "title": "Project Slug",
+      "type": "string"
+    },
+    "chapter_number": {
+      "title": "Chapter Number",
+      "type": "string"
+    },
+    "source_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Url"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "total_raw_images": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Raw Images",
+      "type": "integer"
+    },
+    "total_panels": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Total Panels",
+      "type": "integer"
+    },
+    "raw_images": {
+      "items": {
+        "$ref": "#/$defs/RawImageInfo"
+      },
+      "title": "Raw Images",
+      "type": "array"
+    },
+    "panels": {
+      "items": {
+        "$ref": "#/$defs/PanelItem"
+      },
+      "title": "Panels",
+      "type": "array"
+    },
+    "contact_sheets": {
+      "items": {
+        "$ref": "#/$defs/ContactSheetInfo"
+      },
+      "title": "Contact Sheets",
+      "type": "array"
+    },
+    "schema_version": {
+      "default": "3.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_slug",
+    "chapter_number"
+  ],
+  "title": "PanelManifest",
+  "type": "object"
+}

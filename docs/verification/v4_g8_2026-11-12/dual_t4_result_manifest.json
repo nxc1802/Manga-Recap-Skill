@@ -1,0 +1,238 @@
+{
+  "schema_version": "4.2.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "job_type": "produce_series",
+  "payload_manifest_sha256": "43e72aedfc91b090dd1d0088d86d39ddd4825db5abd5523adce06bf6319348bd",
+  "telemetry": {
+    "chapters": [
+      "2",
+      "3"
+    ],
+    "total_wall_clock_seconds": 643.655,
+    "sequential_estimate_seconds": 572.886,
+    "speedup_factor": 0.89,
+    "pipeline_overlap_seconds": 0.0,
+    "profile_id": "B5",
+    "gpu_0": {
+      "device_id": 0,
+      "device_name": "Tesla T4 GPU 0",
+      "assigned_task": "Elastic TTS + NVENC",
+      "peak_vram_mb": 1767.0,
+      "allocated_vram_mb": 0.0,
+      "total_active_seconds": 838.036,
+      "processed_items": 121,
+      "throughput_metric": 0.14,
+      "oom_events_count": 0
+    },
+    "gpu_1": {
+      "device_id": 1,
+      "device_name": "Tesla T4 GPU 1",
+      "assigned_task": "Elastic TTS + NVENC",
+      "peak_vram_mb": 1631.0,
+      "allocated_vram_mb": 0.0,
+      "total_active_seconds": 802.419,
+      "processed_items": 118,
+      "throughput_metric": 0.15,
+      "oom_events_count": 0
+    },
+    "per_chapter": {
+      "2": {
+        "chapter": "2",
+        "tts_duration_seconds": 84.933,
+        "render_duration_seconds": 221.18,
+        "segment_count": 37,
+        "video_frames_count": 8978,
+        "video_duration_seconds": 299.28,
+        "tts_throughput_utt_per_sec": 0.44,
+        "render_fps": 40.59
+      },
+      "3": {
+        "chapter": "3",
+        "tts_duration_seconds": 11.124,
+        "render_duration_seconds": 255.649,
+        "segment_count": 34,
+        "video_frames_count": 8705,
+        "video_duration_seconds": 290.166667,
+        "tts_throughput_utt_per_sec": 3.06,
+        "render_fps": 34.05
+      }
+    },
+    "scheduler_transitions": [
+      {
+        "from_state": null,
+        "to_state": "DRAIN",
+        "tts_gpu_ids": [
+          0
+        ],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [],
+        "reason": "Pipeline idle/draining",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "DRAIN",
+        "to_state": "TTS_HEAVY",
+        "tts_gpu_ids": [
+          0,
+          1
+        ],
+        "render_gpu_ids": [
+          1
+        ],
+        "unload_tts_on_gpus": [],
+        "reason": "TTS backlog active with empty render queue",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "TTS_HEAVY",
+        "to_state": "RENDER_HEAVY",
+        "tts_gpu_ids": [],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [
+          0,
+          1
+        ],
+        "reason": "TTS queue empty while render shots/chapters wait for GPU encoding",
+        "pending_tts": 0,
+        "pending_render": 0
+      },
+      {
+        "from_state": "RENDER_HEAVY",
+        "to_state": "DRAIN",
+        "tts_gpu_ids": [],
+        "render_gpu_ids": [
+          0,
+          1
+        ],
+        "unload_tts_on_gpus": [],
+        "reason": "All TTS/upstream chapters complete; draining tail render/validation work",
+        "pending_tts": 0,
+        "pending_render": 2
+      }
+    ],
+    "frozen_profile": null,
+    "stage_breakdown": {
+      "model_init_sec": 57.0732,
+      "tts_infer_sec": 37.0722,
+      "audio_norm_sec": 105.3321,
+      "render_sec": 389.5897,
+      "mux_sec": 11.1873,
+      "validation_sec": 123.6228
+    },
+    "gpu_util_avg": {
+      "0": 4.93,
+      "1": 4.65
+    },
+    "cpu_util_avg": 75.16,
+    "disk_throughput_mb_s": 0.72,
+    "all_valid": true,
+    "completed_at": "2026-11-12T06:41:01.891827+00:00"
+  },
+  "files": {
+    "chapters/2/artifact_validation.json": "fd4be1f6a518fd4096ac481f66e951ab04c2e597321a8e255e6a6bca5539ec35",
+    "chapters/2/audio/clips/audio_2_001.wav": "10c7e2e54fc6263949290b3138abcbf97e4979e25a93cdd45f8999ea806fe260",
+    "chapters/2/audio/clips/audio_2_002.wav": "aacb7262498d06dba878c830cc1633b7351a152f20cd9d732a1918872d76d4d1",
+    "chapters/2/audio/clips/audio_2_003.wav": "9eaccdb76817fc5431b804031d874a2f105b001b2ccbcbf5a2840a42304826e6",
+    "chapters/2/audio/clips/audio_2_004.wav": "0b00ace01fa74193b1c307cdcfc4dea34608a7c2d85f02f25ad510703ae1678f",
+    "chapters/2/audio/clips/audio_2_005.wav": "17edf38f7ef0f15a033e463025a94127913095f13ce9c42879fdeb1bc73cd1b9",
+    "chapters/2/audio/clips/audio_2_006.wav": "c4addb051f856ac67a83eadb319ddabb3dbc655b17156048ddb779eb0509e8fe",
+    "chapters/2/audio/clips/audio_2_007.wav": "75fb62b81f71f86013ea0678713969b5af47250d6ed79feef810de8f3792a4e6",
+    "chapters/2/audio/clips/audio_2_008.wav": "eaa8ea2cbad14d71b6487b255158ebdf4a6ac3256968f9ba01f6e820e8bfabd5",
+    "chapters/2/audio/clips/audio_2_009.wav": "754d55cf043368ee61949967176609bc241aee925c4bee8c7b1a161f9669e72d",
+    "chapters/2/audio/clips/audio_2_010.wav": "5d8b73b259996d106ff7d689983c34e0ebdd2fb8ddc83f43de7836e061c5c509",
+    "chapters/2/audio/clips/audio_2_011.wav": "04c5aa19e4c382d4203cc4ba38c5a124fc6f9d54e8474c5e0e8a18ef1ddc8028",
+    "chapters/2/audio/clips/audio_2_012.wav": "0f5c0b3251bcec5e1e4e202e5015cc4a21ec7bc378f78adc01e6838fc9888a00",
+    "chapters/2/audio/clips/audio_2_013.wav": "6fceb6055304accbd425c68963cc77331f654fb923e28ed31b65d702a621b55c",
+    "chapters/2/audio/clips/audio_2_014.wav": "49a33727bca4e13be3b34d51cea17be098833ea9a420059b32e99b85539657f1",
+    "chapters/2/audio/clips/audio_2_015.wav": "99e1b323f20819ffc4b3701df9691eb1845b8c77abf3517d601143e28fd0ec57",
+    "chapters/2/audio/clips/audio_2_016.wav": "7e5676ca7c0e92b99dd43effcf9b44b38c8018366091e903250cd5576ce125e3",
+    "chapters/2/audio/clips/audio_2_017.wav": "561c6cc75eb23b769a207ee1e2769d79af91f27fc53348318af4228e146409da",
+    "chapters/2/audio/clips/audio_2_018.wav": "cd4d73402fb80bfb27d3fe36e9aa6bf8b586647839e15653ac627e292adb3eae",
+    "chapters/2/audio/clips/audio_2_019.wav": "26b2ff5cf5cf63d5532782321d02b7acfe4e96ed6dfc82e129219644003207b9",
+    "chapters/2/audio/clips/audio_2_020.wav": "0d602b548a53f2375a2a7f9109a1b5c5ca591fbc4037a8e13ef7ba4b55a8d6e3",
+    "chapters/2/audio/clips/audio_2_021.wav": "ab27515f33d7b7bd0e60b202a5b5df507b39619db38f512aace0f4f7dcb05d9e",
+    "chapters/2/audio/clips/audio_2_022.wav": "e16ec99fe0900bd5af960e678813885bae5adaba163bf311c20f8f74585703c0",
+    "chapters/2/audio/clips/audio_2_023.wav": "50cf75d0532c42cf8a2c37f0d781f5dfd0dcc246133b049dcd68f739724099d9",
+    "chapters/2/audio/clips/audio_2_024.wav": "25abc8d3d9f478fbc51f7aa47f647539366ad80949173ed5d19deb9db5a7a51f",
+    "chapters/2/audio/clips/audio_2_025.wav": "254180dd6863e9c09f5b0041cec02703a1a52cda7d5a0a6a33776e4426aac247",
+    "chapters/2/audio/clips/audio_2_026.wav": "30fdc325e84b4eb79e6611350d1cb1d965fa8ac28e8de227db9e371700e12a37",
+    "chapters/2/audio/clips/audio_2_027.wav": "7fc80ed8c85fd242ef143a91e7f9e2ce879bb7a02757219f66bd15790d51cba6",
+    "chapters/2/audio/clips/audio_2_028.wav": "5767d9dfd4e462406d7a0897b9bcb79f33e4b6f1f6483ed93539480c5697df06",
+    "chapters/2/audio/clips/audio_2_029.wav": "00e89428b0312357d5dcb170abbd10b8d55c9494fa6b27d28caa2d82dbf46b88",
+    "chapters/2/audio/clips/audio_2_030.wav": "d1c712856350df07bf697fe860d30339cfcabf55904e424142e994592a3353ea",
+    "chapters/2/audio/clips/audio_2_031.wav": "067519bd2c1bb74d148858434df2e6be7681acb45284d113d1783ef7c86b6263",
+    "chapters/2/audio/clips/audio_2_032.wav": "4487f989f85e3d7325d6c095697790fe0a5eab3681eaf6511d294572cd178dee",
+    "chapters/2/audio/clips/audio_2_033.wav": "7c2442851a07a1792301e6a208d505ff2714bd5d04eb0c5a46226486a44d1026",
+    "chapters/2/audio/clips/audio_2_034.wav": "bcdf6fe0364d92db65f7f48e3a9278b19d3fcd455b11b7a5e39993f5a3610aaf",
+    "chapters/2/audio/clips/audio_2_035.wav": "a7dc9c3f008a02407811f0cc5d4421e15068f82239faa396a4abcf2fa2f63a1a",
+    "chapters/2/audio/clips/audio_2_036.wav": "c37c24dbc6804895c89329980cd95a1b3d698672624d2ee446b150f17d398187",
+    "chapters/2/audio/clips/audio_2_037.wav": "d54b04ed92a182a81b11c8c558401e6343edc370473e5bb2cd6d950afbc3bc58",
+    "chapters/2/audio/mixed.m4a": "bc5eec474db9570b6fa2a028ae11e3c638ca5d93b555c5afdb4b38252dd07228",
+    "chapters/2/chapter.json": "7353bba0121ef7b83b068bccc3a8e368daa4301678d130c2f199027ebe0f2403",
+    "chapters/2/manifest.json": "9ee6a1a4129894b5866b849612b1ccf2eb81ae80985775f94a67e846bd34edbc",
+    "chapters/2/script.json": "02729b209a44a24f74de4ab15640b55abce4d795a0b1e139092d721128ff8386",
+    "chapters/2/subtitles/final.srt": "9a2871cdc361d8e890d15b8ee651b5bffe240f5653525e2902979aafc02329fd",
+    "chapters/2/video/final.mp4": "0b378afe898b12990fdcce1c01b963b5682e82fc06c8bd0e6788213e71c2d868",
+    "chapters/2/visual_plan.json": "eacd49834cbf0e904144ecfc9ed37e14cab9f4809b2d726ba3d75a8fbb5d6973",
+    "chapters/3/artifact_validation.json": "a91eefbf8a44119ab41891f49876ea1d52f337d0fd1d86aa807538b2e4e27742",
+    "chapters/3/audio/clips/audio_3_001.wav": "2d9c2700490c6116c5eaf110b40dadf895805745ea54bf3515b7adf00b629f24",
+    "chapters/3/audio/clips/audio_3_002.wav": "6b31b838190d149b9754e49507b2daad26625aa78fa928a0783bac3068239902",
+    "chapters/3/audio/clips/audio_3_003.wav": "93c4868ff8fa98bc28a2307c421cbf63fd692fbe21a2ad5f290c86be80672baa",
+    "chapters/3/audio/clips/audio_3_004.wav": "d006fd12821c45d41257ee0f94399fa21d3f4c34e82e331387b835eb78968e30",
+    "chapters/3/audio/clips/audio_3_005.wav": "2e7b4c87cab09b30da4ab85ff464dd1e82a126afc170d3f01ec3edbb60b35577",
+    "chapters/3/audio/clips/audio_3_006.wav": "fb1b377c74870c5de82e2f33410175181d296ba49608a8dbad00d0ad6ba9371b",
+    "chapters/3/audio/clips/audio_3_007.wav": "59316c81bc957800a12554245e3468b0bc4f689bcb7bf714b956ead6ca7c80ba",
+    "chapters/3/audio/clips/audio_3_008.wav": "bfcd5abfffd86098a1eef27615b73e282e159351f885fad0f3c0d77c611f0954",
+    "chapters/3/audio/clips/audio_3_009.wav": "6419ac755e8068f90467e2e088d068ca0769a2617dc1ee94b062c43a7726c2d5",
+    "chapters/3/audio/clips/audio_3_010.wav": "9d55046e01abb0e0704176cc90452982874d2f5ba50a7243ac5a0e1aab113249",
+    "chapters/3/audio/clips/audio_3_011.wav": "db3f058484c91fbb419962f599371feb894ce1834b63a1c3fcb874e89c347fea",
+    "chapters/3/audio/clips/audio_3_012.wav": "d1c1fc63418ea6c48834b1435420a9c8ba1862ed926e9b14530c316a74b01c09",
+    "chapters/3/audio/clips/audio_3_013.wav": "3554bdb044f91ddeefbdc2e6e8b355470867f1553107c7c4dbb1524baf75d051",
+    "chapters/3/audio/clips/audio_3_014.wav": "ff43672cf8a0cdf043b028090bace1a213ae5f225b47df806c7d9e1032f7d7fc",
+    "chapters/3/audio/clips/audio_3_015.wav": "756424a625306dac311b7f1b45c8f3da504dbe388c621345459eb35e879e6007",
+    "chapters/3/audio/clips/audio_3_016.wav": "28d72d7d9acfdd17c470f5f4bf451340ec5b36d1a7fd03ebbb84f6fffacca5a2",
+    "chapters/3/audio/clips/audio_3_017.wav": "295b00c4de667b4e981b5b57ce4faf9a0201734cf1d4340fc3ebc36acaa1cf12",
+    "chapters/3/audio/clips/audio_3_018.wav": "8e76291f64653a957db6f99d400942202e86ad3e92dce07432362907009ccef1",
+    "chapters/3/audio/clips/audio_3_019.wav": "69da05dfc60dda1080f7283ce5131621ed6eac5436d9b4c1187a1683324a4c4d",
+    "chapters/3/audio/clips/audio_3_020.wav": "4a05fbf70eeff5710320287fc7d60cfba3a0b12a90677d93b370fb6ada59d0cd",
+    "chapters/3/audio/clips/audio_3_021.wav": "b32939aedb217ce4fb4f2410263b8959715eaa2515ad08118cc1602ee0b3faec",
+    "chapters/3/audio/clips/audio_3_022.wav": "10041fc5c036246cdb139a0a221624de5d0fc0b41e52a6930f981ff54b2140d6",
+    "chapters/3/audio/clips/audio_3_023.wav": "0bc90ae21b23252654fc6e9e1eadfcb6ece94df184c354243245016cd94268e5",
+    "chapters/3/audio/clips/audio_3_024.wav": "718a4b81ab489c73dfb9bfca1d9d4934250d7af1ef8eb678d474fb77f99cb070",
+    "chapters/3/audio/clips/audio_3_025.wav": "80fb792d871cc08fceaafbc935d31961d517a3a49e334226fbb4331de0692a87",
+    "chapters/3/audio/clips/audio_3_026.wav": "df0aa06a1e5489c1e2f262cfe4dc9bc0211804720b630a9d754665582d604ffd",
+    "chapters/3/audio/clips/audio_3_027.wav": "248744791add42d656956a9e921323f99128ac9adf9dc23af37e04167602e734",
+    "chapters/3/audio/clips/audio_3_028.wav": "d285f75ff8930a19a54c05f4c169bbf6e9e1650430f8ca300e364b3299e939d6",
+    "chapters/3/audio/clips/audio_3_029.wav": "c751ebf8272547e5959b11396e5a2a119efe526cd7d91faa99d3b228eaf672e6",
+    "chapters/3/audio/clips/audio_3_030.wav": "c9e3449c9d5bff808645e924bca6eaa651a6fa134cc32194a22d08abce46b34c",
+    "chapters/3/audio/clips/audio_3_031.wav": "5c9eb3561fe09b52c49c69da42e9adb4d5d020dccc79110fa13b280afa3c2eeb",
+    "chapters/3/audio/clips/audio_3_032.wav": "01d55981f4ef8607c105216585903b5e7814ef7ebbd21df8415e0d7539b1cd67",
+    "chapters/3/audio/clips/audio_3_033.wav": "1bd470c65bd8afc5213e5c49aa412996153bc06c41b879df5fd2f24d0bbb933c",
+    "chapters/3/audio/clips/audio_3_034.wav": "9ade6c7fc9d08f01c9588b177457bfd80fcd000ae516301663c277fcd4abd4c2",
+    "chapters/3/audio/mixed.m4a": "d33673739dc060ef313c9b6414b1f72778e63458f404e1d23e9de172d38daaf0",
+    "chapters/3/chapter.json": "3321f113f3c4a16721ca92795fa508931eaec1a2d0b41da951240db4ff9030ee",
+    "chapters/3/manifest.json": "9143d22606cf27c5aba5e5aa305de1c80bb3cc569937157ba6e2c19528f953ef",
+    "chapters/3/script.json": "18d8d563d5a84dc05b4b4203e5869d4427bb43cbc72222d6a00fdeb2a8427136",
+    "chapters/3/subtitles/final.srt": "561dfb6695c9bce6f15905d38d97ddbb97339339709d48e5f00e557b1441201f",
+    "chapters/3/video/final.mp4": "feb60368ecf191bf76d3b50ba10897d003e09f211679a59798ff795f691fde70",
+    "chapters/3/visual_plan.json": "692eb04f4ba6db327aa5f3881284b8e2cf10af556ac7b120ab62061f2dd0e5fe",
+    "dual_t4_artifact_report.json": "06d0053111db2e204882caf4fc5025988e7e337813fa823882832cd59c1307b6",
+    "dual_t4_environment.json": "a1488eb5d5bbf30decbe2d23f3c497ad699b7298e4e0c39cbce5252391ff3d4e",
+    "dual_t4_gpu_trace.csv": "311c967ed091b385674f0459d6790b95fe2f718fa7063937aad63a23a85719fc",
+    "dual_t4_worker_log.jsonl": "3bc180c64bd67dd0688d233cc47d23c32641e9977be025eb39b50af12865714f",
+    "outputs/full_recap_feature.mp4": "3a861737572832abab897607281d72602049602eb3a9543bcadaef62cf43568e",
+    "series_telemetry.json": "39ef02f10cde81d05f679e02f7642edcccac6eb5a8f1970c9aca8ce80446b01c"
+  }
+}

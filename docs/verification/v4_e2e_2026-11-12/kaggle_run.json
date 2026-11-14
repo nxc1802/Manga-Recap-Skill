@@ -1,0 +1,373 @@
+{
+  "schema_version": "4.1.0",
+  "kernel_ref": "cuongnguyen1802/mr-nhan-vat-phu-c1-40228",
+  "kernel_id": 144489076,
+  "dataset_ref": "cuongnguyen1802/mr-payload-18a295c18950-728376000",
+  "job_type": "produce",
+  "payload_manifest_sha256": "18a295c1895071ba723281a69963f03664d32ca79254731b6a48cefcc566ffe9",
+  "kaggle_execution_seconds": 1756,
+  "cli_total_seconds": 2957.4584,
+  "result": {
+    "status": "success",
+    "job_type": "produce",
+    "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+    "chapter_number": "1",
+    "video_path": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/video/preview.mp4",
+    "subtitle_path": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/subtitles/preview.srt",
+    "final_video": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/video/preview.mp4",
+    "subtitles": "data/projects/nhan-vat-phu-trong-the-gioi-dien-loan/chapters/1/subtitles/preview.srt",
+    "validation": {
+      "valid": true,
+      "schema_version": "4.1.0",
+      "chapter_number": "1",
+      "video": {
+        "valid": true,
+        "duration": 303.68,
+        "frames": 9110,
+        "samples": [
+          {
+            "at": 0.1,
+            "variance": 2958.3436546325684,
+            "mean": 89.259765625
+          },
+          {
+            "at": 0.5,
+            "variance": 2113.6810224056244,
+            "mean": 69.92919921875
+          },
+          {
+            "at": 0.9,
+            "variance": 4183.9280089735985,
+            "mean": 228.937744140625
+          }
+        ],
+        "sha256": "c76d5257d7d59e4d360d80a3227168651a792ce6f98596ccc221ba49da596ee4"
+      },
+      "subtitles": {
+        "valid": true,
+        "cue_count": 187,
+        "sha256": "bf6cb2ccfc8b338260b99db43eff9308dc18b233c4b7ee7ca57b381b8f286d50"
+      },
+      "audio": [
+        {
+          "valid": true,
+          "duration": 6.72,
+          "sample_count": 322560,
+          "sample_rate": 48000,
+          "rms": 0.11940276362063365,
+          "sha256": "beaad6d73f972b18d6125671896e7a29296792376bd82444d27d8cba579fda2a"
+        },
+        {
+          "valid": true,
+          "duration": 7.28,
+          "sample_count": 349440,
+          "sample_rate": 48000,
+          "rms": 0.11389191105092931,
+          "sha256": "c74dbdd9bf0760dd2f5c27f8b78780702b6e73597f57004535967061b34c3b10"
+        },
+        {
+          "valid": true,
+          "duration": 9.76,
+          "sample_count": 468480,
+          "sample_rate": 48000,
+          "rms": 0.11052772275566233,
+          "sha256": "f8732e2862a2fcb521d88b259fd008daad5e32c52c4a80dc08185d459d11b4a2"
+        },
+        {
+          "valid": true,
+          "duration": 6.32,
+          "sample_count": 303360,
+          "sample_rate": 48000,
+          "rms": 0.11112913025159118,
+          "sha256": "10224601ec1df78e842f30bbed18dd016d47fa29d6ad60cbb65fb8347efd904e"
+        },
+        {
+          "valid": true,
+          "duration": 6.4,
+          "sample_count": 307200,
+          "sample_rate": 48000,
+          "rms": 0.1107992139767314,
+          "sha256": "4688e1fb4c320929ddc1029aaeb06c6ae45172b62ccf13833ed671d802e28299"
+        },
+        {
+          "valid": true,
+          "duration": 7.44,
+          "sample_count": 357120,
+          "sample_rate": 48000,
+          "rms": 0.10769181427072555,
+          "sha256": "7eceb4219d609f26e81eb2936ed607a9de6cb64c25c2777a7dd8ab03d9d6541a"
+        },
+        {
+          "valid": true,
+          "duration": 6.48,
+          "sample_count": 311040,
+          "sample_rate": 48000,
+          "rms": 0.11518783141350504,
+          "sha256": "a3d866e66953a440da6530baa95f2a54a0769fe2da49381074cb1dd43f0f8999"
+        },
+        {
+          "valid": true,
+          "duration": 7.76,
+          "sample_count": 372480,
+          "sample_rate": 48000,
+          "rms": 0.10936914756638548,
+          "sha256": "1e471bcab12c759118633402b3ca330daf5d8627f7559e47fa2d9ffe8cee3fc0"
+        },
+        {
+          "valid": true,
+          "duration": 9.12,
+          "sample_count": 437760,
+          "sample_rate": 48000,
+          "rms": 0.1215590868226273,
+          "sha256": "7e7e19d840cf68bb0760d5423ffbd889d68c86d9d31a80dfabe12d4207dabd3f"
+        },
+        {
+          "valid": true,
+          "duration": 6.08,
+          "sample_count": 291840,
+          "sample_rate": 48000,
+          "rms": 0.10911400910260516,
+          "sha256": "eaae3d34e58d6bbcc3b1a737fbb4be403c959a0ca4a3d482a5683202e0a505ad"
+        },
+        {
+          "valid": true,
+          "duration": 8.48,
+          "sample_count": 407040,
+          "sample_rate": 48000,
+          "rms": 0.12040132365515528,
+          "sha256": "47dc1b2241d5068771c9fc9701c1756b528420d5120ddd8d0afd6adf06d18dba"
+        },
+        {
+          "valid": true,
+          "duration": 6.56,
+          "sample_count": 314880,
+          "sample_rate": 48000,
+          "rms": 0.1092634937677765,
+          "sha256": "9ffefc7e0617d8953d4c4d3c5b7efa93f99873241d75ed06c06e5ee70d85d423"
+        },
+        {
+          "valid": true,
+          "duration": 7.76,
+          "sample_count": 372480,
+          "sample_rate": 48000,
+          "rms": 0.11117436360371602,
+          "sha256": "314289080ba946c6eb4ace346516c5215d9a7b739a205515f149d9bfe759451d"
+        },
+        {
+          "valid": true,
+          "duration": 7.44,
+          "sample_count": 357120,
+          "sample_rate": 48000,
+          "rms": 0.11137790721676434,
+          "sha256": "30b0a039c8666c3b97e1630bbf6629dc105a153a50017de061bbe6bec9b2265e"
+        },
+        {
+          "valid": true,
+          "duration": 8.64,
+          "sample_count": 414720,
+          "sample_rate": 48000,
+          "rms": 0.11197821371883418,
+          "sha256": "512d78009a37a10ed78bc1243f2f5d47be25a8b377aafbaf2e20e7c70ebb1a35"
+        },
+        {
+          "valid": true,
+          "duration": 7.52,
+          "sample_count": 360960,
+          "sample_rate": 48000,
+          "rms": 0.11623896863889606,
+          "sha256": "6628d9a80ca46f485afd0e37dac10071db3b548d008d5190eb1ebdbdec7a1f30"
+        },
+        {
+          "valid": true,
+          "duration": 9.2,
+          "sample_count": 441600,
+          "sample_rate": 48000,
+          "rms": 0.10680678516570018,
+          "sha256": "d07dd2d249ecf3704ed632f608aa08c4b6f6f88f66df7c534565a3aebf12be35"
+        },
+        {
+          "valid": true,
+          "duration": 8.8,
+          "sample_count": 422400,
+          "sample_rate": 48000,
+          "rms": 0.11621813375813479,
+          "sha256": "1a64c742aa4751f530ccf9c7688b2a6f6c431e14f1cfb5f91831f210d1d29cd6"
+        },
+        {
+          "valid": true,
+          "duration": 8.56,
+          "sample_count": 410880,
+          "sample_rate": 48000,
+          "rms": 0.11018974582917926,
+          "sha256": "0de625e0dadf54035977d0da79c94d4dd9ac12abc0feee952b8f00126fc0c090"
+        },
+        {
+          "valid": true,
+          "duration": 7.92,
+          "sample_count": 380160,
+          "sample_rate": 48000,
+          "rms": 0.11043053025853412,
+          "sha256": "4ccd7c81adabdca4af265104da923bc37ec798d7b6b05ec9df8c01971e4cdaf8"
+        },
+        {
+          "valid": true,
+          "duration": 9.04,
+          "sample_count": 433920,
+          "sample_rate": 48000,
+          "rms": 0.11225226024918399,
+          "sha256": "87af60c158072445e36195149430f15478ea2f3da4389f32c93afe3d3f3a75dc"
+        },
+        {
+          "valid": true,
+          "duration": 9.6,
+          "sample_count": 460800,
+          "sample_rate": 48000,
+          "rms": 0.10866153119467817,
+          "sha256": "4427ec8f605bb38a9e6ad6094f88f64596a2023a06e7e523df2d2302ab16a22b"
+        },
+        {
+          "valid": true,
+          "duration": 8.8,
+          "sample_count": 422400,
+          "sample_rate": 48000,
+          "rms": 0.11015428780981541,
+          "sha256": "c0ffe4fe1f19467af50aa8675f56232f026641b16debe029163eb0e168877a2f"
+        },
+        {
+          "valid": true,
+          "duration": 9.84,
+          "sample_count": 472320,
+          "sample_rate": 48000,
+          "rms": 0.11499760414601401,
+          "sha256": "410ce73c0a2380a37e11b56ad559db7ebe5ac520105343ebeb7bff7083643ca5"
+        },
+        {
+          "valid": true,
+          "duration": 8.0,
+          "sample_count": 384000,
+          "sample_rate": 48000,
+          "rms": 0.11074157778248934,
+          "sha256": "20fc48bd9a76b7940bcaa743819f1814991fd70ec6cf2819a1594c3374d67bf3"
+        },
+        {
+          "valid": true,
+          "duration": 10.0,
+          "sample_count": 480000,
+          "sample_rate": 48000,
+          "rms": 0.10930852818800862,
+          "sha256": "5148d4cd97907621cfd1f6ab4007bde11bd37bb3ed9c0b19750370c443a2abb2"
+        },
+        {
+          "valid": true,
+          "duration": 9.04,
+          "sample_count": 433920,
+          "sample_rate": 48000,
+          "rms": 0.1114759568737543,
+          "sha256": "f5f10a89508644a6292ff734b36d0cb71e6a97b5990634509f606cb5efcf3745"
+        },
+        {
+          "valid": true,
+          "duration": 8.0,
+          "sample_count": 384000,
+          "sample_rate": 48000,
+          "rms": 0.10767699906939239,
+          "sha256": "beef6a01e48a9277234ddb195323a33a6b1ed949b11dd83338cbc6c350c428bb"
+        },
+        {
+          "valid": true,
+          "duration": 8.96,
+          "sample_count": 430080,
+          "sample_rate": 48000,
+          "rms": 0.10891423463699496,
+          "sha256": "78a14fca0b01d1d78647518ef10f15354f63981a43312e2a3ba06133cc5d47ad"
+        },
+        {
+          "valid": true,
+          "duration": 8.08,
+          "sample_count": 387840,
+          "sample_rate": 48000,
+          "rms": 0.11090262911480951,
+          "sha256": "5b0ba6623ff170369887782a4c4a04ffa32e0ce3c652dbf63291bc9cbe4c283b"
+        },
+        {
+          "valid": true,
+          "duration": 8.64,
+          "sample_count": 414720,
+          "sample_rate": 48000,
+          "rms": 0.11249603954368648,
+          "sha256": "9ed07845d7ecbfb6d3ecddcac5fcd3dd612fca06aa7a41d3dcab67f24d05e290"
+        },
+        {
+          "valid": true,
+          "duration": 10.48,
+          "sample_count": 503040,
+          "sample_rate": 48000,
+          "rms": 0.11170878069473676,
+          "sha256": "fc315cf81889a9bf11adad3f4e25f418230db56b9b9912ea1cb4ab6c0aa413f3"
+        },
+        {
+          "valid": true,
+          "duration": 8.8,
+          "sample_count": 422400,
+          "sample_rate": 48000,
+          "rms": 0.11263300572702699,
+          "sha256": "3e2cfb71ca358f1509e8820c7e5a34be781b7c67264725e1b95137d4dfe4d9d5"
+        },
+        {
+          "valid": true,
+          "duration": 8.32,
+          "sample_count": 399360,
+          "sample_rate": 48000,
+          "rms": 0.1148801664638423,
+          "sha256": "16859baec34f5c123463985d05ee11bd058efdadcd939b3903003ee70dddba86"
+        },
+        {
+          "valid": true,
+          "duration": 8.48,
+          "sample_count": 407040,
+          "sample_rate": 48000,
+          "rms": 0.10504608763746137,
+          "sha256": "3ea07a560959dc3001330b308f6afa7b5498a51ad2ba5f8a7c16d9252d7fe39b"
+        },
+        {
+          "valid": true,
+          "duration": 7.2,
+          "sample_count": 345600,
+          "sample_rate": 48000,
+          "rms": 0.11641661639577175,
+          "sha256": "a077a5cbefc7270f4c23e9c912a3d3fac52493c4e482fbb3139c64b24f3641d9"
+        },
+        {
+          "valid": true,
+          "duration": 8.16,
+          "sample_count": 391680,
+          "sample_rate": 48000,
+          "rms": 0.11657614394427987,
+          "sha256": "2f1a4ac67d2f2ac253455c54c611984f1968fe948e28f0733820f72807115abb"
+        }
+      ],
+      "plan_fingerprint": "af57babae1e429c91f099dd0c4e1d7f3b57064b1f2c48cb1bb47a29a70a4c5ec",
+      "script_fingerprint": "aaa50c2d0af9e3854eb6a78bf319618cb25b6c880c608fbc1b0a6df2db77c111",
+      "evidence_fingerprint": "056011f6cd99bf5da6afec99bde11c46827bc2925084a8451b9da5b3604174d5"
+    },
+    "semantic_parity": true
+  },
+  "post_sync_local_state": {
+    "preview_mp4_sha256": "c76d5257d7d59e4d360d80a3227168651a792ce6f98596ccc221ba49da596ee4",
+    "final_mp4_sha256": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+    "chapter_technical_status": "completed",
+    "chapter_overall_status": "needs_review",
+    "chapter_human_review_status": "unreviewed",
+    "preview_approval_preserved": {
+      "schema_version": "4.1.0",
+      "human_review_status": "approved",
+      "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+      "chapter_number": "1",
+      "approved_at": "2026-11-11T23:34:39.947928Z",
+      "reviewer": "cuongnguyen1802",
+      "config_fingerprint": "7984f869b60c41cecdbc441489ff8fc1a69c2727ff7224dbc70bfc19d84eb5dc",
+      "artifact_hash": "d6d8f75bb868736765dfb58afc4c1f25e69183c73c5a327633cae1a842b64b4b",
+      "artifact_path": "video/preview.mp4"
+    }
+  }
+}

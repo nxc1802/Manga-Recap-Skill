@@ -39,6 +39,10 @@ class CameraMotionGenerator:
             return CameraMotionType.STATIC
 
         if isinstance(motion_type, CameraMotionType):
+            if motion_type == CameraMotionType.PAN_UP:
+                return CameraMotionType.PAN_DOWN
+            if motion_type == CameraMotionType.ZOOM_OUT:
+                return CameraMotionType.STATIC
             return motion_type
 
         motion_str = str(motion_type).strip().lower()
@@ -50,15 +54,15 @@ class CameraMotionGenerator:
             "horizontal": CameraMotionType.PAN_LEFT,
             "pan_right": CameraMotionType.PAN_RIGHT,
             "right": CameraMotionType.PAN_RIGHT,
-            "pan_up": CameraMotionType.PAN_UP,
-            "up": CameraMotionType.PAN_UP,
+            "pan_up": CameraMotionType.PAN_DOWN,
+            "up": CameraMotionType.PAN_DOWN,
             "pan_down": CameraMotionType.PAN_DOWN,
             "down": CameraMotionType.PAN_DOWN,
             "pan_vertical": CameraMotionType.PAN_DOWN,
             "vertical": CameraMotionType.PAN_DOWN,
             "zoom_in": CameraMotionType.ZOOM_IN,
             "zoom": CameraMotionType.ZOOM_IN,
-            "zoom_out": CameraMotionType.ZOOM_OUT,
+            "zoom_out": CameraMotionType.STATIC,
             "focus_crop": CameraMotionType.FOCUS_CROP,
             "crop": CameraMotionType.FOCUS_CROP,
             "static_focus": CameraMotionType.STATIC_FOCUS,
@@ -83,7 +87,7 @@ class CameraMotionGenerator:
         if focus_box is not None:
             fx = (focus_box.x_min + focus_box.x_max) / 2.0
             fy = (focus_box.y_min + focus_box.y_max) / 2.0
-            scale_ratio = max(0.05, min(1.0, focus_box.x_max - focus_box.x_min))
+            scale_ratio = max(0.35, min(1.0, focus_box.x_max - focus_box.x_min))
             return fx, fy, scale_ratio
 
         if focus_x is not None and focus_y is not None:
@@ -146,8 +150,8 @@ class CameraMotionGenerator:
                 base_w = self._ensure_even(round(base_h * self.target_ar))
             max_y = max(0, img_h - base_h)
             crop_x = 0
-            # Safety: keep fy in [0.20, 0.80] character action safe zone
-            safe_fy = max(0.20, min(0.80, fy))
+            # Safety: keep fy in [0.30, 0.75] character action safe zone
+            safe_fy = max(0.30, min(0.75, fy))
             crop_y = self._ensure_even(round(max(0, min(max_y, (safe_fy * img_h) - base_h / 2))))
 
         return base_w, base_h, crop_x, crop_y
@@ -280,14 +284,17 @@ class CameraMotionGenerator:
             x_pos = self._ensure_even((img_w - wv) // 2)
 
             if motion == CameraMotionType.VERTICAL_SCROLL:
-                # Linear progression for webtoon scrolling
-                y_expr = f"'{delta_y}*(t/{T:.3f})'"
-            elif motion in (CameraMotionType.PAN_DOWN, CameraMotionType.CONTENT_AWARE_SCROLL):
-                # Cosine ease-in-ease-out top to bottom
-                y_expr = f"'{delta_y}*0.5*(1-cos(PI*t/{T:.3f}))'"
+                # Linear progression for webtoon scrolling with max velocity cap <= 120 px/s
+                max_scroll_speed = 120.0
+                capped_delta_y = min(delta_y, round(max_scroll_speed * T))
+                y_expr = f"'{capped_delta_y}*min(1,max(0,t/{T:.3f}))'"
             else:
-                # Cosine ease-in-ease-out bottom to top
-                y_expr = f"'{delta_y}*0.5*(1+cos(PI*t/{T:.3f}))'"
+                # Cosine ease-in-ease-out top to bottom with peak velocity cap <= 120 px/s
+                # v_peak = delta_y * (pi / 2T) <= 120.0 => delta_y <= 120 * (2T / pi)
+                max_peak_speed = 120.0
+                max_delta_y = self._ensure_even(int(max_peak_speed * (2.0 * T / math.pi)))
+                capped_delta_y = min(delta_y, max_delta_y)
+                y_expr = f"'{capped_delta_y}*0.5*(1-cos(PI*min(1,max(0,t/{T:.3f}))))'"
 
             filter_str = f"crop={wv}:{hv}:{x_pos}:{y_expr},scale={self.target_width}:{self.target_height},fps={self.fps}"
             return filter_str, False
@@ -306,9 +313,11 @@ class CameraMotionGenerator:
             else:
                 z_expr = f"'{z_max}-({z_max}-{z_min})*(on/{N})'"
 
-            # Viewport centering on target focal center
-            x_expr = f"'(iw-iw/zoom)*{fx:.4f}'"
-            y_expr = f"'(ih-ih/zoom)*{fy:.4f}'"
+            # Viewport centering: pre-crop is already centered around (fx, safe_fy),
+            # so zoompan centering must be at the center (0.5) of the pre-crop window
+            # to avoid double-focus offset drift.
+            x_expr = "'(iw-iw/zoom)*0.5'"
+            y_expr = "'(ih-ih/zoom)*0.5'"
 
             filter_str = (
                 f"{pre_crop}zoompan=z={z_expr}:x={x_expr}:y={y_expr}:"
