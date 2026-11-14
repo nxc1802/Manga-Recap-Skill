@@ -1,0 +1,31 @@
+{
+  "schema_version": "4.2.0",
+  "project_slug": "nhan-vat-phu-trong-the-gioi-dien-loan",
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "job_type": "benchmark_matrix",
+  "payload_manifest_sha256": "fafd0258f98aaa3ab4a56918a5dae63d2ebf954d0117ddab5087ae7edabbeb24",
+  "all_valid": true,
+  "winner_profile_id": "B4",
+  "files": {
+    "benchmark_matrix_report.md": "eae803c39c1c041b4fdcb3c7abacbdf9d025fd9617d7f1558e303df26da2a26d",
+    "benchmark_matrix_results.json": "0d50bf7135f84915271d8970e7f3d48dfa65144907c03fe6062fcf70715fcd95",
+    "receipts/B0_r1/dual_t4_artifact_report.json": "e74d0542d158893b843ba78f4108924aa9e06231a7a92d14419d7bc43e68775b",
+    "receipts/B0_r1/dual_t4_environment.json": "9b91d3b6e4542aed68e4b11d5058a2a0a0ef19e6015553b77de0663c7585edd9",
+    "receipts/B0_r1/dual_t4_gpu_trace.csv": "973c1765eb4a4e5d21f3c49826aada5650d66033d1b1f8468d58da27ec496b89",
+    "receipts/B0_r1/dual_t4_worker_log.jsonl": "2da3eebbe4199102e930597062c6157c353a1b8850f7ac4f8df6135ac723e69b",
+    "receipts/B0_r1/series_telemetry.json": "ad381ff3e2f1edcfb410bd74753aaee5939fbc7507dae7ba93cd2ce9e0f8632a",
+    "receipts/B4_r1/dual_t4_artifact_report.json": "a457e43635f35e49a56f6319c78bad6e3d183fcd190fbd046bbc0ce8592c8d62",
+    "receipts/B4_r1/dual_t4_environment.json": "94b8aa8946ba6d1f8f3e68ff8efe32fd1f7d83f263b6f56f6e7695287b323bfd",
+    "receipts/B4_r1/dual_t4_gpu_trace.csv": "2b7a6aec5e3f12102420e83ed129a7966a143c1a571dc1d7318ac89f15237dd4",
+    "receipts/B4_r1/dual_t4_worker_log.jsonl": "cc7ea830358c7376c99f825abb04e584fdad6f570dd0aa793a0d427c071aa7c4",
+    "receipts/B4_r1/series_telemetry.json": "532be11b19b8ec36e93a36d8c7ea22b27d7e129e059e6c1a5ca70550cfaa757d",
+    "receipts/B5_r1/dual_t4_artifact_report.json": "a6152b375190217f6ef849488d77c804e62b7d9a8d4900a96ca7ed58abe50895",
+    "receipts/B5_r1/dual_t4_environment.json": "cdc5a5516ad28924f735d85ebd14a96aa1bced9f473041b9a2e885021140f8a7",
+    "receipts/B5_r1/dual_t4_gpu_trace.csv": "eb9c1ab9f137976d191d8c8659f197ca98107975b61fa4ff765e96ce94a0d7a3",
+    "receipts/B5_r1/dual_t4_worker_log.jsonl": "fa4b2c1c02da643009b3560eec2e9b469c1363395bca29b499e09ac9f0041ad0",
+    "receipts/B5_r1/series_telemetry.json": "166d1eea9d6e8af28d33036c2d592c40332c87c1be51473cb2b810bdc870f769"
+  }
+}

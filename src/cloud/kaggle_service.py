@@ -6,6 +6,9 @@ Kaggle Cloud adapter for canonical single-chapter and Dual-T4 series execution.
 from __future__ import annotations
 
 import json
+import contextlib
+import io
+import threading
 import os
 import shutil
 import tarfile
@@ -13,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src.cloud.account_fallback import with_account_fallback
 from src.core.logger import logger
 from src.core.schemas import RecapScript
 from src.core.storage import atomic_write_json, get_chapter_dir, get_project_dir, read_json
@@ -64,35 +68,64 @@ class KaggleCloudService:
 
     DEFAULT_KERNEL_SLUG = "manga-recap-cloud-runner"
 
+    @staticmethod
+    def _require_kernel_submission(result):
+        error = result.get("error") if isinstance(result, dict) else getattr(result, "error", None)
+        if not result or (isinstance(error, (str, bool)) and error):
+            raise RuntimeError("Kaggle rejected kernel submission")
+
+    _auth_lock = threading.RLock()
+
     def __init__(self, api_token: Optional[str] = None):
-        self.api_token = api_token or os.environ.get("KAGGLE_API_TOKEN")
+        from src.cloud.account_manager import KaggleAccountManager
+        self._accounts = [("explicit", api_token)] if api_token else KaggleAccountManager().candidates()
+        self._api = None
+        self._username = None
+        self._account_index = 0
+        self.account_name, self.api_token = "unconfigured", None
+        for index in range(len(self._accounts)):
+            self._select_account(index)
+            if self.is_authenticated:
+                break
+
+    def _select_account(self, index):
+        self._account_index = index
+        self.account_name, self.api_token = self._accounts[index]
         self._api = None
         self._username = None
         self._authenticate()
 
     def __repr__(self) -> str:
-        return f"<KaggleCloudService username='{self._username}' authenticated={self.is_authenticated}>"
+        return f"<KaggleCloudService account='{self.account_name}' authenticated={self.is_authenticated}>"
 
     def _authenticate(self) -> None:
-        """Authenticates with the Kaggle API without logging sensitive tokens."""
-        try:
-            from kaggle.api.kaggle_api_extended import KaggleApi
-
-            if self.api_token:
-                os.environ["KAGGLE_API_TOKEN"] = self.api_token
-
-            api = KaggleApi()
-            api.authenticate()
-            self._api = api
-            # Introspect username
-            self._username = api.config_values.get(api.CONFIG_NAME_USER, "kaggle_user")
-            logger.info(f"KaggleCloudService: Authenticated as '{self._username}'")
-        except Exception as e:
-            err_msg = str(e)
-            if self.api_token and self.api_token in err_msg:
-                err_msg = err_msg.replace(self.api_token, "[REDACTED_API_TOKEN]")
-            logger.warning(f"KaggleCloudService: Kaggle API authentication failed: {err_msg}")
-            self._api = None
+        """Bind a separate API client to this token; restore process credentials."""
+        with self._auth_lock:
+            previous = os.environ.get("KAGGLE_API_TOKEN")
+            try:
+                if self.api_token:
+                    os.environ["KAGGLE_API_TOKEN"] = self.api_token
+                # Kaggle package import also authenticates its global client.
+                # Keep SDK diagnostics off CLI stdout and out of secret logs.
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    from kaggle.api.kaggle_api_extended import KaggleApi
+                    api = KaggleApi()
+                    api.authenticate()
+                if self.api_token and api.config_values.get(api.CONFIG_NAME_TOKEN) != self.api_token:
+                    raise RuntimeError("Requested token was not authenticated")
+                username = api.config_values.get(api.CONFIG_NAME_USER)
+                if not username:
+                    raise RuntimeError("Kaggle username unavailable")
+                self._api, self._username = api, username
+                logger.info("Kaggle account '%s' authenticated", self.account_name)
+            except (Exception, SystemExit):
+                self._api = None
+                logger.warning("Kaggle account '%s' could not authenticate", self.account_name)
+            finally:
+                if previous is None:
+                    os.environ.pop("KAGGLE_API_TOKEN", None)
+                else:
+                    os.environ["KAGGLE_API_TOKEN"] = previous
 
     @property
     def is_authenticated(self) -> bool:
@@ -182,6 +215,7 @@ class KaggleCloudService:
             f"run(root, expected, Path('/kaggle/working/results'), encoder={encoder!r})",
         ])
 
+    @with_account_fallback
     def dispatch_chapter_job(
         self,
         project_slug: str,
@@ -312,6 +346,7 @@ class KaggleCloudService:
 
         logger.info(f"KaggleCloudService: Pushing kernel '{self._username}/{kernel_slug}' (GPU: {gpu}, Job: {job_type})...")
         push_res = self._api.kernels_push(str(staging_dir))
+        self._require_kernel_submission(push_res)
         logger.info(f"KaggleCloudService: Kernel push result: {push_res}")
 
         # Resolve actual slug assigned by Kaggle
@@ -489,6 +524,7 @@ class KaggleCloudService:
             fps=fps,
         )
 
+    @with_account_fallback
     def dispatch_series_job(
         self,
         project_slug: str,
@@ -592,6 +628,7 @@ class KaggleCloudService:
         )
 
         push_res = self._api.kernels_push(str(staging_dir))
+        self._require_kernel_submission(push_res)
         assigned_ref = getattr(push_res, "ref", None)
         target_kernel_ref = (
             assigned_ref.replace("/code/", "").strip()
@@ -687,8 +724,8 @@ class KaggleCloudService:
             if norm in {"COMPLETE", "COMPLETED"}:
                 completed_cleanly = True
                 break
-            if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR")):
-                fail_msg = getattr(status_obj, "failureMessage", "Unknown cloud error")
+            if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR", "CANCEL")):
+                fail_msg = getattr(status_obj, "failureMessage", None) or f"status={current_status}"
                 raise RuntimeError(f"Kaggle Dual-T4 {label.lower()} job failed: {fail_msg}")
 
         if not completed_cleanly:
@@ -704,6 +741,7 @@ class KaggleCloudService:
             "remote_wall_sec": round(t_done - t0, 4),
         }
 
+    @with_account_fallback
     def dispatch_benchmark_matrix_job(
         self,
         project_slug: str,
@@ -827,6 +865,7 @@ class KaggleCloudService:
         )
 
         push_res = self._api.kernels_push(str(staging_dir))
+        self._require_kernel_submission(push_res)
         assigned_ref = getattr(push_res, "ref", None)
         target_kernel_ref = (
             assigned_ref.replace("/code/", "").strip()

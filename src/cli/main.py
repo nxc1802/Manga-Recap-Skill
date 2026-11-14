@@ -270,6 +270,11 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_info = cloud_subs.add_parser("info", help="Get cloud provider information and authentication status", parents=[common_parent])
     p_cld_info.add_argument("--provider", choices=["kaggle"], default="kaggle")
 
+    p_cld_accounts = cloud_subs.add_parser("accounts", help="Manage local Kaggle tokens", parents=[common_parent])
+    p_cld_accounts.add_argument("--account-action", choices=["list", "add", "remove", "default"], default="list")
+    p_cld_accounts.add_argument("--account", default=None, help="Local account name")
+    p_cld_accounts.add_argument("--token-file", default=None, help="Read token from a private file; otherwise prompt securely")
+
     p_cld_pull = cloud_subs.add_parser("pull", help="Pull results from cloud kernel", parents=[common_parent])
     p_cld_pull.add_argument("-p", "--project", default=None)
     p_cld_pull.add_argument("-c", "--chapter", default=None)

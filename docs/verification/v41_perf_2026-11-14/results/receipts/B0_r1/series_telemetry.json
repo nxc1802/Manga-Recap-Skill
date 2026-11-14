@@ -1,0 +1,115 @@
+{
+  "chapters": [
+    "2",
+    "3"
+  ],
+  "total_wall_clock_seconds": 356.905,
+  "sequential_estimate_seconds": 407.081,
+  "speedup_factor": 1.14,
+  "pipeline_overlap_seconds": 50.176,
+  "profile_id": "B0",
+  "gpu_0": {
+    "device_id": 0,
+    "device_name": "Tesla T4 GPU 0",
+    "assigned_task": "Elastic TTS + NVENC",
+    "peak_vram_mb": 1859.0,
+    "allocated_vram_mb": 0.0,
+    "total_active_seconds": 297.019,
+    "processed_items": 239,
+    "throughput_metric": 0.8,
+    "oom_events_count": 0
+  },
+  "gpu_1": null,
+  "per_chapter": {
+    "2": {
+      "chapter": "2",
+      "tts_duration_seconds": 37.464,
+      "render_duration_seconds": 133.703,
+      "segment_count": 37,
+      "video_frames_count": 9014,
+      "video_duration_seconds": 300.48,
+      "tts_throughput_utt_per_sec": 0.99,
+      "render_fps": 67.42
+    },
+    "3": {
+      "chapter": "3",
+      "tts_duration_seconds": 18.121,
+      "render_duration_seconds": 217.792,
+      "segment_count": 34,
+      "video_frames_count": 8765,
+      "video_duration_seconds": 292.166667,
+      "tts_throughput_utt_per_sec": 1.88,
+      "render_fps": 40.24
+    }
+  },
+  "scheduler_transitions": [
+    {
+      "from_state": null,
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [
+        0
+      ],
+      "render_gpu_ids": [
+        0
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "Pipeline idle/draining",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "DRAIN",
+      "to_state": "TTS_HEAVY",
+      "tts_gpu_ids": [
+        0
+      ],
+      "render_gpu_ids": [],
+      "unload_tts_on_gpus": [],
+      "reason": "TTS backlog active with empty render queue",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "TTS_HEAVY",
+      "to_state": "RENDER_HEAVY",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0
+      ],
+      "unload_tts_on_gpus": [
+        0
+      ],
+      "reason": "TTS queue empty while render shots/chapters wait for GPU encoding",
+      "pending_tts": 0,
+      "pending_render": 0
+    },
+    {
+      "from_state": "RENDER_HEAVY",
+      "to_state": "DRAIN",
+      "tts_gpu_ids": [],
+      "render_gpu_ids": [
+        0
+      ],
+      "unload_tts_on_gpus": [],
+      "reason": "All TTS/upstream chapters complete; draining tail render/validation work",
+      "pending_tts": 0,
+      "pending_render": 4
+    }
+  ],
+  "frozen_profile": null,
+  "stage_breakdown": {
+    "model_init_sec": 14.9244,
+    "tts_infer_sec": 37.6748,
+    "audio_norm_sec": 38.5464,
+    "render_sec": 246.7332,
+    "mux_sec": 3.748,
+    "validation_sec": 29.4539
+  },
+  "gpu_util_avg": {
+    "0": 12.86
+  },
+  "cpu_util_avg": 29.48,
+  "disk_throughput_mb_s": 1.193,
+  "all_valid": true,
+  "completed_at": "2026-11-14T15:11:27.285263+00:00"
+}
