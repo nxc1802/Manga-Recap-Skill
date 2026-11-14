@@ -13,7 +13,7 @@ This directory contains cryptographic receipts and execution evidence proving th
 - **Captions**: Vietnamese SRT (`final.srt`) uploaded & verified (`has_captions: true`)
 - **Thumbnail**: Custom high-contrast thumbnail (`thumbnail.jpg`) uploaded & verified (`has_custom_thumbnail: true`)
 - **Processing Status**: Polled YouTube Data API until `upload_status: "processed"` and `verified: true`
-- **Receipt**: `youtube_receipt.json` emitted with cryptographic signature.
+- **Receipt**: `youtube_receipt.json` emitted as a SHA-256 integrity-bound receipt.
 
 ---
 
@@ -89,4 +89,4 @@ RESTORE_VERIFIED (Sandbox round-trip media validation)
 CLEANUP_ALLOWED (Two-receipt gate satisfied, tombstone written)
 ```
 
-Final state in `release_state.json`: **`CLEANUP_ALLOWED`** with 22 immutable cryptographic evidence hashes.
+Final state in `release_state.json`: **`CLEANUP_ALLOWED`** with 22 immutable evidence bindings.

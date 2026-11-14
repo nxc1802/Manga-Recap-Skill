@@ -7,9 +7,9 @@ local JSON/Markdown under `data/projects/`. The core has no cloud LLM/TTS API or
 database dependency. Kaggle can run the same neural/media runtime on a remote GPU.
 
 **V4 P0–P15 ALL PHASES ARE PASS, VERIFIED, AND RELEASE-READY on branch `feat/v4-strict-form-motion-cloud-archive`.**
-Exact-HEAD deterministic checks (`896 passed`, zero failures/skips across CI-L1, CI-L2, and CI-L3), GitHub Actions CI
-([PR #2 push run `43433807635`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43433807635)
-and [PR run `43433815849`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43433815849)),
+Exact-HEAD (`b651db3c`) deterministic checks (`896 passed`, zero failures/skips across CI-L1, CI-L2, and CI-L3), GitHub Actions CI
+([PR #2 push run `43466223358`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43466223358)
+and [PR run `43466235935`](https://github.com/nxc1802/Manga-Recap-Skill/actions/runs/43466235935)),
 real Chapter 1 E2E verification (G0–G7: real VieNeu-TTS synthesis, canonical
 preview render, explicit human approval, bit-for-bit final promotion, live Kaggle
 Tesla T4 semantic parity, and 8/8 failure-path checks) recorded in

@@ -1,7 +1,10 @@
-# Kaggle Dual-T4 V4 — Benchmark audit / NOT VERIFIED
+# [HISTORICAL / SUPERSEDED] Kaggle Dual-T4 V4 — Benchmark audit / NOT VERIFIED
+
+> **STATUS: HISTORICAL / SUPERSEDED**
+> This 2026-11-11 audit document has been **superseded** by the verified P9 empirical benchmark matrix in [`docs/benchmarks/kaggle_dual_t4_benchmark_v4.md`](kaggle_dual_t4_benchmark_v4.md) and its immutable evidence package in [`docs/verification/v4_p9_2026-11-12/`](../verification/v4_p9_2026-11-12/README.md) (see [`docs/V4_Correctness_Status.md`](../V4_Correctness_Status.md)). Retained solely as a historical audit record.
 
 **Review date:** 2026-11-11
-**Status:** BLOCKED — no trustworthy live benchmark or production media result was established in the reviewed repository.
+**Original status:** BLOCKED — no trustworthy live benchmark or production media result was established in the reviewed repository at that checkpoint.
 
 ## Why the previous “EMPIRICAL BENCHMARK VERIFIED” claim was withdrawn
 
