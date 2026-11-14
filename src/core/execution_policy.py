@@ -19,7 +19,7 @@ def enforce_execution_policy(command, args):
     if command not in COMMAND_REQUIREMENTS:
         raise CliValidationError(f"No execution policy declared for command: {command}")
     # These operations manage services rather than process a series.
-    if command == "cloud" and getattr(args, "cloud_action", None) == "info":
+    if command == "cloud" and getattr(args, "cloud_action", None) in {"info", "accounts"}:
         return
     if command == "youtube" and getattr(args, "youtube_action", None) in {"accounts", "auth"}:
         return

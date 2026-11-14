@@ -19,6 +19,26 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
     enforce_execution_policy("cloud", args)
     subaction = getattr(args, "cloud_action", "run")
 
+    if subaction == "accounts":
+        from pathlib import Path
+        from getpass import getpass
+        from src.cloud.account_manager import KaggleAccountManager
+        from src.cli.exit_codes import CliValidationError
+        manager = KaggleAccountManager()
+        action = getattr(args, "account_action", "list")
+        name = getattr(args, "account", None)
+        if action != "list" and not name:
+            raise CliValidationError("--account is required")
+        if action == "add":
+            token_file = getattr(args, "token_file", None)
+            token = Path(token_file).read_text().strip() if token_file else getpass("Kaggle token: ")
+            manager.add(name, token)
+        elif action == "remove":
+            manager.remove(name)
+        elif action == "default":
+            manager.set_default(name)
+        return {"accounts": manager.list_accounts()}
+
     service = KaggleCloudService()
     if not service.is_authenticated:
         return {

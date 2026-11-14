@@ -123,6 +123,7 @@ PYRAMID_FILE_LAYERS = {
     "tests/adversarial/test_m3_tts_adversarial.py": "ci_l2",
     "tests/adversarial/test_m3_tts_empirical_challenger2.py": "ci_l2",
     "tests/unit/cloud/test_canonical_cloud.py": "ci_l2",
+    "tests/unit/cloud/test_kaggle_accounts.py": "ci_l2",
     "tests/unit/cloud/test_p8_dual_t4_architecture.py": "ci_l2",
     "tests/unit/cloud/test_p9_benchmark_harness.py": "ci_l2",
     "tests/unit/test_canonical_workflow.py": "ci_l2",
