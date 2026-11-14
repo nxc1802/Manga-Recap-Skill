@@ -122,6 +122,7 @@ def _compute_pan_geometry(
         "safe_max_travel": safe_max_travel,
         "rate_px_per_sec": rate_px_per_sec,
         "is_animated": is_animated,
+        "img_h": img_h,
     }
 
 
@@ -213,6 +214,138 @@ def _ensure_ffmpeg_safe_panel_image(panel_path: Path, cache_dir: Path, shot_id: 
             finally:
                 tmp.unlink(missing_ok=True)
         return norm_path
+
+
+def _get_or_create_pan_strip_png(
+    panel_path: Path,
+    pan_geom: Dict[str, Any],
+    target_width: int,
+    target_height: int,
+    canvas_key: str,
+    canvas_dir: Path,
+) -> Tuple[Path, float, float]:
+    """
+    Pre-crops the horizontal region and scales it once to `target_width` so FFmpeg
+    only needs a single PNG decode + memory loop + fast 1920x1080 crop (zero per-frame Lanczos).
+    Returns (strip_png_path, scaled_max_travel, scaled_rate_px_per_sec).
+    """
+    import math
+
+    x0 = int(pan_geom["x0"])
+    y0 = int(pan_geom["y0"])
+    crop_w = int(pan_geom["crop_w"])
+    crop_h = int(pan_geom["crop_h"])
+    safe_max_travel = float(pan_geom["safe_max_travel"])
+    rate_px_per_sec = float(pan_geom["rate_px_per_sec"])
+
+    scale_factor = target_width / float(max(1, crop_w))
+    raw_strip_h = min(
+        int(math.ceil(crop_h + safe_max_travel)),
+        max(1, int(pan_geom.get("img_h", crop_h + math.ceil(safe_max_travel))) - y0),
+    )
+    scaled_w = int(target_width)
+    scaled_h = max(int(target_height), int(round(raw_strip_h * scale_factor)))
+    scaled_max_travel = max(0.0, float(scaled_h - target_height))
+    scaled_rate = rate_px_per_sec * scale_factor
+
+    canvas_dir.mkdir(parents=True, exist_ok=True)
+    strip_path = canvas_dir / f"pan_{canvas_key}_{scaled_w}x{scaled_h}.png"
+    key_lock = _CANVAS_KEY_LOCKS.setdefault(f"pan_{canvas_key}", threading.Lock())
+    with key_lock:
+        if strip_path.is_file() and strip_path.stat().st_size > 0:
+            return strip_path, scaled_max_travel, scaled_rate
+        with Image.open(panel_path) as im:
+            rgb = im.convert("RGB")
+            crop_box = (x0, y0, min(rgb.width, x0 + crop_w), min(rgb.height, y0 + raw_strip_h))
+            cropped = rgb.crop(crop_box)
+            if cropped.size != (scaled_w, scaled_h):
+                cropped = cropped.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+            tmp = strip_path.with_suffix(".tmp.png")
+            try:
+                cropped.save(tmp, format="PNG", compress_level=1)
+                tmp.replace(strip_path)
+            finally:
+                tmp.unlink(missing_ok=True)
+    return strip_path, scaled_max_travel, scaled_rate
+
+
+def _build_static_subtitle_intervals(
+    canvas_png: Path,
+    cues: Sequence[Dict[str, Any]],
+    frame_count: int,
+    fps: int,
+    canvas_width: int,
+    canvas_height: int,
+    font_size: int,
+    overlay_dir: Path,
+    canvas_key: str,
+) -> Optional[List[Tuple[Path, int]]]:
+    """
+    Composites each subtitle cue directly onto the static canvas once in PIL and returns
+    frame-exact `(image_path, n_frames)` intervals whose sum equals `frame_count`.
+    Eliminates per-frame FFmpeg RGBA `overlay` CPU alpha-blending on static shots.
+    """
+    if not cues or frame_count <= 0:
+        return None
+
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    raw_intervals: List[Tuple[Optional[str], int]] = []
+    cursor_f = 0
+    for cue in cues:
+        s_f = max(cursor_f, min(frame_count, int(round(float(cue["start_sec"]) * fps))))
+        e_f = max(s_f, min(frame_count, int(round(float(cue["end_sec"]) * fps))))
+        if e_f <= s_f:
+            continue
+        if s_f > cursor_f:
+            raw_intervals.append((None, s_f - cursor_f))
+        raw_intervals.append((str(cue["text"]), e_f - s_f))
+        cursor_f = e_f
+
+    if not raw_intervals:
+        return None
+    if cursor_f < frame_count:
+        raw_intervals.append((None, frame_count - cursor_f))
+
+    # Merge adjacent identical intervals and limit complexity
+    merged: List[Tuple[Optional[str], int]] = []
+    for txt, nf in raw_intervals:
+        if nf <= 0:
+            continue
+        if merged and merged[-1][0] == txt:
+            merged[-1] = (txt, merged[-1][1] + nf)
+        else:
+            merged.append((txt, nf))
+
+    if not merged or len(merged) > 16:
+        return None
+
+    result: List[Tuple[Path, int]] = []
+    base_rgba: Optional[Image.Image] = None
+    for idx, (txt, nf) in enumerate(merged):
+        if not txt or not sanitize_subtitle_text(txt):
+            result.append((canvas_png, nf))
+            continue
+        cue_hash = hashlib.sha256(
+            f"{canvas_key}:{canvas_width}x{canvas_height}:{font_size}:{txt}".encode("utf-8")
+        ).hexdigest()[:16]
+        comp_png = overlay_dir / f"static_sub_{cue_hash}.png"
+        if not comp_png.is_file():
+            cue_ov = overlay_dir / f"ov_{cue_hash}.png"
+            if not cue_ov.is_file():
+                _render_cue_overlay_png(txt, cue_ov, canvas_width, canvas_height, font_size=font_size)
+            if base_rgba is None:
+                with Image.open(canvas_png) as c_im:
+                    base_rgba = c_im.convert("RGBA")
+            with Image.open(cue_ov) as o_im:
+                composited = Image.alpha_composite(base_rgba, o_im.convert("RGBA")).convert("RGB")
+            tmp = comp_png.with_suffix(".tmp.png")
+            try:
+                composited.save(tmp, format="PNG", compress_level=1)
+                tmp.replace(comp_png)
+            finally:
+                tmp.unlink(missing_ok=True)
+        result.append((comp_png, nf))
+    return result
 
 
 def _resolve_ttf_font(font_size: int) -> ImageFont.ImageFont:
@@ -526,17 +659,29 @@ def render_shot_clip(
         else {"is_animated": False}
     )
 
+    loop_f = f"loop=loop={frame_count - 1}:size=1:start=0" if frame_count > 1 else ""
+    canvas_png: Optional[Path] = None
+
     if pan_geom["is_animated"]:
-        src_img = _ensure_ffmpeg_safe_panel_image(panel_path, work_dir / "canvases", str(task.get("shot_id", "shot")))
-        input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(src_img)]
-        y_expr = (
-            f"{pan_geom['y0']}+min({pan_geom['safe_max_travel']:.6f},"
-            f"{pan_geom['rate_px_per_sec']:.6f}*min(t,{duration_sec:.6f}))"
+        strip_png, scaled_max_travel, scaled_rate = _get_or_create_pan_strip_png(
+            panel_path=panel_path,
+            pan_geom=pan_geom,
+            target_width=target_w,
+            target_height=target_h,
+            canvas_key=canvas_key,
+            canvas_dir=work_dir / "canvases",
         )
-        base_vf = (
-            f"format=rgb24,crop=w={pan_geom['crop_w']}:h={pan_geom['crop_h']}:"
-            f"x={pan_geom['x0']}:y='{y_expr}',scale={target_w}:{target_h}:flags=lanczos"
+        input_args = ["-framerate", str(fps), "-i", str(strip_png)]
+        scaled_y_expr = (
+            f"min({scaled_max_travel:.6f},"
+            f"{scaled_rate:.6f}*min(t,{duration_sec:.6f}))"
         )
+        pan_parts = ["setsar=1", "format=yuv420p"]
+        if loop_f:
+            pan_parts.append(loop_f)
+        pan_parts.append(f"setpts=N/({fps}*TB)")
+        pan_parts.append(f"crop=w={target_w}:h={target_h}:x=0:y='{scaled_y_expr}'")
+        base_vf = ",".join(pan_parts)
     else:
         canvas_png = _get_or_create_static_canvas_png(
             panel_path=panel_path,
@@ -547,8 +692,12 @@ def render_shot_clip(
             canvas_dir=work_dir / "canvases",
             canvas_cache=canvas_cache,
         )
-        input_args = ["-loop", "1", "-framerate", str(fps), "-i", str(canvas_png)]
-        base_vf = ""
+        input_args = ["-framerate", str(fps), "-i", str(canvas_png)]
+        static_parts = ["setsar=1", "format=yuv420p"]
+        if loop_f:
+            static_parts.append(loop_f)
+        static_parts.append(f"setpts=N/({fps}*TB)")
+        base_vf = ",".join(static_parts)
 
     local_cues = list(task.get("local_subtitle_cues") or [])
     burn_subs = bool(task.get("burn_subtitles", False)) and bool(local_cues)
@@ -578,26 +727,55 @@ def render_shot_clip(
                 cmd += ["-vf", vf_chain]
                 run_cwd = shot_sub_dir
             else:
-                ov_manifest = _build_overlay_concat_manifest(
-                    local_cues,
-                    total_duration_sec=quantized_dur,
-                    canvas_width=target_w,
-                    canvas_height=target_h,
-                    font_size=font_size,
-                    overlay_dir=shot_sub_dir,
+                static_intervals = (
+                    _build_static_subtitle_intervals(
+                        canvas_png,
+                        local_cues,
+                        frame_count=frame_count,
+                        fps=fps,
+                        canvas_width=target_w,
+                        canvas_height=target_h,
+                        font_size=font_size,
+                        overlay_dir=shot_sub_dir,
+                        canvas_key=canvas_key,
+                    )
+                    if not pan_geom["is_animated"] and canvas_png is not None
+                    else None
                 )
-                if ov_manifest is not None:
-                    cmd += ["-f", "concat", "-safe", "0", "-i", str(ov_manifest)]
-                    pre = f"[0:v]{base_vf}[base];" if base_vf else ""
-                    src_label = "[base]" if base_vf else "[0:v]"
-                    fc = f"{pre}[1:v]format=rgba,fps={fps}[ov];{src_label}[ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
+                if static_intervals is not None and len(static_intervals) == 1:
+                    only_img, only_nf = static_intervals[0]
+                    only_loop = f",loop=loop={only_nf - 1}:size=1:start=0" if only_nf > 1 else ""
+                    cmd = ["ffmpeg", "-v", "error", "-y", "-framerate", str(fps), "-i", str(only_img), "-vf", f"setsar=1,format=yuv420p{only_loop},setpts=N/({fps}*TB)"]
+                elif static_intervals is not None and len(static_intervals) > 1:
+                    cmd = ["ffmpeg", "-v", "error", "-y"]
+                    fc_parts: List[str] = []
+                    concat_labels: List[str] = []
+                    for i_idx, (iv_img, iv_nf) in enumerate(static_intervals):
+                        cmd += ["-framerate", str(fps), "-i", str(iv_img)]
+                        iv_loop = f",loop=loop={iv_nf - 1}:size=1:start=0" if iv_nf > 1 else ""
+                        fc_parts.append(f"[{i_idx}:v]setsar=1,format=yuv420p{iv_loop},setpts=N/({fps}*TB)[v{i_idx}]")
+                        concat_labels.append(f"[v{i_idx}]")
+                    fc = ";".join(fc_parts) + f";{''.join(concat_labels)}concat=n={len(static_intervals)}:v=1:a=0[v]"
                     cmd += ["-filter_complex", fc, "-map", "[v]"]
                 else:
-                    vf_chain = ",".join(part for part in (base_vf, "setsar=1,format=yuv420p") if part)
-                    cmd += ["-vf", vf_chain]
+                    ov_manifest = _build_overlay_concat_manifest(
+                        local_cues,
+                        total_duration_sec=quantized_dur,
+                        canvas_width=target_w,
+                        canvas_height=target_h,
+                        font_size=font_size,
+                        overlay_dir=shot_sub_dir,
+                    )
+                    if ov_manifest is not None:
+                        cmd += ["-f", "concat", "-safe", "0", "-i", str(ov_manifest)]
+                        pre = f"[0:v]{base_vf}[base];" if base_vf else ""
+                        src_label = "[base]" if base_vf else "[0:v]"
+                        fc = f"{pre}[1:v]format=rgba,fps={fps}[ov];{src_label}[ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
+                        cmd += ["-filter_complex", fc, "-map", "[v]"]
+                    else:
+                        cmd += ["-vf", base_vf]
         else:
-            vf_chain = ",".join(part for part in (base_vf, "setsar=1,format=yuv420p") if part)
-            cmd += ["-vf", vf_chain]
+            cmd += ["-vf", base_vf]
 
         cmd += [
             *codec_args,
