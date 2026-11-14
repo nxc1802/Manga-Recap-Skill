@@ -724,8 +724,8 @@ class KaggleCloudService:
             if norm in {"COMPLETE", "COMPLETED"}:
                 completed_cleanly = True
                 break
-            if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR")):
-                fail_msg = getattr(status_obj, "failureMessage", "Unknown cloud error")
+            if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR", "CANCEL")):
+                fail_msg = getattr(status_obj, "failureMessage", None) or f"status={current_status}"
                 raise RuntimeError(f"Kaggle Dual-T4 {label.lower()} job failed: {fail_msg}")
 
         if not completed_cleanly:
