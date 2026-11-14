@@ -6,6 +6,7 @@ import math
 import re
 import subprocess
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import numpy as np
 
@@ -62,8 +63,22 @@ def _run(command):
     return result.stdout
 
 
-def validate_video(path, width, height, expected_duration, fps, require_audio=True, tolerance=0.15):
+def _probe_video_fast(path):
+    data = json.loads(_run(["ffprobe", "-v", "error", "-count_packets", "-show_streams", "-show_format", "-of", "json", str(path)]))
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    if video is not None:
+        nb_packets = int(video.get("nb_read_packets") or 0)
+        nb_frames = int(video.get("nb_frames") or 0)
+        if nb_packets > 0 and (nb_frames == 0 or nb_packets == nb_frames):
+            return data, nb_packets
     data = json.loads(_run(["ffprobe", "-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", str(path)]))
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    frames = int(video.get("nb_read_frames", 0)) if video is not None else 0
+    return data, frames
+
+
+def validate_video(path, width, height, expected_duration, fps, require_audio=True, tolerance=0.15):
+    data, frames = _probe_video_fast(path)
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
     audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), None)
     if video is None or (require_audio and audio is None):
@@ -76,14 +91,17 @@ def validate_video(path, width, height, expected_duration, fps, require_audio=Tr
     numerator, denominator = map(float, video["avg_frame_rate"].split("/"))
     if denominator <= 0 or abs(numerator / denominator - fps) > 0.01:
         raise ArtifactValidationError("Wrong video fps")
-    frames = int(video.get("nb_read_frames", 0))
     if frames <= 0 or abs(frames - round(expected_duration * fps)) > 1:
         raise ArtifactValidationError("Missing or mismatched frame count")
     samples = []
     for fraction in (0.1, 0.5, 0.9):
         index = min(frames - 1, int(frames * fraction))
-        pixels = _run(["ffmpeg", "-v", "error", "-i", str(path),
-                       "-frames:v", "1", "-vf", f"select=eq(n\\,{index}),scale=64:64", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"])
+        target_ts = max(0.0, index / float(fps))
+        pixels = _run(["ffmpeg", "-v", "error", "-ss", f"{target_ts:.6f}", "-i", str(path),
+                       "-frames:v", "1", "-vf", "scale=64:64", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"])
+        if len(pixels) != 4096:
+            pixels = _run(["ffmpeg", "-v", "error", "-i", str(path),
+                           "-frames:v", "1", "-vf", f"select=eq(n\\,{index}),scale=64:64", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"])
         values = np.frombuffer(pixels, dtype=np.uint8).astype(float)
         if values.size != 4096 or values.mean() <= 2 or values.var() <= 1:
             raise ArtifactValidationError("Black, blank or undecodable sampled video frame")
@@ -133,7 +151,11 @@ def validate_final_artifact(video, subtitle, audio_paths, plan, script, manifest
         raise ArtifactValidationError("Chapter identity mismatch")
     if len(audio_paths) != len(script.segments) or not audio_paths:
         raise ArtifactValidationError("Missing narration audio")
-    audio = [validate_audio(path) for path in audio_paths]
+    if len(audio_paths) > 1:
+        with ThreadPoolExecutor(max_workers=min(8, len(audio_paths))) as pool:
+            audio = list(pool.map(validate_audio, audio_paths))
+    else:
+        audio = [validate_audio(path) for path in audio_paths]
     for segment, report in zip(script.segments, audio):
         if segment.duration is None or abs(segment.duration - report["duration"]) > 0.001:
             raise ArtifactValidationError("Narration duration metadata mismatch")

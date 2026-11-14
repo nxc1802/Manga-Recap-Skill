@@ -150,6 +150,7 @@ PYRAMID_FILE_LAYERS = {
     "tests/unit/test_motion_v4.py": "ci_l3",
     "tests/unit/test_p1_video_quality.py": "ci_l3",
     "tests/unit/test_p8_render_fastpath.py": "ci_l3",
+    "tests/unit/test_v41_perf_optimizations.py": "ci_l3",
     "tests/unit/test_render_optimizations.py": "ci_l3",
     "tests/unit/test_video_engine.py": "ci_l3",
     "tests/unit/test_video_validator.py": "ci_l3",
