@@ -245,7 +245,7 @@ class GpuTelemetrySampler:
         with self._lock:
             if not self._header_written:
                 with self.trace_csv_path.open("w", newline="", encoding="utf-8") as fh:
-                    writer = csv.writer(fh)
+                    writer = csv.writer(fh, lineterminator="\n")
                     writer.writerow(GPU_TRACE_COLUMNS)
                 self._header_written = True
             if not self.worker_log_path.exists():
@@ -293,11 +293,11 @@ class GpuTelemetrySampler:
         with self._lock:
             if not self._header_written:
                 with self.trace_csv_path.open("w", newline="", encoding="utf-8") as fh:
-                    csv.writer(fh).writerow(GPU_TRACE_COLUMNS)
+                    csv.writer(fh, lineterminator="\n").writerow(GPU_TRACE_COLUMNS)
                 self._header_written = True
 
             with self.trace_csv_path.open("a", newline="", encoding="utf-8") as fh:
-                writer = csv.writer(fh)
+                writer = csv.writer(fh, lineterminator="\n")
                 for row in raw_rows:
                     gid = int(row.get("gpu_id", 0))
                     if self.gpu_ids and gid not in self.gpu_ids:

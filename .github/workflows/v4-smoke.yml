@@ -3,6 +3,7 @@ name: V4 Deterministic CI Pyramid (L1 / L2 / L3)
 on:
   push:
     branches:
+      - main
       - feat/v4-strict-form-motion-cloud-archive
   pull_request:
     branches: [main]

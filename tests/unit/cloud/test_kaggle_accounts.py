@@ -187,7 +187,12 @@ def test_real_dispatch_fallback_on_rejected_submission(accounts,unit_project,mon
     monkeypatch.setattr('src.cloud.kaggle_service.time.sleep',lambda *_:None)
     service=KaggleCloudService()
     before=(chapter/'chapter.json').read_bytes()
-    result=service.dispatch_chapter_job('unit','1',job_type='render',wait=False)
-    assert pushes==['account_1','account_2']
+    with pytest.raises(RuntimeError, match='Kaggle rejected kernel submission'):
+        service.dispatch_chapter_job('unit','1',job_type='render',wait=False)
+    assert pushes==['account_1']
+    # Optional utility wrapper still supports multi-account fallback when explicitly applied
+    wrapped=with_account_fallback(KaggleCloudService.dispatch_chapter_job)
+    result=wrapped(service,'unit','1',job_type='render',wait=False)
+    assert pushes==['account_1','account_1','account_2']
     assert result['status']=='dispatched' and result['kernel_ref']=='account_2/accepted'
     assert (chapter/'chapter.json').read_bytes()==before

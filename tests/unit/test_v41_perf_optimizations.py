@@ -206,3 +206,64 @@ def test_v41_hardware_autotune_probe_scales_on_t4_vram_headroom():
     assert frozen.nvenc_workers_per_gpu >= 3
     assert frozen.tts_replicas_per_gpu >= 2
     assert frozen.best_peak_vram_mb <= tuner.usable_vram_budget_mb
+
+
+def test_v41_preflight_capabilities_and_b4_lock(tmp_path, monkeypatch):
+    """Preflight fails fast on missing capabilities and defaults to B4 without autotune."""
+    import inspect
+    import sys
+    from src.cloud.dual_t4_orchestrator import (
+        DualT4Orchestrator,
+        run_preflight_capabilities,
+        select_production_profile_for_gpus,
+    )
+    from src.cloud.elastic_scheduler import BenchmarkProfileId
+    from src.cloud.kaggle_service import KaggleCloudService
+
+    assert select_production_profile_for_gpus([{"gpu_id": 0}, {"gpu_id": 1}]) == BenchmarkProfileId.B4
+    assert select_production_profile_for_gpus([{"gpu_id": 0}]) == BenchmarkProfileId.B0
+    with pytest.raises(RuntimeError, match="no CUDA GPU"):
+        select_production_profile_for_gpus([])
+
+    # Valid local libx264 smoke test + filter check passes
+    caps = run_preflight_capabilities(
+        encoder="libx264",
+        work_dir=tmp_path / "work",
+        receipts_dir=tmp_path / "receipts",
+        required_gpus=0,
+        require_nvenc_smoke=True,
+        require_vieneu=False,
+    )
+    assert caps["encoder"] == "libx264"
+    assert caps["ffmpeg_capabilities"]["crop"] is True
+    assert caps["ffmpeg_capabilities"]["scale"] is True
+
+    # Missing GPU fails fast
+    with pytest.raises(RuntimeError, match="expected at least 2 GPU"):
+        run_preflight_capabilities(
+            encoder="libx264",
+            work_dir=tmp_path / "work",
+            receipts_dir=tmp_path / "receipts",
+            required_gpus=2,
+            smi_rows=[{"gpu_id": 0}],
+        )
+
+    # Missing VieNeu runtime fails fast when required
+    monkeypatch.setitem(sys.modules, "vieneu", None)
+    with pytest.raises(RuntimeError, match="VieNeu TTS runtime unavailable"):
+        run_preflight_capabilities(
+            encoder="libx264",
+            work_dir=tmp_path / "work",
+            receipts_dir=tmp_path / "receipts",
+            require_vieneu=True,
+        )
+
+    # Production defaults locked to B4, autotune=False, and core dispatch not wrapped by account fallback
+    sig_orch = inspect.signature(DualT4Orchestrator.__init__)
+    assert sig_orch.parameters["profile"].default == BenchmarkProfileId.B4
+    assert sig_orch.parameters["autotune"].default is False
+
+    sig_disp = inspect.signature(KaggleCloudService.dispatch_series_job)
+    assert sig_disp.parameters["profile"].default == "B4"
+    assert sig_disp.parameters["autotune"].default is False
+    assert not hasattr(KaggleCloudService.dispatch_series_job, "__wrapped__")

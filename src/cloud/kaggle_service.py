@@ -16,7 +16,6 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.cloud.account_fallback import with_account_fallback
 from src.core.logger import logger
 from src.core.schemas import RecapScript
 from src.core.storage import atomic_write_json, get_chapter_dir, get_project_dir, read_json
@@ -215,7 +214,6 @@ class KaggleCloudService:
             f"run(root, expected, Path('/kaggle/working/results'), encoder={encoder!r})",
         ])
 
-    @with_account_fallback
     def dispatch_chapter_job(
         self,
         project_slug: str,
@@ -469,7 +467,7 @@ class KaggleCloudService:
         out_tar_path: Union[str, Path],
         *,
         skip_preview: bool = False,
-        profile: str = "B5",
+        profile: str = "B4",
     ) -> Path:
         from src.cloud.series_payload import package_series_payload
 
@@ -498,8 +496,8 @@ class KaggleCloudService:
         render_workers: int = 2,
         encoder_preference: str = "auto",
         compile_feature: bool = True,
-        profile: str = "B5",
-        autotune: bool = True,
+        profile: str = "B4",
+        autotune: bool = False,
         video_mode: Optional[str] = None,
         burn_subtitles: Optional[bool] = None,
         fps: Optional[int] = None,
@@ -524,7 +522,6 @@ class KaggleCloudService:
             fps=fps,
         )
 
-    @with_account_fallback
     def dispatch_series_job(
         self,
         project_slug: str,
@@ -539,8 +536,8 @@ class KaggleCloudService:
         compile_feature: bool = True,
         render_workers: int = 2,
         encoder_preference: str = "auto",
-        profile: str = "B5",
-        autotune: bool = True,
+        profile: str = "B4",
+        autotune: bool = False,
         video_mode: Optional[str] = None,
         burn_subtitles: Optional[bool] = None,
         fps: Optional[int] = None,
@@ -741,7 +738,6 @@ class KaggleCloudService:
             "remote_wall_sec": round(t_done - t0, 4),
         }
 
-    @with_account_fallback
     def dispatch_benchmark_matrix_job(
         self,
         project_slug: str,
@@ -802,7 +798,7 @@ class KaggleCloudService:
             norm_chapters,
             payload_tar,
             skip_preview=False,
-            profile="B5",
+            profile="B4",
             job_type="benchmark_matrix",
             include_benchmark_harness=True,
             extra_metadata={

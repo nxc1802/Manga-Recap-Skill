@@ -990,6 +990,99 @@ def build_hardware_autotune_probe(
     return _probe
 
 
+def select_production_profile_for_gpus(smi_rows: Sequence[Dict[str, Any]]) -> BenchmarkProfileId:
+    """Deterministic hardware-to-profile mapping without autotune guessing."""
+    count = len(smi_rows)
+    if count >= 2:
+        return BenchmarkProfileId.B4
+    if count == 1:
+        return BenchmarkProfileId.B0
+    raise RuntimeError("Preflight failed: no CUDA GPU detected for GPU production profile.")
+
+
+def run_preflight_capabilities(
+    *,
+    encoder: str,
+    work_dir: Path,
+    receipts_dir: Path,
+    required_gpus: int = 0,
+    smi_rows: Optional[Sequence[Dict[str, Any]]] = None,
+    require_nvenc_smoke: bool = False,
+    require_vieneu: bool = False,
+) -> Dict[str, Any]:
+    """Fail-fast environment capability check before launching TTS/render workers."""
+    import shutil
+    import subprocess
+
+    ffmpeg_bin = shutil.which("ffmpeg")
+    ffprobe_bin = shutil.which("ffprobe")
+    if not ffmpeg_bin or not ffprobe_bin:
+        raise RuntimeError(
+            f"Preflight failed: missing required media binaries (ffmpeg={ffmpeg_bin}, ffprobe={ffprobe_bin})."
+        )
+
+    for label, target in (("work_dir", work_dir), ("receipts_dir", receipts_dir)):
+        target.mkdir(parents=True, exist_ok=True)
+        probe_file = target / ".preflight_write_test"
+        try:
+            probe_file.write_text("ok", encoding="utf-8")
+            probe_file.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"Preflight failed: {label} is not writable ({target}): {exc}") from exc
+
+    hw_mod = importlib.import_module("src.production.hardware")
+    ffmpeg_caps = hw_mod.probe_ffmpeg_capabilities(ffmpeg_bin)
+    missing_filters = [flt for flt in ("crop", "scale") if not ffmpeg_caps.get(flt)]
+    if missing_filters:
+        raise RuntimeError(f"Preflight failed: required FFmpeg filters missing: {missing_filters}")
+
+    if required_gpus > 0:
+        rows = list(smi_rows) if smi_rows is not None else list(query_nvidia_smi() or [])
+        if len(rows) < required_gpus:
+            raise RuntimeError(
+                f"Preflight failed: expected at least {required_gpus} GPU(s), found {len(rows)}."
+            )
+
+    if require_nvenc_smoke:
+        if encoder == "h264_nvenc" and not ffmpeg_caps.get("h264_nvenc"):
+            raise RuntimeError("Preflight failed: h264_nvenc encoder is not available in FFmpeg.")
+        smoke_cmd = [
+            ffmpeg_bin,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=0.05:r=24",
+            "-frames:v",
+            "1",
+            "-c:v",
+            encoder,
+            "-f",
+            "null",
+            "-",
+        ]
+        res = subprocess.run(smoke_cmd, capture_output=True, text=True, timeout=15, check=False)
+        if res.returncode != 0:
+            err = (res.stderr or res.stdout or "").strip()[-500:]
+            raise RuntimeError(f"Preflight failed: encoder smoke test failed for {encoder}: {err}")
+
+    if require_vieneu:
+        try:
+            importlib.import_module("vieneu")
+        except Exception as exc:
+            raise RuntimeError(f"Preflight failed: VieNeu TTS runtime unavailable: {exc}") from exc
+
+    return {
+        "ffmpeg": ffmpeg_bin,
+        "ffprobe": ffprobe_bin,
+        "encoder": encoder,
+        "ffmpeg_capabilities": ffmpeg_caps,
+        "gpu_count": len(smi_rows) if smi_rows is not None else None,
+    }
+
+
 class DualT4Orchestrator:
     """
     Coordinates spawn-isolated GPU worker processes (`CudaWorkerPool`),
@@ -1006,7 +1099,7 @@ class DualT4Orchestrator:
         render_workers: Optional[int] = None,
         compile_feature: bool = True,
         mock_mode: bool = False,
-        profile: Union[str, BenchmarkProfileId, ArchitectureProfile] = BenchmarkProfileId.B5,
+        profile: Union[str, BenchmarkProfileId, ArchitectureProfile] = BenchmarkProfileId.B4,
         encoder: str = "auto",
         quality: str = "final",
         autotune: bool = False,
@@ -1117,6 +1210,18 @@ class DualT4Orchestrator:
 
     def run_pipeline(self) -> SeriesTelemetry:
         t_start = time.monotonic()
+        is_real_hardware = self.worker_pool_factory is None
+        smi_preflight = (self.smi_querier or query_nvidia_smi)() or [] if is_real_hardware else None
+        req_gpus = len(self.profile.gpu_ids) if (is_real_hardware and self.encoder == "h264_nvenc") else 0
+        run_preflight_capabilities(
+            encoder=self.encoder,
+            work_dir=self.work_dir,
+            receipts_dir=self.receipts_dir,
+            required_gpus=req_gpus,
+            smi_rows=smi_preflight,
+            require_nvenc_smoke=is_real_hardware and self.encoder == "h264_nvenc",
+            require_vieneu=False,
+        )
         voice_id, speech_speed = self._read_voice_and_speed()
         render_settings = self.project_config["render_settings"]
         sub_settings = render_settings["subtitle"]
@@ -2110,7 +2215,7 @@ def main() -> int:
     parser.add_argument("--workspace", default="/kaggle/working/workspace")
     parser.add_argument("--chapters", required=True)
     parser.add_argument("--render-workers", type=int, default=None)
-    parser.add_argument("--profile", "--architecture-profile", dest="profile", default="B5")
+    parser.add_argument("--profile", "--architecture-profile", dest="profile", default="B4")
     parser.add_argument("--encoder", default="auto")
     parser.add_argument("--no-compile", action="store_true", default=False)
     parser.add_argument("--force-recompute", action="store_true", default=False)
