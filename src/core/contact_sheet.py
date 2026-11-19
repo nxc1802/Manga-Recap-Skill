@@ -12,7 +12,7 @@ from typing import List, Optional
 from PIL import Image, ImageDraw, ImageFont
 
 from src.core.logger import logger
-from src.core.schemas import ContactSheetInfo, PanelItem
+from src.core.schemas import ContactSheetInfo, PanelItem, PanelStatus
 
 
 class ContactSheetGenerator:
@@ -124,27 +124,36 @@ class ContactSheetGenerator:
                     except Exception as e:
                         logger.error(f"ContactSheetGenerator: Failed rendering panel {panel.filename}: {e}")
 
-                # 3. Render semi-transparent crimson badge (#001..)
+                # 3. Render semi-transparent status-coded badge (#001 · 1.8x)
                 badge_x = cell_x + 12
                 badge_y = cell_y + 12
-                badge_w = 68
+                hw_ratio = (float(panel.height) / float(panel.width)) if panel.width > 0 else 1.0
+                status_val = panel.status.value if isinstance(panel.status, PanelStatus) else str(panel.status)
+                if status_val == PanelStatus.CONTEXT_ONLY.value:
+                    badge_fill = (217, 119, 6, 220)   # Amber: Nhóm 2 (Text-only)
+                    seq_text = f"#{panel.sequence_number:03d} T {hw_ratio:.1f}x"
+                elif status_val == PanelStatus.SKIP.value:
+                    badge_fill = (100, 116, 139, 215) # Slate gray: Nhóm 3 (Skip)
+                    seq_text = f"#{panel.sequence_number:03d} X {hw_ratio:.1f}x"
+                else:
+                    badge_fill = (220, 20, 60, 204)   # Crimson: Nhóm 1 (Active)
+                    seq_text = f"#{panel.sequence_number:03d} · {hw_ratio:.1f}x"
+
+                badge_w = max(86, 16 + len(seq_text) * 8)
                 badge_h = 24
 
                 # Create badge overlay with alpha
                 badge_layer = Image.new("RGBA", (self.canvas_width, self.canvas_height), (0, 0, 0, 0))
                 b_draw = ImageDraw.Draw(badge_layer)
 
-                # Crimson red background (220, 20, 60, 204), white outline (255, 255, 255, 180)
                 b_draw.rounded_rectangle(
                     [(badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h)],
                     radius=4,
-                    fill=(220, 20, 60, 204),
+                    fill=badge_fill,
                     outline=(255, 255, 255, 180),
                     width=1,
                 )
 
-                # Badge text (e.g., #001)
-                seq_text = f"#{panel.sequence_number:03d}"
                 b_draw.text(
                     (badge_x + 8, badge_y + 4),
                     seq_text,

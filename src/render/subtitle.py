@@ -110,95 +110,84 @@ class SubtitleCue:
 SubtitleBlock = SubtitleCue
 
 
+def _split_into_k_balanced(text: str, k: int) -> List[str]:
+    """Splits text into k nearly equal parts at punctuation or whitespace boundaries."""
+    if k <= 1 or len(text) < 20:
+        return [text]
+    if k == 2:
+        mid = len(text) // 2
+        best_idx = -1
+        best_dist = len(text)
+        for m in re.finditer(r"[,;:—]\s+", text):
+            pos = m.end()
+            if 0.25 * len(text) <= pos <= 0.75 * len(text) and abs(pos - mid) < best_dist:
+                best_dist = abs(pos - mid)
+                best_idx = pos
+        if best_idx == -1:
+            for m in re.finditer(r"\s+", text):
+                pos = m.start()
+                if abs(pos - mid) < best_dist:
+                    best_dist = abs(pos - mid)
+                    best_idx = pos
+        if best_idx <= 0 or best_idx >= len(text) - 1:
+            return [text]
+        left, right = text[:best_idx].strip(), text[best_idx:].strip()
+        return [left, right] if (left and right) else [text]
+
+    # k >= 3: pick cut closest to 1/k, then recurse k-1 on remainder
+    target = len(text) // k
+    best_idx = -1
+    best_dist = len(text)
+    for m in re.finditer(r"(?:[,;:—]\s+|\s+)", text):
+        pos = m.end() if m.group().strip() else m.start()
+        if 0.15 * len(text) <= pos <= 0.85 * len(text) and abs(pos - target) < best_dist:
+            best_dist = abs(pos - target)
+            best_idx = pos
+    if best_idx <= 0 or best_idx >= len(text) - 1:
+        return [text]
+    head, tail = text[:best_idx].strip(), text[best_idx:].strip()
+    return ([head] + _split_into_k_balanced(tail, k - 1)) if (head and tail) else [text]
+
+
+def _wrap_cue_balanced(cue: str, max_chars_per_line: int, max_lines: int) -> str:
+    """Formats a single cue onto <= max_lines balanced lines without crossing sentence boundaries."""
+    if max_lines <= 1 or len(cue) <= max_chars_per_line:
+        return cue
+    parts = _split_into_k_balanced(cue, 2)
+    return "\n".join(parts)
+
+
 def chunk_vietnamese_text_sentence_aware(
     text: str,
-    max_chars_per_line: int = 42,
-    max_lines: int = 1,
+    max_chars_per_line: int = 52,
+    max_lines: int = 2,
 ) -> List[str]:
     """
-    Sentence-aware Vietnamese subtitle chunker.
-    Splits first on sentence punctuation (.?!…), then on clause punctuation (,;:—),
-    guaranteeing no orphan words (minimum 2 words per chunk if sentence has >= 2 words).
+    Sentence-preserving Vietnamese subtitle chunker:
+    - Displays 1 complete sentence per cue (wrapping up to `max_lines` balanced lines).
+    - Splits into 2 or 3 balanced cues ONLY if the sentence exceeds `cue_budget = max_chars_per_line * max_lines`.
+    - Never merges two different sentences into one cue.
     """
     clean_text = sanitize_subtitle_text(text)
     if not clean_text:
         return []
 
-    # 1. Split into natural sentences: delimiters [.?!…]
     sentence_pattern = r"(?<=[.?!…])\s+"
     raw_sentences = [s.strip() for s in re.split(sentence_pattern, clean_text) if s.strip()]
+    cue_budget = max(1, max_chars_per_line) * max(1, max_lines)
 
-    single_line_chunks: List[str] = []
+    cues: List[str] = []
     for sent in raw_sentences:
-        if len(sent) <= max_chars_per_line:
-            single_line_chunks.append(sent)
-            continue
-
-        # 2. Sentence exceeds line limit: split at clause delimiters [,;:—]
-        clause_pattern = r"(?<=[,;:—])\s+"
-        clauses = [c.strip() for c in re.split(clause_pattern, sent) if c.strip()]
-
-        current_accum: List[str] = []
-        for clause in clauses:
-            # If the clause itself is longer than max_chars_per_line, split by words
-            if len(clause) > max_chars_per_line:
-                words = clause.split()
-                w_accum: List[str] = []
-                w_len = 0
-                for w in words:
-                    cand_len = len(w) if not w_accum else w_len + 1 + len(w)
-                    if cand_len <= max_chars_per_line:
-                        w_accum.append(w)
-                        w_len = cand_len
-                    else:
-                        if w_accum:
-                            current_accum.append(" ".join(w_accum))
-                        w_accum = [w]
-                        w_len = len(w)
-                if w_accum:
-                    current_accum.append(" ".join(w_accum))
-            else:
-                if not current_accum:
-                    current_accum.append(clause)
-                else:
-                    # Check if clause fits in current chunk
-                    if len(current_accum[-1]) + 1 + len(clause) <= max_chars_per_line:
-                        current_accum[-1] = f"{current_accum[-1]} {clause}"
-                    else:
-                        current_accum.append(clause)
-
-        # 3. Post-process to eliminate orphan words (minimum 2 words per chunk)
-        rebalanced: List[str] = []
-        for c in current_accum:
-            words = c.split()
-            if len(words) == 1 and rebalanced:
-                prev_words = rebalanced[-1].split()
-                if len(prev_words) >= 3:
-                    # Borrow last word from previous chunk
-                    moved_word = prev_words.pop()
-                    rebalanced[-1] = " ".join(prev_words)
-                    rebalanced.append(f"{moved_word} {words[0]}")
-                elif len(rebalanced[-1]) + 1 + len(words[0]) <= max_chars_per_line + 5:
-                    # Merge into previous chunk
-                    rebalanced[-1] = f"{rebalanced[-1]} {words[0]}"
-                else:
-                    rebalanced.append(c)
-            else:
-                rebalanced.append(c)
-
-        single_line_chunks.extend(rebalanced)
-
-    if max_lines <= 1:
-        return single_line_chunks
-
-    # Group into max_lines per block if max_lines > 1
-    blocks: List[str] = []
-    i = 0
-    while i < len(single_line_chunks):
-        group = single_line_chunks[i : i + max_lines]
-        blocks.append("\n".join(group))
-        i += max_lines
-    return blocks
+        if len(sent) <= cue_budget:
+            cues.append(_wrap_cue_balanced(sent, max_chars_per_line, max_lines))
+        elif len(sent) <= int(cue_budget * 1.9):
+            for half in _split_into_k_balanced(sent, 2):
+                cues.append(_wrap_cue_balanced(half, max_chars_per_line, max_lines))
+        else:
+            k = max(3, (len(sent) + cue_budget - 1) // cue_budget)
+            for part in _split_into_k_balanced(sent, k):
+                cues.append(_wrap_cue_balanced(part, max_chars_per_line, max_lines))
+    return cues
 
 
 class SubtitleGenerator:

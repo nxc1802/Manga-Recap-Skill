@@ -263,9 +263,9 @@ class SubtitleChunkingMode(str, Enum):
 class SubtitleSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     max_lines: int = Field(default=1, ge=1, le=2)
-    font_size: int = Field(default=26, ge=16, le=48)
+    font_size: int = Field(default=23, ge=16, le=48)
     chunking: SubtitleChunkingMode = SubtitleChunkingMode.SENTENCE_AWARE
-    max_chars_per_line: int = Field(default=42, ge=20, le=80)
+    max_chars_per_line: int = Field(default=82, ge=20, le=120)
 
 
 class PacingMode(str, Enum):
@@ -602,6 +602,8 @@ class PanelItem(BaseModel):
     relative_path: str = Field(..., description="panels/panel_001.jpg")
     source_image: str = Field(..., description="Original raw image filename")
     crop_box: Tuple[int, int, int, int] = Field(..., description="(left, top, right, bottom) pixel coordinates")
+    vcs_start: Optional[int] = Field(default=None, ge=0, description="Virtual Continuous Coordinate Space start y (inclusive)")
+    vcs_end: Optional[int] = Field(default=None, ge=0, description="Virtual Continuous Coordinate Space end y (exclusive)")
     width: int = Field(gt=0)
     height: int = Field(gt=0)
     aspect_ratio: float = Field(gt=0.0)
@@ -636,6 +638,7 @@ class PanelManifest(BaseModel):
     raw_images: List[RawImageInfo] = Field(default_factory=list)
     panels: List[PanelItem] = Field(default_factory=list)
     contact_sheets: List[ContactSheetInfo] = Field(default_factory=list)
+    panel_plan_applied: bool = Field(default=False, description="True once AI VLM panel_plan.json has been applied via repack")
     schema_version: str = "3.0.0"
 
 

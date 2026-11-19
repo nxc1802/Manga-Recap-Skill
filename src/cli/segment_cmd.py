@@ -232,3 +232,77 @@ def handle_segment(args: argparse.Namespace) -> Dict[str, Any]:
     except Exception as e:
         update_checkpoint(chap_dir, StageType.SEGMENT, CheckpointStatus.FAILED, error=str(e))
         raise
+
+
+def handle_repack(args: argparse.Namespace) -> Dict[str, Any]:
+    """Applies AI VLM `panel_plan.json` (merge/split/3-group classification) to segmented panels."""
+    from src.core.execution_policy import enforce_execution_policy
+    from src.core.panel_repack import PanelPlan, apply_panel_plan
+
+    enforce_execution_policy("repack", args)
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", None)
+    plan_arg = getattr(args, "plan", None)
+    target_width = getattr(args, "target_width", 1080)
+    cell_size = getattr(args, "cell_size", 480)
+    grid_cols = getattr(args, "grid_cols", 4)
+    grid_rows = getattr(args, "grid_rows", 4)
+
+    if not project_slug:
+        raise CliValidationError("Project slug (--project) is required.")
+    if chapter_num is None:
+        raise CliValidationError("Chapter number (--chapter) is required.")
+
+    chap_dir = get_chapter_dir(project_slug, chapter_num)
+    if not chap_dir.exists():
+        raise CliValidationError(f"Chapter directory does not exist: {chap_dir}")
+
+    plan_path = Path(plan_arg) if plan_arg else (chap_dir / "panel_plan.json")
+    if not plan_path.exists():
+        raise CliValidationError(f"panel_plan.json not found at {plan_path}")
+
+    try:
+        plan_obj = PanelPlan.model_validate(read_json(plan_path))
+    except Exception as exc:
+        raise CliValidationError(f"Invalid panel_plan.json: {exc}") from exc
+
+    return apply_panel_plan(
+        chapter_dir=chap_dir,
+        plan=plan_obj,
+        target_width=target_width,
+        cell_size=cell_size,
+        grid_cols=grid_cols,
+        grid_rows=grid_rows,
+    )
+
+
+def handle_panel_inspect(args: argparse.Namespace) -> Dict[str, Any]:
+    """Generates candidate cut-line inspection images for flagged panels."""
+    from src.core.panel_repack import inspect_panels_with_candidates
+
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", None)
+    raw_panels = getattr(args, "panels", "") or ""
+    panel_ids = [p.strip() for p in raw_panels.split(",") if p.strip()]
+
+    if not project_slug or chapter_num is None or not panel_ids:
+        raise CliValidationError("--project, --chapter, and --panels (comma-separated) are required.")
+    chap_dir = get_chapter_dir(project_slug, chapter_num)
+    return inspect_panels_with_candidates(chap_dir, panel_ids)
+
+
+def handle_decide(args: argparse.Namespace) -> Dict[str, Any]:
+    """Runs Gemini Decision 1 (`gemini-decision-1`) per-panel classification, split/merge, 2D crop & motion."""
+    from src.core.execution_policy import enforce_execution_policy
+    from src.core.decision_engine import run_decision_pipeline
+
+    enforce_execution_policy("decide", args)
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", None)
+    max_workers = getattr(args, "workers", 2)
+    reclassify_all = getattr(args, "reclassify_all", False)
+
+    if not project_slug or chapter_num is None:
+        raise CliValidationError("Both --project and --chapter are required.")
+    chap_dir = get_chapter_dir(project_slug, chapter_num)
+    return run_decision_pipeline(chap_dir, max_workers=max_workers, reclassify_all=reclassify_all)

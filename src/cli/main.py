@@ -118,6 +118,28 @@ def build_parser() -> JsonAwareArgumentParser:
     p_seg.add_argument("--target-width", type=int, default=1080, help="Target panel width")
     p_seg.add_argument("--force", action="store_true", help="Force re-segmentation")
 
+    # 4c. repack
+    p_repack = subparsers.add_parser("repack", help="Apply AI VLM panel_plan.json (merge, split, 3-group classification)", parents=[common_parent])
+    p_repack.add_argument("-p", "--project", required=True, help="Project slug")
+    p_repack.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_repack.add_argument("--plan", default=None, help="Path to panel_plan.json (default: chapter/panel_plan.json)")
+    p_repack.add_argument("--target-width", type=int, default=1080, help="Target panel width")
+    p_repack.add_argument("--grid-cols", type=int, default=4, help="Contact sheet columns (default: 4)")
+    p_repack.add_argument("--grid-rows", type=int, default=4, help="Contact sheet rows (default: 4)")
+
+    # 4d. panel-inspect
+    p_pinspect = subparsers.add_parser("panel-inspect", help="Render candidate cut lines for flagged panels", parents=[common_parent])
+    p_pinspect.add_argument("-p", "--project", required=True, help="Project slug")
+    p_pinspect.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_pinspect.add_argument("--panels", required=True, help="Comma-separated panel IDs to inspect")
+
+    # 4e. decide
+    p_decide = subparsers.add_parser("decide", help="Classify panels, resolve splits/merges, and assign 2D crops via gemini-decision-1", parents=[common_parent])
+    p_decide.add_argument("-p", "--project", required=True, help="Project slug")
+    p_decide.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_decide.add_argument("--workers", type=int, default=2, help="Concurrent Decision API requests (default: 2)")
+    p_decide.add_argument("--reclassify-all", action="store_true", help="Re-evaluate all panels in Pass 2")
+
     # 5. tts
     p_tts = subparsers.add_parser("tts", help="Synthesize audio for script segments", parents=[common_parent])
     p_tts.add_argument("-p", "--project", required=True, help="Project slug")
@@ -385,6 +407,15 @@ def _dispatch_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str,
     elif subcommand == "segment":
         from src.cli.segment_cmd import handle_segment
         return handle_segment(args)
+    elif subcommand == "repack":
+        from src.cli.segment_cmd import handle_repack
+        return handle_repack(args)
+    elif subcommand == "panel-inspect":
+        from src.cli.segment_cmd import handle_panel_inspect
+        return handle_panel_inspect(args)
+    elif subcommand == "decide":
+        from src.cli.segment_cmd import handle_decide
+        return handle_decide(args)
     elif subcommand == "tts":
         from src.cli.tts_cmd import handle_tts
         return handle_tts(args)
@@ -448,7 +479,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "thumbnail", "archive", "setup"
+            "crawl", "segment", "repack", "panel-inspect", "decide", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "thumbnail", "archive", "setup"
         }:
             detected_subcommand = arg
             break

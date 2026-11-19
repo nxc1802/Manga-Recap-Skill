@@ -255,7 +255,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 service = KaggleCloudService()
                 if not service.is_authenticated:
                     raise CliValidationError("Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token.")
-                cloud_res = service.dispatch_chapter_job(
+                cloud_res = service.dispatch_chapter_job_with_fallback(
                     project_slug=project_slug,
                     chapter_number=str(chap_num),
                     gpu=True,

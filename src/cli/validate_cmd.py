@@ -160,6 +160,7 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
         manifest_path = chap_dir / "manifest.json"
         manifest_panel_ids: set[str] = set()
         canonical_manifest_pids: set[str] = set()
+        skip_panel_ids: set[str] = set()
         panel_lookup: Dict[str, str] = {}
         panel_disk_paths: Dict[str, Path] = {}
         if manifest_path.exists():
@@ -172,8 +173,10 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                 panels_dir = chap_dir / "panels"
                 for panel in manifest_obj.panels:
                     p_status = getattr(panel, "status", None)
-                    is_active = p_status not in {"skip", PanelStatus.SKIP} if p_status else True
-                    if is_active:
+                    is_skip = p_status in {"skip", PanelStatus.SKIP} if p_status else False
+                    if is_skip:
+                        skip_panel_ids.add(panel.panel_id)
+                    else:
                         canonical_manifest_pids.add(panel.panel_id)
 
                     panel_lookup[panel.panel_id] = panel.panel_id
@@ -239,6 +242,12 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
                                     False,
                                     f"segment:{seg.seq_id}:panel:{pid}",
                                     f"Segment references panel '{pid}' not in manifest.json",
+                                )
+                            elif canon_pid in skip_panel_ids:
+                                check(
+                                    False,
+                                    f"segment:{seg.seq_id}:panel_skip:{pid}",
+                                    f"Segment references Group 3 SKIP panel '{canon_pid}' (forbidden in script)",
                                 )
 
                             # Verify physical existence on disk (fail-fast)

@@ -23,7 +23,7 @@ def handle_render(args: argparse.Namespace):
         if options["quality"] != expected_quality:
             raise CliValidationError("Cloud renders chapter 1 preview and later chapters final. Promote reviewed chapter 1 locally.")
         from src.cloud.kaggle_service import KaggleCloudService
-        result = KaggleCloudService().dispatch_chapter_job(slug, chapter_num, job_type="render", wait=True,
+        result = KaggleCloudService().dispatch_chapter_job_with_fallback(slug, chapter_num, job_type="render", wait=True,
             encoder_preference=options["encoder"] or "auto", burn_subtitles=options["burn_subtitles"])
     else:
         result = VideoEngine().render_chapter(get_project_dir(slug), chapter_num, **options)

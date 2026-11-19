@@ -115,7 +115,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
         if not service.is_authenticated:
             raise CliValidationError("Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token.")
         update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.RUNNING)
-        cloud_res = service.dispatch_chapter_job(
+        cloud_res = service.dispatch_chapter_job_with_fallback(
             project_slug=project_slug,
             chapter_number=str(chapter_num),
             gpu=True,

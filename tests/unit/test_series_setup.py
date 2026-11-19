@@ -158,7 +158,7 @@ class TestSeriesSetupModelsAndHashing:
         """Individually omits each question from Q01 to Q10 and confirms rejection."""
         base_answers = _make_valid_answers_dict()
 
-        for qid in ALL_QUESTION_IDS:
+        for qid in [q for q in ALL_QUESTION_IDS if q not in {"Q06", "Q07"}]:
             answers_copy = copy.deepcopy(base_answers)
             del answers_copy[qid]
             snap_hash = compute_snapshot_hash(answers_copy)

@@ -28,8 +28,9 @@ def with_account_fallback(operation):
             except (CliValidationError, ValueError, StorageError):
                 # Input/approval/artifact errors must still fail closed immediately.
                 raise
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Kaggle account '%s' failed (%s); trying the next token", self.account_name, type(exc).__name__)
+                continue
             logger.warning("Kaggle account '%s' failed; trying the next token", self.account_name)
         raise RuntimeError("All configured Kaggle accounts failed; stopped without publishing success") from None
     return dispatch

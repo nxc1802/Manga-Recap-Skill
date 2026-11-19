@@ -144,9 +144,11 @@ class StreamingSegmenter:
         if total_height == 0:
             return []
 
-        # Boolean mask of gutter rows
+        # Boolean mask of gutter rows (near-white or near-black uniform bands)
+        eff_white = min(self.white_threshold, 235.0)
+        eff_black = max(self.black_threshold, 22.0)
         is_gutter_row = (row_vars < self.threshold_variance) & (
-            (row_means >= self.white_threshold) | (row_means <= self.black_threshold)
+            (row_means >= eff_white) | (row_means <= eff_black)
         )
 
         gutter_intervals: List[Tuple[int, int]] = []
@@ -164,51 +166,40 @@ class StreamingSegmenter:
                     if (y - gutter_start) >= self.min_gutter_height:
                         gutter_intervals.append((gutter_start, y))
 
-        if in_gutter:
-            if (total_height - gutter_start) >= self.min_gutter_height:
-                gutter_intervals.append((gutter_start, total_height))
+        if in_gutter and (total_height - gutter_start) >= self.min_gutter_height:
+            gutter_intervals.append((gutter_start, total_height))
 
         # If no gutters found, entire strip is a single candidate
         if not gutter_intervals:
             return [(0, total_height)]
 
-        # Determine cut coordinates at the midpoint of each gutter with clamped margins
-        cut_points: List[Tuple[int, int, int]] = []  # (g_start, g_cut, g_end)
-        for g_start, g_end in gutter_intervals:
-            g_cut = g_start + (g_end - g_start) // 2
-            cut_points.append((g_start, g_cut, g_end))
-
-        # Build panel slices between successive gutters
+        # Cut at gutter edges (with tiny breathing pad) to strip dead white/black margins
+        edge_pad = min(self.margin_padding, 4)
         slices: List[Tuple[int, int]] = []
 
-        # 1. Panel before first gutter: only if first gutter does not start at 0
-        first_start, first_cut, first_end = cut_points[0]
+        first_start, first_end = gutter_intervals[0]
         if first_start > 0:
             p_top = 0
-            p_bottom = min(first_end, first_cut + self.margin_padding)
+            p_bottom = min(first_end, first_start + edge_pad)
             if p_bottom - p_top >= 5:
                 slices.append((p_top, p_bottom))
 
-        # 2. Panels between consecutive gutters
-        for idx in range(len(cut_points) - 1):
-            prev_start, prev_cut, prev_end = cut_points[idx]
-            next_start, next_cut, next_end = cut_points[idx + 1]
+        for idx in range(len(gutter_intervals) - 1):
+            prev_start, prev_end = gutter_intervals[idx]
+            next_start, next_end = gutter_intervals[idx + 1]
 
-            p_top = max(prev_start, prev_cut - self.margin_padding)
-            p_bottom = min(next_end, next_cut + self.margin_padding)
-
+            p_top = max(prev_start, prev_end - edge_pad)
+            p_bottom = min(next_end, next_start + edge_pad)
             if p_bottom - p_top >= 5:
                 slices.append((p_top, p_bottom))
 
-        # 3. Panel after last gutter: only if last gutter does not reach total_height
-        last_start, last_cut, last_end = cut_points[-1]
+        last_start, last_end = gutter_intervals[-1]
         if last_end < total_height:
-            p_top = max(last_start, last_cut - self.margin_padding)
+            p_top = max(last_start, last_end - edge_pad)
             p_bottom = total_height
             if p_bottom - p_top >= 5:
                 slices.append((p_top, p_bottom))
 
-        # Fallback if entire image was gutter or empty
         if not slices:
             slices.append((0, total_height))
 
@@ -220,101 +211,72 @@ class StreamingSegmenter:
         row_vars: np.ndarray,
     ) -> List[Tuple[int, int]]:
         """
-        Refines candidate panel intervals:
-        - Gutter Merging: segments < force_merge_height are merged with nearest neighbor.
-        - Tall Panel Splitting: segments > target_width * 3.5 are split at local variance minimums.
+        Minimal interval sanity filter. Drops only sub-8px noise slivers;
+        structural merge/split decisions are delegated to AI VLM sheet review.
         """
-        if not intervals:
-            return []
+        return [(top, bottom) for top, bottom in intervals if (bottom - top) >= 8]
 
-        candidates = [{"coords": [top, bottom], "height": bottom - top} for top, bottom in intervals]
-        force_merge_height = 60
+    def extract_vcs_crop(
+        self,
+        page_maps: List[RawPageMap],
+        v_top: int,
+        v_bottom: int,
+    ) -> Optional[Tuple[Image.Image, str, Tuple[int, int, int, int]]]:
+        """Extracts a single or page-crossing panel image directly from raw pages via VCS."""
+        if v_bottom <= v_top:
+            return None
 
-        # 1. Gutter Merging
-        while True:
-            target_idx = -1
-            for idx, cand in enumerate(candidates):
-                if cand["height"] < force_merge_height:
-                    target_idx = idx
-                    break
+        intersecting = [
+            p for p in page_maps
+            if p.v_start < v_bottom and p.v_end > v_top
+        ]
+        if not intersecting:
+            return None
 
-            if target_idx == -1:
-                break
+        if len(intersecting) == 1:
+            p = intersecting[0]
+            local_y1 = max(0, int(round((v_top - p.v_start) / p.scale)))
+            local_y2 = min(p.orig_height, int(round((v_bottom - p.v_start) / p.scale)))
+            if local_y2 <= local_y1:
+                local_y2 = min(p.orig_height, local_y1 + 10)
 
-            gutter_before = float("inf")
-            if target_idx > 0:
-                gutter_before = (
-                    candidates[target_idx]["coords"][0]
-                    - candidates[target_idx - 1]["coords"][1]
-                )
+            with Image.open(p.path) as raw_img:
+                panel_crop = raw_img.convert("RGB").crop((0, local_y1, p.orig_width, local_y2))
+                if panel_crop.width != self.target_width:
+                    scaled_h = max(1, int(round(panel_crop.height * p.scale)))
+                    panel_crop = panel_crop.resize((self.target_width, scaled_h), Image.Resampling.LANCZOS)
+            return panel_crop, p.filename, (0, local_y1, p.orig_width, local_y2)
 
-            gutter_after = float("inf")
-            if target_idx < len(candidates) - 1:
-                gutter_after = (
-                    candidates[target_idx + 1]["coords"][0]
-                    - candidates[target_idx]["coords"][1]
-                )
+        sub_strips: List[Image.Image] = []
+        for p in intersecting:
+            sub_v_a = max(v_top, p.v_start)
+            sub_v_b = min(v_bottom, p.v_end)
+            local_y1 = max(0, int(round((sub_v_a - p.v_start) / p.scale)))
+            local_y2 = min(p.orig_height, int(round((sub_v_b - p.v_start) / p.scale)))
+            if local_y2 <= local_y1:
+                continue
 
-            if gutter_before == float("inf") and gutter_after == float("inf"):
-                break
+            with Image.open(p.path) as raw_img:
+                strip = raw_img.convert("RGB").crop((0, local_y1, p.orig_width, local_y2))
+                if strip.width != self.target_width:
+                    scaled_h = max(1, int(round(strip.height * p.scale)))
+                    strip = strip.resize((self.target_width, scaled_h), Image.Resampling.LANCZOS)
+                sub_strips.append(strip)
 
-            if gutter_before <= gutter_after:
-                merge_idx = target_idx - 1
-                new_coords = [
-                    candidates[merge_idx]["coords"][0],
-                    candidates[target_idx]["coords"][1],
-                ]
-                candidates[merge_idx]["coords"] = new_coords
-                candidates[merge_idx]["height"] = new_coords[1] - new_coords[0]
-                candidates.pop(target_idx)
-            else:
-                merge_idx = target_idx + 1
-                new_coords = [
-                    candidates[target_idx]["coords"][0],
-                    candidates[merge_idx]["coords"][1],
-                ]
-                candidates[target_idx]["coords"] = new_coords
-                candidates[target_idx]["height"] = new_coords[1] - new_coords[0]
-                candidates.pop(merge_idx)
+        if not sub_strips:
+            return None
 
-        # 2. Tall Panel Splitting
-        max_panel_height = int(self.target_width * 3.5)
-        split_candidates: List[Dict[str, Any]] = []
+        total_strip_h = sum(s.height for s in sub_strips)
+        panel_crop = Image.new("RGB", (self.target_width, total_strip_h), (255, 255, 255))
+        y_off = 0
+        for s in sub_strips:
+            panel_crop.paste(s, (0, y_off))
+            y_off += s.height
+            s.close()
 
-        for cand in candidates:
-            top, bottom = cand["coords"]
-            h = cand["height"]
-            if h > max_panel_height:
-                current_top = top
-                while bottom - current_top > max_panel_height:
-                    search_start = current_top + self.target_width
-                    search_end = min(bottom - self.target_width, current_top + max_panel_height)
-
-                    if search_start >= search_end:
-                        split_point = current_top + max_panel_height
-                    else:
-                        local_vars = row_vars[search_start:search_end]
-                        if len(local_vars) > 0:
-                            best_local_y = int(np.argmin(local_vars))
-                            split_point = search_start + best_local_y
-                        else:
-                            split_point = current_top + max_panel_height
-
-                    split_candidates.append({
-                        "coords": [current_top, split_point],
-                        "height": split_point - current_top
-                    })
-                    current_top = split_point
-
-                if bottom > current_top:
-                    split_candidates.append({
-                        "coords": [current_top, bottom],
-                        "height": bottom - current_top
-                    })
-            else:
-                split_candidates.append(cand)
-
-        return [(c["coords"][0], c["coords"][1]) for c in split_candidates]
+        source_image_name = f"{intersecting[0].filename}+{intersecting[-1].filename}"
+        crop_box = (0, 0, self.target_width, total_strip_h)
+        return panel_crop, source_image_name, crop_box
 
     def extract_panels(
         self,
@@ -323,104 +285,22 @@ class StreamingSegmenter:
         output_dir: Path,
     ) -> List[PanelItem]:
         """
-        Extracts panel crops based on virtual continuous coordinates.
-        - Single page panels: crops directly from raw page file.
-        - Page-crossing panels: stitches only the intersecting sub-strips.
-        - Under-height panels (< target_width): even top/bottom padding to square.
+        Extracts natural-aspect panel crops directly from raw pages via VCS.
+        No blind square padding or pixel-heuristic SKIP; AI VLM classifies on sheets.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         panels: List[PanelItem] = []
 
         for idx, (v_top, v_bottom) in enumerate(intervals, start=1):
-            h_virtual = v_bottom - v_top
-            if h_virtual <= 0:
+            extracted = self.extract_vcs_crop(page_maps, v_top, v_bottom)
+            if extracted is None:
                 continue
+            panel_crop, source_image_name, crop_box = extracted
 
-            # Identify intersecting pages
-            intersecting = [
-                p for p in page_maps
-                if p.v_start < v_bottom and p.v_end > v_top
-            ]
-            if not intersecting:
-                continue
-
-            # Extract image for this panel
-            if len(intersecting) == 1:
-                p = intersecting[0]
-                # Map virtual coords back to original page coordinates
-                local_y1 = max(0, int(round((v_top - p.v_start) / p.scale)))
-                local_y2 = min(p.orig_height, int(round((v_bottom - p.v_start) / p.scale)))
-                if local_y2 <= local_y1:
-                    local_y2 = min(p.orig_height, local_y1 + 10)
-
-                with Image.open(p.path) as raw_img:
-                    panel_crop = raw_img.convert("RGB").crop((0, local_y1, p.orig_width, local_y2))
-                    if panel_crop.width != self.target_width:
-                        scaled_h = max(1, int(round(panel_crop.height * p.scale)))
-                        panel_crop = panel_crop.resize((self.target_width, scaled_h), Image.Resampling.LANCZOS)
-                source_image_name = p.filename
-                crop_box = (0, local_y1, p.orig_width, local_y2)
-
-            else:
-                # Panel crosses page boundary: stitch only intersecting sub-strips
-                sub_strips: List[Image.Image] = []
-                for p in intersecting:
-                    sub_v_a = max(v_top, p.v_start)
-                    sub_v_b = min(v_bottom, p.v_end)
-                    local_y1 = max(0, int(round((sub_v_a - p.v_start) / p.scale)))
-                    local_y2 = min(p.orig_height, int(round((sub_v_b - p.v_start) / p.scale)))
-                    if local_y2 <= local_y1:
-                        continue
-
-                    with Image.open(p.path) as raw_img:
-                        strip = raw_img.convert("RGB").crop((0, local_y1, p.orig_width, local_y2))
-                        if strip.width != self.target_width:
-                            scaled_h = max(1, int(round(strip.height * p.scale)))
-                            strip = strip.resize((self.target_width, scaled_h), Image.Resampling.LANCZOS)
-                        sub_strips.append(strip)
-
-                if not sub_strips:
-                    continue
-
-                total_strip_h = sum(s.height for s in sub_strips)
-                panel_crop = Image.new("RGB", (self.target_width, total_strip_h), (255, 255, 255))
-                y_off = 0
-                for s in sub_strips:
-                    panel_crop.paste(s, (0, y_off))
-                    y_off += s.height
-                    s.close()
-
-                source_image_name = f"{intersecting[0].filename}+{intersecting[-1].filename}"
-                crop_box = (0, 0, self.target_width, total_strip_h)
-
-            # Analyze variance
             gray_crop = panel_crop.convert("L")
             crop_var = float(np.var(np.asarray(gray_crop, dtype=np.float32)))
-
+            gray_crop.close()
             final_w, final_h = panel_crop.size
-            panel_status = PanelStatus.ACTIVE
-            if crop_var < self.sufficiency_variance:
-                # Low variance blank/spacer panel
-                panel_status = PanelStatus.SKIP
-
-            # Aspect Ratio & Padding
-            if final_h < self.target_width:
-                # Under-height: Even Padding to square
-                pad_total = self.target_width - final_h
-                pad_top = pad_total // 2
-                pad_bottom = pad_total - pad_top
-
-                gray_arr = np.asarray(gray_crop)
-                top_mean = float(np.mean(gray_arr[0, :]))
-                bottom_mean = float(np.mean(gray_arr[-1, :]))
-                border_mean = (top_mean + bottom_mean) / 2.0
-                bg_color = (0, 0, 0) if border_mean < 128.0 else (255, 255, 255)
-
-                padded_img = Image.new("RGB", (self.target_width, self.target_width), bg_color)
-                padded_img.paste(panel_crop, (0, pad_top))
-                panel_crop.close()
-                panel_crop = padded_img
-                final_w, final_h = self.target_width, self.target_width
 
             panel_id = f"panel_{idx:03d}"
             filename = f"{panel_id}.jpg"
@@ -431,21 +311,24 @@ class StreamingSegmenter:
             sha256_hash = calculate_sha256(out_file)
             aspect_ratio = round(float(final_w) / float(final_h), 3) if final_h > 0 else 1.0
 
-            panel_item = PanelItem(
-                panel_id=panel_id,
-                sequence_number=idx,
-                filename=filename,
-                relative_path=f"panels/{filename}",
-                source_image=source_image_name,
-                crop_box=crop_box,
-                width=final_w,
-                height=final_h,
-                aspect_ratio=aspect_ratio,
-                sha256=sha256_hash,
-                status=panel_status,
-                notes=f"variance={crop_var:.2f}"
+            panels.append(
+                PanelItem(
+                    panel_id=panel_id,
+                    sequence_number=idx,
+                    filename=filename,
+                    relative_path=f"panels/{filename}",
+                    source_image=source_image_name,
+                    crop_box=crop_box,
+                    vcs_start=v_top,
+                    vcs_end=v_bottom,
+                    width=final_w,
+                    height=final_h,
+                    aspect_ratio=aspect_ratio,
+                    sha256=sha256_hash,
+                    status=PanelStatus.ACTIVE,
+                    notes=f"variance={crop_var:.2f}",
+                )
             )
-            panels.append(panel_item)
 
         logger.info(f"StreamingSegmenter: Extracted {len(panels)} panels to {output_dir}")
         return panels

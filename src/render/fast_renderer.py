@@ -26,7 +26,7 @@ from src.production.hardware import (
 )
 from src.render.subtitle import SubtitleCue, SubtitleGenerator, sanitize_subtitle_text
 from src.render.visual_policy import evidence_path
-from src.render.visual_plan_renderer import frame_schedule, render_frame
+from src.render.visual_plan_renderer import SCROLL_VIEWPORT_H_OVER_W, frame_schedule, render_frame
 
 MAX_CANVAS_CACHE_ENTRIES = 512
 _CANVAS_LOCK = threading.Lock()
@@ -103,7 +103,8 @@ def _compute_pan_geometry(
 
     crop_w_f = right - left
     crop_h_f = bottom - top
-    vis_h_f = min(crop_h_f, crop_w_f * target_height / float(target_width))
+    viewport_aspect = max(target_height / float(max(1, target_width)), SCROLL_VIEWPORT_H_OVER_W)
+    vis_h_f = min(crop_h_f, crop_w_f * viewport_aspect)
     raw_max_travel = max(0.0, crop_h_f - vis_h_f)
 
     x0 = max(0, min(img_w - 1, round(left)))
@@ -238,11 +239,12 @@ def _get_or_create_pan_strip_png(
     safe_max_travel = float(pan_geom["safe_max_travel"])
     rate_px_per_sec = float(pan_geom["rate_px_per_sec"])
 
-    scale_factor = target_width / float(max(1, crop_w))
+    scale_factor = target_height / float(max(1, crop_h))
     raw_strip_h = min(
         int(math.ceil(crop_h + safe_max_travel)),
         max(1, int(pan_geom.get("img_h", crop_h + math.ceil(safe_max_travel))) - y0),
     )
+    subject_w = min(int(target_width), max(1, int(round(crop_w * scale_factor))))
     scaled_w = int(target_width)
     scaled_h = max(int(target_height), int(round(raw_strip_h * scale_factor)))
     scaled_max_travel = max(0.0, float(scaled_h - target_height))
@@ -258,11 +260,19 @@ def _get_or_create_pan_strip_png(
             rgb = im.convert("RGB")
             crop_box = (x0, y0, min(rgb.width, x0 + crop_w), min(rgb.height, y0 + raw_strip_h))
             cropped = rgb.crop(crop_box)
-            if cropped.size != (scaled_w, scaled_h):
-                cropped = cropped.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+            subject = cropped.resize((subject_w, scaled_h), Image.Resampling.LANCZOS)
+            if subject_w < scaled_w:
+                from PIL import ImageFilter
+                bg = cropped.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR).filter(
+                    ImageFilter.GaussianBlur(radius=20)
+                )
+                bg.paste(subject, ((scaled_w - subject_w) // 2, 0))
+                final_strip = bg
+            else:
+                final_strip = subject
             tmp = strip_path.with_suffix(".tmp.png")
             try:
-                cropped.save(tmp, format="PNG", compress_level=1)
+                final_strip.save(tmp, format="PNG", compress_level=1)
                 tmp.replace(strip_path)
             finally:
                 tmp.unlink(missing_ok=True)
@@ -428,13 +438,15 @@ def _render_cue_overlay_png(
     box_x1 = min(canvas_width - 8, box_x0 + box_w)
     box_y1 = min(canvas_height - 8, box_y0 + box_h)
 
-    draw.rounded_rectangle([box_x0, box_y0, box_x1, box_y1], radius=8, fill=(0, 0, 0, 175))
     curr_y = box_y0 + pad_y
-    outline = max(1, scaled_px // 14)
+    outline = max(2, scaled_px // 12)
     for idx, line in enumerate(lines):
         lx = max(box_x0 + 4, (canvas_width - line_widths[idx]) // 2)
-        for dx, dy in ((-outline, 0), (outline, 0), (0, -outline), (0, outline)):
-            draw.text((lx + dx, curr_y + dy), line, font=font, fill=(0, 0, 0, 235))
+        for dx in range(-outline, outline + 1):
+            for dy in range(-outline, outline + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                draw.text((lx + dx, curr_y + dy), line, font=font, fill=(0, 0, 0, 240))
         draw.text((lx, curr_y), line, font=font, fill=(255, 255, 255, 255))
         curr_y += line_heights[idx] + line_gap
 
@@ -544,6 +556,8 @@ def build_shot_render_tasks(
     burn_subtitles: bool = False,
     subtitle_font_size: int = 24,
     quality_mode: Optional[str] = None,
+    watermark_png_path: Optional[Path] = None,
+    watermark_xy: Optional[Tuple[int, int]] = None,
 ) -> List[Dict[str, Any]]:
     """Builds deterministic per-shot render tasks quantized to frame_schedule(plan)."""
     plan = VisualPlan.model_validate(plan.model_dump(mode="json"))
@@ -610,6 +624,8 @@ def build_shot_render_tasks(
                 "burn_subtitles": bool(burn_subtitles),
                 "subtitle_font_size": int(subtitle_font_size),
                 "local_subtitle_cues": local_cues,
+                "watermark_png_path": watermark_png_path,
+                "watermark_xy": watermark_xy,
             }
         )
     return tasks
@@ -710,6 +726,23 @@ def render_shot_clip(
         gpu_index=gpu_index,
         profile="high",
     )
+    wm_png = Path(task["watermark_png_path"]).resolve() if task.get("watermark_png_path") else None
+    wm_xy = task.get("watermark_xy") or (0, 0)
+    if wm_png is not None and not wm_png.is_file():
+        wm_png = None
+
+    if not pan_geom["is_animated"] and wm_png is not None and canvas_png is not None:
+        wm_canvas = work_dir / f"canvas_wm_{canvas_key}.png"
+        if not wm_canvas.is_file():
+            with Image.open(canvas_png) as c_im, Image.open(wm_png) as w_im:
+                c_rgba = c_im.convert("RGBA")
+                c_rgba.alpha_composite(w_im.convert("RGBA"), dest=(int(wm_xy[0]), int(wm_xy[1])))
+                tmp_wm = work_dir / f".tmp_wm_{os.getpid()}_{threading.get_ident()}_{canvas_key}.png"
+                c_rgba.convert("RGB").save(tmp_wm, format="PNG")
+                tmp_wm.replace(wm_canvas)
+        canvas_png = wm_canvas
+        input_args = ["-loop", "1", "-t", f"{quantized_dur:.6f}", "-i", str(canvas_png)]
+
     timescale = fps * 1000
     shot_sub_dir = work_dir / "shot_subs" / f"shot_{int(task.get('shot_index', 0)):05d}"
 
@@ -770,10 +803,34 @@ def render_shot_clip(
                         cmd += ["-f", "concat", "-safe", "0", "-i", str(ov_manifest)]
                         pre = f"[0:v]{base_vf}[base];" if base_vf else ""
                         src_label = "[base]" if base_vf else "[0:v]"
-                        fc = f"{pre}[1:v]format=rgba,fps={fps}[ov];{src_label}[ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
+                        if pan_geom["is_animated"] and wm_png is not None:
+                            cmd += ["-i", str(wm_png)]
+                            wx, wy = int(wm_xy[0]), int(wm_xy[1])
+                            fc = (
+                                f"{pre}[1:v]format=rgba,fps={fps}[ov];"
+                                f"[2:v]format=rgba[wm];"
+                                f"{src_label}[wm]overlay={wx}:{wy}[bw];"
+                                f"[bw][ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
+                            )
+                        else:
+                            fc = f"{pre}[1:v]format=rgba,fps={fps}[ov];{src_label}[ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
+                        cmd += ["-filter_complex", fc, "-map", "[v]"]
+                    elif pan_geom["is_animated"] and wm_png is not None:
+                        cmd += ["-i", str(wm_png)]
+                        wx, wy = int(wm_xy[0]), int(wm_xy[1])
+                        pre = f"[0:v]{base_vf}[base];" if base_vf else ""
+                        src_label = "[base]" if base_vf else "[0:v]"
+                        fc = f"{pre}[1:v]format=rgba[wm];{src_label}[wm]overlay={wx}:{wy},setsar=1,format=yuv420p[v]"
                         cmd += ["-filter_complex", fc, "-map", "[v]"]
                     else:
                         cmd += ["-vf", base_vf]
+        elif pan_geom["is_animated"] and wm_png is not None:
+            cmd += ["-i", str(wm_png)]
+            wx, wy = int(wm_xy[0]), int(wm_xy[1])
+            pre = f"[0:v]{base_vf}[base];" if base_vf else ""
+            src_label = "[base]" if base_vf else "[0:v]"
+            fc = f"{pre}[1:v]format=rgba[wm];{src_label}[wm]overlay={wx}:{wy},setsar=1,format=yuv420p[v]"
+            cmd += ["-filter_complex", fc, "-map", "[v]"]
         else:
             cmd += ["-vf", base_vf]
 
@@ -1040,6 +1097,7 @@ def render_visual_plan_fast(
     burn_subtitles: bool = False,
     subtitle_font_size: int = 24,
     quality_mode: Optional[str] = None,
+    watermark_path: Optional[Path] = None,
 ) -> Path:
     """Renders a VisualPlan end-to-end using cached canvases, parallel shot clips, and -c copy concat."""
     output = Path(output_path).resolve()
@@ -1051,6 +1109,17 @@ def render_visual_plan_fast(
 
     with tempfile.TemporaryDirectory(prefix="p8_fast_render_") as tmp_dir:
         work_dir = Path(tmp_dir).resolve()
+        from src.render.watermark import compute_watermark_xy, prepare_watermark_rgba, resolve_channel_watermark
+
+        wm_src = watermark_path or resolve_channel_watermark(project_dir=Path(chapter_dir).parent.parent)
+        wm_png: Optional[Path] = None
+        wm_xy: Optional[Tuple[int, int]] = None
+        if wm_src is not None and Path(wm_src).is_file():
+            wm_rgba = prepare_watermark_rgba(Path(wm_src), target_height=plan.target_height)
+            wm_png = work_dir / "watermark_overlay.png"
+            wm_rgba.save(wm_png, format="PNG")
+            wm_xy = compute_watermark_xy(plan.target_width, plan.target_height, wm_rgba.width, wm_rgba.height)
+
         tasks = build_shot_render_tasks(
             Path(chapter_dir),
             plan,
@@ -1061,6 +1130,8 @@ def render_visual_plan_fast(
             burn_subtitles=bool(burn_subtitles and cues),
             subtitle_font_size=subtitle_font_size,
             quality_mode=quality_mode,
+            watermark_png_path=wm_png,
+            watermark_xy=wm_xy,
         )
 
         # Pre-populate static canvases once per unique canvas_key before parallel encode

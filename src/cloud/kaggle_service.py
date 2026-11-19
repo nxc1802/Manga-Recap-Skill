@@ -10,15 +10,38 @@ import contextlib
 import io
 import threading
 import os
+import re
 import shutil
 import tarfile
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src.cloud.account_fallback import with_account_fallback
 from src.core.logger import logger
 from src.core.schemas import RecapScript
 from src.core.storage import atomic_write_json, get_chapter_dir, get_project_dir, read_json
+
+
+class KaggleQueueTimeoutError(TimeoutError):
+    """Raised when a Kaggle kernel stays QUEUED past queue_timeout_seconds."""
+
+
+class KaggleQuotaExhaustedError(RuntimeError):
+    """Raised when a Kaggle account has exhausted its weekly GPU quota."""
+
+
+def _parse_kaggle_duration_seconds(raw: Any) -> float:
+    """Parses Kaggle timedelta objects or duration strings into seconds."""
+    if raw is None:
+        return 0.0
+    if isinstance(raw, timedelta):
+        return max(0.0, float(raw.total_seconds()))
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return max(0.0, float(raw))
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)", str(raw))
+    return max(0.0, float(match.group(1))) if match else 0.0
 
 
 
@@ -133,6 +156,105 @@ class KaggleCloudService:
     def get_username(self) -> str:
         return self._username or "unknown"
 
+    def get_gpu_quota_status(self, min_required_sec: float = 120.0) -> Optional[Dict[str, Any]]:
+        """Queries Kaggle weekly GPU accelerator quota when supported by the client."""
+        if not self._api or not hasattr(self._api, "build_kaggle_client"):
+            return None
+        try:
+            with self._api.build_kaggle_client() as client:
+                raw = client.kernels.kernels_api_client.get_accelerator_quota_statistics()
+        except Exception:
+            return None
+
+        def _pick(obj: Any, *keys: str) -> Any:
+            for key in keys:
+                val = obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+                if val is not None:
+                    return val
+            return None
+
+        gpu_q = _pick(raw, "gpu_quota", "gpuQuota")
+        if gpu_q is None:
+            return None
+        raw_allowed = _pick(gpu_q, "total_time_allowed", "totalTimeAllowed")
+        raw_used = _pick(gpu_q, "time_used", "timeUsed")
+        raw_reserved = _pick(gpu_q, "time_reserved", "timeReserved")
+        duration_types = (timedelta, str, int, float)
+        if not isinstance(raw_allowed, duration_types) or isinstance(raw_allowed, bool):
+            return None
+        if not isinstance(raw_used, duration_types) or isinstance(raw_used, bool):
+            return None
+        allowed_sec = _parse_kaggle_duration_seconds(raw_allowed)
+        used_sec = _parse_kaggle_duration_seconds(raw_used)
+        reserved_sec = (
+            _parse_kaggle_duration_seconds(raw_reserved)
+            if isinstance(raw_reserved, duration_types) and not isinstance(raw_reserved, bool)
+            else 0.0
+        )
+        remaining_sec = max(0.0, allowed_sec - used_sec - reserved_sec)
+        refresh_time = _pick(raw, "quota_refresh_time", "quotaRefreshTime")
+        if isinstance(refresh_time, datetime):
+            refresh_str: Optional[str] = refresh_time.isoformat()
+        elif isinstance(refresh_time, str):
+            refresh_str = refresh_time
+        else:
+            refresh_str = None
+        return {
+            "account_name": getattr(self, "account_name", "unknown"),
+            "username": self.get_username(),
+            "allowed_sec": round(allowed_sec, 2),
+            "used_sec": round(used_sec, 2),
+            "reserved_sec": round(reserved_sec, 2),
+            "remaining_sec": round(remaining_sec, 2),
+            "remaining_hours": round(remaining_sec / 3600.0, 2),
+            "exhausted": allowed_sec > 0 and remaining_sec < float(min_required_sec),
+            "quota_refresh_time": refresh_str,
+        }
+
+    def list_accounts_quota(self, min_required_sec: float = 120.0) -> List[Dict[str, Any]]:
+        """Returns authenticated status and GPU quota summary across all configured accounts."""
+        accounts = getattr(self, "_accounts", None) or []
+        if not accounts:
+            quota = self.get_gpu_quota_status(min_required_sec=min_required_sec)
+            return [quota] if quota else []
+        orig_index = getattr(self, "_account_index", 0)
+        results: List[Dict[str, Any]] = []
+        try:
+            for idx in range(len(accounts)):
+                self._select_account(idx)
+                if not self.is_authenticated:
+                    results.append({
+                        "account_name": self.account_name,
+                        "authenticated": False,
+                        "exhausted": True,
+                    })
+                    continue
+                quota = self.get_gpu_quota_status(min_required_sec=min_required_sec)
+                if quota:
+                    quota["authenticated"] = True
+                    results.append(quota)
+                else:
+                    results.append({
+                        "account_name": self.account_name,
+                        "username": self.get_username(),
+                        "authenticated": True,
+                        "exhausted": False,
+                    })
+        finally:
+            if 0 <= orig_index < len(accounts):
+                self._select_account(orig_index)
+        return results
+
+    @staticmethod
+    def _write_cloud_job_state(state_path: Optional[Path], payload: Dict[str, Any]) -> None:
+        if state_path is None:
+            return
+        try:
+            if state_path.parent.is_dir():
+                atomic_write_json(state_path, payload)
+        except Exception as exc:
+            logger.debug("Could not persist cloud_job.json (%s): %s", state_path, exc)
+
     def package_chapter_payload(
         self,
         project_slug: str,
@@ -212,6 +334,7 @@ class KaggleCloudService:
             "sys.path.insert(0, str(root))",
             "from src.cloud.canonical_worker import run",
             f"run(root, expected, Path('/kaggle/working/results'), encoder={encoder!r})",
+            "shutil.rmtree(root, ignore_errors=True)",
         ])
 
     def dispatch_chapter_job(
@@ -223,6 +346,7 @@ class KaggleCloudService:
         wait: bool = True,
         poll_interval: int = 6,
         timeout_seconds: int = 1800,
+        queue_timeout_seconds: Optional[float] = 300.0,
         job_type: str = "produce",
         render_workers: int = 4,
         encoder_preference: str = "auto",
@@ -237,7 +361,7 @@ class KaggleCloudService:
         Enforces:
         - True job separation ('tts', 'render', 'produce').
         - Non-CC0 metadata license for unconfirmed manga assets.
-        - Strict timeout handling (raising TimeoutError, aborting corrupt downloads).
+        - Strict timeout handling (including fast queue_timeout_seconds on QUEUED stalls).
         - No credentials exposure.
         """
         from src.core.series_setup import require_series_setup
@@ -250,10 +374,10 @@ class KaggleCloudService:
 
         if job_type not in {"tts", "render", "produce"}:
             raise ValueError("Unknown cloud job type")
+        chapter = get_chapter_dir(project_slug, chapter_number)
         if job_type == "render":
             from src.render.artifact_validation import validate_audio
             from src.render.chapter_renderer import resolve_audio
-            chapter = get_chapter_dir(project_slug, chapter_number)
             script = RecapScript.model_validate(read_json(chapter / "script.json"))
             if not script.segments:
                 raise ValueError("Cannot render an empty chapter")
@@ -261,6 +385,15 @@ class KaggleCloudService:
                 report = validate_audio(resolve_audio(chapter, segment))
                 if segment.checksum != report["sha256"] or segment.duration is None or abs(segment.duration - report["duration"]) > 0.001:
                     raise ValueError("Render-only audio metadata mismatch")
+
+        if gpu:
+            quota = self.get_gpu_quota_status()
+            if quota and quota.get("exhausted"):
+                raise KaggleQuotaExhaustedError(
+                    f"Kaggle account '{getattr(self, 'account_name', 'unknown')}' ({self.get_username()}) "
+                    f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
+                    f"refreshes {quota.get('quota_refresh_time') or 'next cycle'})."
+                )
 
         kernel_slug = (kernel_slug or f"mr-{project_slug[:12]}-c{chapter_number}-{int(time.time())%100000}".lower().replace("_", "-"))[:45].rstrip("-")
         staging_dir = Path(f"/tmp/kaggle_job_{project_slug}_{chapter_number}_{job_type}").resolve()
@@ -354,7 +487,26 @@ class KaggleCloudService:
         else:
             target_kernel_ref = f"{self._username}/{kernel_slug}"
 
+        job_state_path = chapter / "cloud_job.json"
+        job_meta = {
+            "project_slug": project_slug,
+            "chapter_number": str(chapter_number),
+            "job_type": job_type,
+            "kernel_ref": target_kernel_ref,
+            "dataset_ref": ds_ref,
+            "account_name": getattr(self, "account_name", "unknown"),
+            "username": self.get_username(),
+            "gpu": gpu,
+        }
         if not wait:
+            self._write_cloud_job_state(
+                job_state_path,
+                {
+                    **job_meta,
+                    "status": "dispatched",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
             return {
                 "status": "dispatched",
                 "kernel_ref": target_kernel_ref,
@@ -363,43 +515,16 @@ class KaggleCloudService:
             }
 
         logger.info(f"KaggleCloudService: Waiting for cloud execution of '{target_kernel_ref}'...")
-        t0 = time.time()
-        last_status = "QUEUED"
-        completed_cleanly = False
-
-        while time.time() - t0 < timeout_seconds:
-            time.sleep(poll_interval)
-            status_obj = self._api.kernels_status(target_kernel_ref)
-            current_status = getattr(status_obj, "status", str(status_obj))
-            if isinstance(current_status, dict):
-                current_status = current_status.get("status", "UNKNOWN")
-
-            if current_status != last_status:
-                logger.info(f"Kaggle Cloud Status [{int(time.time() - t0)}s]: {current_status}")
-                last_status = current_status
-
-            normalized_status = str(current_status).strip().upper().split(".")[-1]
-            if normalized_status in {"COMPLETE", "COMPLETED"}:
-                logger.info(f"Kaggle execution COMPLETE in {int(time.time() - t0)}s!")
-                completed_cleanly = True
-                break
-            elif any(err_kw in str(current_status).upper() for err_kw in ["FAILED", "ERROR"]):
-                fail_msg = getattr(status_obj, "failureMessage", "Unknown cloud error")
-                try:
-                    err_dir = staging_dir / "error_out"
-                    err_dir.mkdir(parents=True, exist_ok=True)
-                    self._api.kernels_output(target_kernel_ref, str(err_dir))
-                    for log_f in err_dir.glob("*.log"):
-                        logger.error(f"Kaggle Cloud Error Log:\n{log_f.read_text(errors='ignore')[-3000:]}")
-                except Exception as log_err:
-                    logger.warning(f"Could not retrieve error log: {log_err}")
-                raise RuntimeError(f"Kaggle Cloud job failed: {fail_msg}")
-
-        if not completed_cleanly:
-            raise TimeoutError(
-                f"Kaggle Cloud job '{target_kernel_ref}' timed out after {timeout_seconds}s "
-                f"with status '{last_status}'. Output download aborted."
-            )
+        self._poll_kernel_until_complete(
+            target_kernel_ref,
+            timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=queue_timeout_seconds if gpu else None,
+            poll_interval=poll_interval,
+            label=f"Chapter-{chapter_number} {job_type}",
+            error_download_dir=staging_dir / "error_out",
+            job_state_path=job_state_path,
+            job_metadata=job_meta,
+        )
 
         # Download outputs
         output_dir = Path(f"/tmp/kaggle_out_{project_slug}_{chapter_number}_{job_type}").resolve()
@@ -413,6 +538,11 @@ class KaggleCloudService:
         # Unpack back into project directory with strict validation
         sync_report = self.sync_results(project_slug, chapter_number, output_dir, job_type=job_type)
         return sync_report
+
+    @with_account_fallback
+    def dispatch_chapter_job_with_fallback(self, *args, **kwargs) -> Dict[str, Any]:
+        """Dispatches a chapter job, rotating across configured Kaggle accounts on quota/queue failure."""
+        return self.dispatch_chapter_job(*args, **kwargs)
 
     def dispatch_tts_job(self, project_slug: str, chapter_number: str, **kwargs) -> Dict[str, Any]:
         """Dispatches a dedicated cloud TTS synthesis job."""
@@ -541,6 +671,7 @@ class KaggleCloudService:
         video_mode: Optional[str] = None,
         burn_subtitles: Optional[bool] = None,
         fps: Optional[int] = None,
+        queue_timeout_seconds: Optional[float] = 300.0,
     ) -> Dict[str, Any]:
         from src.core.human_review import require_voice_approval
         from src.core.series_setup import require_series_setup
@@ -554,6 +685,15 @@ class KaggleCloudService:
             raise ValueError(error or "Chapter 1 human preview approval is required (G6)")
         if not self._api:
             raise RuntimeError("Kaggle API is not authenticated.")
+
+        if gpu:
+            quota = self.get_gpu_quota_status()
+            if quota and quota.get("exhausted"):
+                raise KaggleQuotaExhaustedError(
+                    f"Kaggle account '{getattr(self, 'account_name', 'unknown')}' ({self.get_username()}) "
+                    f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
+                    f"refreshes {quota.get('quota_refresh_time') or 'next cycle'})."
+                )
 
         norm_chapters = [str(c).strip() for c in chapters if str(c).strip()]
         if not norm_chapters:
@@ -646,6 +786,7 @@ class KaggleCloudService:
         self._poll_kernel_until_complete(
             target_kernel_ref,
             timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=queue_timeout_seconds if gpu else None,
             poll_interval=poll_interval,
             label="Series",
         )
@@ -656,6 +797,11 @@ class KaggleCloudService:
         output_dir.mkdir(parents=True, exist_ok=True)
         self._api.kernels_output(target_kernel_ref, str(output_dir))
         return self.sync_series_results(project_slug, norm_chapters, output_dir)
+
+    @with_account_fallback
+    def dispatch_series_job_with_fallback(self, *args, **kwargs) -> Dict[str, Any]:
+        """Dispatches a series job, rotating across configured Kaggle accounts on quota/queue failure."""
+        return self.dispatch_series_job(*args, **kwargs)
 
     def _wait_for_dataset_ready(
         self,
@@ -697,13 +843,42 @@ class KaggleCloudService:
         target_kernel_ref: str,
         *,
         timeout_seconds: int = 3600,
+        queue_timeout_seconds: Optional[float] = 300.0,
         poll_interval: int = 6,
+        heartbeat_interval_sec: float = 30.0,
         label: str = "Series",
+        error_download_dir: Optional[Path] = None,
+        job_state_path: Optional[Path] = None,
+        job_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, float]:
         t0 = time.monotonic()
-        last_status = "QUEUED"
+        queued_since_iso = datetime.now(timezone.utc).isoformat()
+        started_running_iso: Optional[str] = None
+        last_status: Optional[str] = None
+        last_heartbeat = t0
         left_queue_at: Optional[float] = None
         completed_cleanly = False
+        base_meta = dict(job_metadata or {})
+
+        def _persist(phase: str, extra: Optional[Dict[str, Any]] = None) -> None:
+            now_mono = time.monotonic()
+            queue_elapsed = (left_queue_at if left_queue_at is not None else now_mono) - t0
+            payload = {
+                **base_meta,
+                "kernel_ref": target_kernel_ref,
+                "account_name": getattr(self, "account_name", base_meta.get("account_name", "unknown")),
+                "status": phase,
+                "queued_since": queued_since_iso,
+                "started_running_at": started_running_iso,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "queue_elapsed_sec": round(max(0.0, queue_elapsed), 2),
+                "total_elapsed_sec": round(max(0.0, now_mono - t0), 2),
+            }
+            if extra:
+                payload.update(extra)
+            self._write_cloud_job_state(job_state_path, payload)
+
+        _persist("QUEUED")
 
         while time.monotonic() - t0 < timeout_seconds:
             if poll_interval > 0:
@@ -712,22 +887,69 @@ class KaggleCloudService:
             current_status = getattr(status_obj, "status", str(status_obj))
             if isinstance(current_status, dict):
                 current_status = current_status.get("status", "UNKNOWN")
-            if current_status != last_status:
-                logger.info(f"Kaggle {label} Status [{int(time.monotonic() - t0)}s]: {current_status}")
-                last_status = current_status
+
+            now = time.monotonic()
+            elapsed = now - t0
             norm = str(current_status).strip().upper().split(".")[-1]
+
+            if current_status != last_status:
+                logger.info(f"Kaggle {label} Status [{int(elapsed)}s]: {current_status}")
+                last_status = current_status
+                last_heartbeat = now
+                if left_queue_at is None and norm != "QUEUED":
+                    left_queue_at = now
+                    started_running_iso = datetime.now(timezone.utc).isoformat()
+                _persist(norm)
+            elif now - last_heartbeat >= heartbeat_interval_sec:
+                if norm == "QUEUED" and queue_timeout_seconds:
+                    logger.info(
+                        f"Kaggle {label} still QUEUED [{int(elapsed)}s/{int(queue_timeout_seconds)}s] "
+                        f"({target_kernel_ref}, account={getattr(self, 'account_name', 'unknown')})"
+                    )
+                else:
+                    logger.info(f"Kaggle {label} Status [{int(elapsed)}s]: {current_status}")
+                last_heartbeat = now
+                _persist(norm)
+
             if left_queue_at is None and norm != "QUEUED":
-                left_queue_at = time.monotonic()
+                left_queue_at = now
+                started_running_iso = started_running_iso or datetime.now(timezone.utc).isoformat()
+
             if norm in {"COMPLETE", "COMPLETED"}:
+                logger.info(f"Kaggle {label} COMPLETE in {int(elapsed)}s!")
                 completed_cleanly = True
+                _persist("COMPLETE")
                 break
             if any(err_kw in str(current_status).upper() for err_kw in ("FAILED", "ERROR", "CANCEL")):
                 fail_msg = getattr(status_obj, "failureMessage", None) or f"status={current_status}"
-                raise RuntimeError(f"Kaggle Dual-T4 {label.lower()} job failed: {fail_msg}")
+                if error_download_dir is not None:
+                    try:
+                        error_download_dir.mkdir(parents=True, exist_ok=True)
+                        self._api.kernels_output(target_kernel_ref, str(error_download_dir))
+                        for log_f in error_download_dir.glob("*.log"):
+                            logger.error(f"Kaggle Cloud Error Log:\n{log_f.read_text(errors='ignore')[-3000:]}")
+                    except Exception as log_err:
+                        logger.warning(f"Could not retrieve error log: {log_err}")
+                _persist("FAILED", {"error": str(fail_msg)})
+                raise RuntimeError(f"Kaggle {label} job failed: {fail_msg}")
+
+            if (
+                norm == "QUEUED"
+                and queue_timeout_seconds is not None
+                and float(queue_timeout_seconds) > 0
+                and elapsed >= float(queue_timeout_seconds)
+            ):
+                _persist("QUEUE_TIMEOUT", {"queue_timeout_seconds": float(queue_timeout_seconds)})
+                raise KaggleQueueTimeoutError(
+                    f"Kaggle Cloud job '{target_kernel_ref}' (account '{getattr(self, 'account_name', 'unknown')}') "
+                    f"remained QUEUED for {int(elapsed)}s (limit={int(queue_timeout_seconds)}s). "
+                    "Switch Kaggle account or fallback to local execution (--local / h264_videotoolbox)."
+                )
 
         if not completed_cleanly:
+            _persist("TIMEOUT", {"error": f"Timed out after {timeout_seconds}s with status '{last_status}'"})
             raise TimeoutError(
-                f"Kaggle Dual-T4 {label.lower()} job '{target_kernel_ref}' timed out after {timeout_seconds}s "
+                f"Kaggle Cloud job '{target_kernel_ref}' timed out after {timeout_seconds}s "
                 f"with status '{last_status}'. Output download aborted."
             )
 

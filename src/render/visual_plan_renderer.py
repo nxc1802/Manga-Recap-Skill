@@ -5,6 +5,9 @@ from PIL import Image, ImageFilter, ImageOps
 from src.core.visual_contract import ProductionMotion, VisualPlan
 
 
+SCROLL_VIEWPORT_H_OVER_W = 1.85
+
+
 def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> Image.Image:
     if not 0 <= elapsed <= shot.duration_sec:
         raise ValueError("Frame time outside shot")
@@ -13,13 +16,17 @@ def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> 
     box = shot.source_box
     left, top, right, bottom = box.x_min * width, box.y_min * height, box.x_max * width, box.y_max * height
     if shot.motion_type == ProductionMotion.SLOW_PAN_DOWN:
-        visible_height = min(bottom - top, (right - left) * plan.target_height / plan.target_width)
+        viewport_aspect = max(plan.target_height / float(max(1, plan.target_width)), SCROLL_VIEWPORT_H_OVER_W)
+        visible_height = min(bottom - top, (right - left) * viewport_aspect)
         travel = min(bottom - top - visible_height, shot.scroll_fraction_per_second * height * elapsed)
         top += travel
         bottom = top + visible_height
     crop = image.crop((round(left), round(top), max(round(left)+1, round(right)), max(round(top)+1, round(bottom))))
     size = (plan.target_width, plan.target_height)
-    canvas = ImageOps.fit(crop, size).filter(ImageFilter.GaussianBlur(radius=20))
+    if shot.motion_type == ProductionMotion.SLOW_PAN_DOWN:
+        canvas = crop.resize(size, Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=20))
+    else:
+        canvas = ImageOps.fit(crop, size).filter(ImageFilter.GaussianBlur(radius=20))
     subject = ImageOps.contain(crop, size, Image.Resampling.LANCZOS)
     canvas.paste(subject, ((size[0] - subject.width) // 2, (size[1] - subject.height) // 2))
     return canvas

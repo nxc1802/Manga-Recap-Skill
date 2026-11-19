@@ -57,6 +57,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 "provider": "kaggle",
                 "authenticated": True,
                 "username": service.get_username(),
+                "accounts_quota": service.list_accounts_quota(),
             },
         }
 
@@ -78,7 +79,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         logger.info(f"Dispatching cloud production job for {project_slug} ch.{chapter_number} (GPU={gpu})...")
 
         try:
-            res = service.dispatch_chapter_job(
+            res = service.dispatch_chapter_job_with_fallback(
                 project_slug=project_slug,
                 chapter_number=str(chapter_number),
                 gpu=gpu,
@@ -171,7 +172,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
 
         logger.info(f"Dispatching cloud series production for {project_slug} chapters={chapters} (GPU={gpu})...")
         try:
-            res = service.dispatch_series_job(
+            res = service.dispatch_series_job_with_fallback(
                 project_slug=project_slug,
                 chapters=chapters,
                 gpu=gpu,

@@ -57,26 +57,26 @@ The pipeline operates across 5 streamlined operational stages:
 - **Gate 2 (Preview Approval)**: **V4 series policy:** Chapter 1 preview and explicit human approval are mandatory before full-series final production. After this approval, chapters 2+ may bypass repeated previews via `--skip-preview` (still marked `human_review_status = "unreviewed"`). The legacy CLI does not enforce this new policy yet; the Agent must block an unapproved Chapter 1 full-series job.
 - **Batch Mode**: Multi-chapter sequential processing via `manga-recap batch` with chapter failure isolation and single-chapter retry (`--retry-chapter`).
 
-### Stage 0: STRICT FORM MODE — MANDATORY 10-QUESTION USER CONFIGURATION GATE
+### Stage 0: STRICT FORM MODE — MANDATORY 8-QUESTION USER CONFIGURATION GATE
 
-> **HARD CONSTRAINT — KHÔNG CÓ NGOẠI LỆ:** **Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 10 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn.**
+> **HARD CONSTRAINT — KHÔNG CÓ NGOẠI LỆ:** **Agent TUYỆT ĐỐI KHÔNG được tự ý áp dụng giá trị mặc định ngầm. Bắt buộc phải đưa đầy đủ toàn bộ 8 hạng mục vào danh sách câu hỏi của công cụ `ask_question` để người dùng trực tiếp chọn.**
 >
-> **MUST / FAIL-CLOSED:** Before performing any crawl, segmentation, scripting, TTS, rendering, upload, or cloud job submission for a NEW series, the Agent MUST invoke the interactive `ask_question` tool with ALL TEN questions below, await an explicit answer to EACH, and validate the returned selections. No omitted questions, inferred answers, automatic preselection, saved tool defaults, or silent substitution from `config.yaml`, `project.json`, CLI defaults, or historical preferences are allowed. Tool defaults in the underlying engine are implementation details, NOT user consent.
->
-> If `ask_question` cannot display all ten questions in a single call, use successive `ask_question` calls until ALL ten are answered, without executing any pipeline stage in between. If the tool is unavailable, STOP automation and explain the missing requirement; do not replace this gate with guessed values. A user may explicitly select "Không", "Không upload", or "Không có BGM", which counts as an answer; an empty/unanswered field does NOT. If the answer is invalid, ask the same question again rather than guessing. Persist each explicit selection (and its source/time) as the series setup record before starting work.
+> **MUST / FAIL-CLOSED:** Before performing any crawl, segmentation, scripting, TTS, rendering, upload, or cloud job submission for a NEW series, the Agent MUST invoke the interactive `ask_question` tool with ALL EIGHT questions below, await an explicit answer to EACH, and validate the returned selections. Animation (adaptive `static`/`slow_pan_down` with 80% display crop) and AI-Driven Thumbnail (`image-generator`) are automatic defaults and are NOT asked in Stage 0.
 
-**Mandatory 10-item question list (show the full item set to the user; labels are NOT preselected):**
+**Mandatory 8-item question list (labels are NOT preselected):**
 
-1. **Chương & nguồn truyện:** Choose a chapter number / range and supply a source URL, OR explicitly select import of a local image folder and provide its path. Both source and scope must be supplied.
-2. **Môi trường thực thi:** Choose exactly one: `Kaggle Cloud GPU (T4 x2)` or `Local Environment`. Cloud is NOT selected automatically.
-3. **Giọng đọc:** Choose a VieNeu-TTS preset: `Ngọc Huyền`, `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, `Thiện Minh`, `Mai Anh`, `Quang Sơn`, or another verified voice from `manga-recap tts_benchmark`. No implicit `Ngọc Huyền`.
-4. **Tốc độ giọng đọc:** Choose `0.9x`, `1.0x`, `1.1x`, `1.2x`, or enter an explicitly supported numeric speed. No implicit `1.0x`.
-5. **Phụ đề:** Choose `Có` (burn subtitles) or `Không` (no burn). Neither state is assumed.
-6. **Animation:** Choose `Có` (motion policy: smooth, slow, top-to-bottom only, visual-content focus; no shake/text-focus) or `Không` (static). This choice MUST feed both local and Kaggle renderers.
-7. **Thumbnail:** Choose `Tạo thumbnail` or `Không tạo`. When enabled, the existing later-stage thumbnail review gate STILL MUST ask the user which source panels and hook text to use; Stage 0 is NOT permission to guess these details.
-8. **YouTube upload + privacy:** Choose `Không upload` or select an explicitly listed YouTube channel (from `manga-recap youtube accounts --json`) AND privacy `private` / `unlisted` / `public`. If no channel is linked, the user must choose `Không upload` or complete OAuth setup. The later Review Gate 3 still confirms the account before upload. No silent default channel or privacy.
-9. **Chất lượng:** Choose `preview 720p` or `final 1080p`. For multi-chapter production, Chapter 1 ALWAYS goes through preview + editorial approval first, then final; chapters 2+ may be dispatched as one cloud production batch only after approval.
-10. **Nhạc nền:** Choose `Không BGM` or `Có BGM`; if yes, provide the file/path and explicitly choose `bgm_volume` and `voice_volume`. Never guess file or gains.
+1. **Chương & nguồn truyện (`Q01`):** Choose a chapter number / range and supply a source URL, OR explicitly select import of a local image folder and provide its path.
+2. **Môi trường thực thi (`Q02`):** Choose `Kaggle Cloud GPU (T4 x2)` or `Local Environment`.
+3. **Giọng đọc (`Q03`):** Choose a VieNeu-TTS preset: `Ngọc Huyền`, `Trúc Ly`, `Hải Đăng`, `Thiền Tâm Đức`, `Thiện Minh`, `Mai Anh`, `Quang Sơn`, or another verified voice from `manga-recap tts_benchmark`.
+4. **Tốc độ giọng đọc (`Q04`):** Choose `0.9x`, `1.0x`, `1.1x`, `1.2x`, or enter an explicitly supported numeric speed.
+5. **Phụ đề (`Q05`):** Choose `Có` (burn subtitles) or `Không` (no burn).
+6. **YouTube upload + privacy (`Q08`):** Choose `Không upload` or select an explicitly listed YouTube channel (from `manga-recap youtube accounts --json`) AND privacy `private` / `unlisted` / `public`.
+7. **Chất lượng (`Q09`):** Choose `preview 720p` or `final 1080p`.
+8. **Nhạc nền (`Q10`):** Choose `Không BGM` or `Có BGM` (with file path, `bgm_volume`, and `voice_volume`).
+
+**External Service 5-Minute Watchdog Rule:**
+- Whenever a background task calls an external service (Kaggle `tts`/`render`/`produce` or Google/YouTube `upload`), the Agent **MUST** schedule a 5-minute check (`schedule` with `DurationSeconds=300`) to inspect task logs/status (`manage_task`).
+- If Kaggle remains stuck in `QUEUED` or Google OAuth/Upload is hung waiting for user interaction, **STOP waiting and report immediately to the user** to decide — NEVER silently retry or work around it.
 
 **Enforcement & gate behavior:**
 - An answer counts as confirmed ONLY when directly provided by the user in the current series setup interaction, not a tool's populated default. Present all ten questions as multiple-choice items, with text/path entry for fields requiring a URL, path, title, or gain.
@@ -97,12 +97,23 @@ manga-recap crawl --project <project_slug> --chapter <chapter_num> --url "<chapt
 - Output: `data/projects/<project_slug>/chapters/<chapter_num>/raw/` and updated `chapter.json`.
 - State checkpoint: `stage: "crawl", status: "completed"`.
 
-### Stage 2: Segmentation, Inspect & Visual Panel Review
-Tear down long-strip webtoon pages into discrete story panels and produce contact sheets for agent visual panel review.
+### Stage 2: Segmentation & Gemini Decision Engine (`segment` → `decide`)
+Tear down long-strip webtoon pages into natural-aspect panels at clean gutter edges, then run per-image `gemini-decision-1` classification, split/merge resolution, 2D center crop selection, and motion routing without using VLM tokens:
 ```bash
+# 2a. Segment raw pages into natural panels at gutter edges
+manga-recap segment --project <project_slug> --chapter <chapter_num> --json
+
+# 2b. Run Gemini Decision 1 per panel (3-group classification, 2-pass split/merge, 2D crop, motion)
+manga-recap decide --project <project_slug> --chapter <chapter_num> --json
+
+# 2c. Inspect final chapter assets and manifest before VLM scriptwriting
 manga-recap inspect --project <project_slug> --chapter <chapter_num> --json
 ```
-- Reads: `manifest.json`.
+- Reads/Writes: `manifest.json`, `panel_plan.json`, clean `contact_sheets/` (`ACTIVE` + `CONTEXT_ONLY`).
+- **3-Group Panel Policy**:
+  - `active` (Nhóm 1 — Ảnh + Nội dung): Vào cả Kịch bản (`script.json`) và Video (`visual_plan.json`).
+  - `context_only` (Nhóm 2 — Chỉ Text): Vào Kịch bản để kể chuyện, **cấm** hiển thị lên Video (crop/motion vô hiệu).
+  - `skip` (Nhóm 3 — Quảng cáo/Watermark/Filler): Loại bỏ khỏi cả Kịch bản lẫn Video (crop/motion vô hiệu).
 - Key Assets:
   - `panels/panel_*.jpg`: Segmented panels with pixel crop boundaries and aspect ratios.
   - `contact_sheets/sheet_*.jpg`: 4x4 downscaled visual grids designed for token-efficient agent visual panel review.
@@ -236,29 +247,11 @@ manga-recap cloud run --project <project_slug> --chapter <chapter_num> --json
 4. **Auto-Packaging & Local Sync**: CLI packages local assets into a lightweight tarball, uploads to Kaggle Dataset `cuongnguyen1802/manga-recap-payload`, polls execution, and downloads results directly into local paths (`video/final.mp4`, `subtitles/*.srt`, `audio/clips/`, `cloud_telemetry.json`). Checkpoint status in `chapter.json` is updated atomically to `completed`.
 5. **Zero Cloud API / Zero Database Rule Compliance**: Reasoning, scriptwriting, and OCR remain 100% native to the Agent. VieNeu-TTS runs offline within the Kaggle container. State persistence is strictly local JSON.
 
-### Stage 10c: Thumbnail Composition & Interactive Selection Gate
-Nếu và chỉ nếu người dùng chọn **Tạo thumbnail** ở Q07, thực hiện quy trình thumbnail sau trong lúc chờ TTS & Render. Nếu Q07 chọn Không tạo, không tạo hay hỏi thêm về thumbnail:
-1. **Conditional Interactive Selection Gate**: Khi Q07 = Tạo thumbnail, Agent **BẮT BUỘC** hỏi người dùng 2 bước trước khi tạo thumbnail:
-   - **Chọn ảnh**: Quét và đề xuất danh sách 5–8 panel đẹp nhất qua CLI `manga-recap thumbnail --candidates`, hỏi người dùng chọn ảnh Trái - Giữa - Phải (hoặc 1 ảnh Hero chính).
-   - **In chữ & Typography**: Hỏi người dùng có in chữ không? Nếu có thì in tiêu đề gì (gợi ý 2–3 hook 3–5 từ), màu sắc và font chữ ra sao.
-2. **Deterministic CLI Execution**:
-```bash
-# 1. Quét ứng viên kịch tính từ chapter
-manga-recap thumbnail --project <slug> --chapter <num> --candidates --json
-
-# 2. Tạo thumbnail theo lựa chọn của người dùng (Bố cục 3 ảnh hoặc 1 ảnh)
-manga-recap thumbnail --project <slug> --chapter <num> \
-  --left panel_037 --center panel_026 --right panel_008 \
-  --title "XUYÊN KHÔNG VÀO THẾ GIỚI ĐIÊN LOẠN" \
-  --subtitle "NHÂN VẬT PHỤ SINH TỒN THẾ NÀO?!" \
-  --color-preset yellow_black --json
-
-# 3. Tạo thumbnail không chữ (pure artwork)
-manga-recap thumbnail --project <slug> --chapter <num> --center panel_026 --no-text --json
-
-# 4. Tạo và tự động cập nhật ngay lên video YouTube đã upload
-manga-recap thumbnail --project <slug> --chapter <num> --center panel_026 --title "..." --upload --json
-```
+### Stage 10c: AI-Driven Thumbnail Generation (`image-generator`)
+Use the `image-generator` subagent to generate a cohesive 16:9 YouTube thumbnail (never use raw panel collage scripts):
+1. Select 2–3 key character/scene panels from `chapters/<num>/panels/` as **visual character references** so the generated artwork preserves the exact character traits, colors, and outfits without speech bubbles.
+2. Invoke `image-generator` with a clear brief (16:9 dramatic composition, clean background, zero speech bubbles, consistent character appearance from the reference panels, optional Vietnamese hook title or clean artwork).
+3. Save the generated image to `output/<project_slug>/chapter_<num>_thumbnail.jpg` (or `.png`) and `chapters/<num>/thumbnail.jpg`.
 
 ### Stage 11: YouTube SEO Packaging & Multi-Account Publishing
 Generate metadata (SEO description, click-worthy titles, timestamps, hashtags) and publish directly to the selected YouTube channel:

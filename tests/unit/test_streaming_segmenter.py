@@ -87,8 +87,9 @@ def test_1d_luminance_profile_and_gutter_detection(tmp_path, segmenter):
     assert len(panels) >= 2
     for p in panels:
         assert p.width == 1080
-        assert p.height >= 1080  # Under-height padded to square 1080x1080
+        assert p.height >= 900  # Natural cropped height without blind square padding
         assert p.status == PanelStatus.ACTIVE
+        assert p.vcs_start is not None and p.vcs_end is not None and p.vcs_end > p.vcs_start
         assert Path(out_dir / p.filename).exists()
 
 

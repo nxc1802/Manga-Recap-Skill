@@ -9,8 +9,26 @@ from PIL import Image
 from src.core.schemas import PanelStatus
 from src.core.visual_contract import Region, Shot, VisualPlan, VisualRole, ProductionMotion
 from src.core.storage import load_manifest, load_recap_script, calculate_sha256
+from src.render.visual_plan_renderer import SCROLL_VIEWPORT_H_OVER_W
 
 TALL_PANEL_THRESHOLD = 2.4
+
+
+def compute_adaptive_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
+    """
+    Computes render-only display crop: trims up to 10% top and 10% bottom
+    (`keep = max(0.80, min(1.0, W/H))`), never cropping below 1:1 and never
+    altering the panel image analyzed by VLM. Respects explicit `display_crop`.
+    """
+    if metadata and isinstance(metadata.get("display_crop"), dict):
+        return Region.model_validate(metadata["display_crop"])
+    if width <= 0 or height <= 0:
+        return Region()
+    keep = max(0.80, min(1.0, float(width) / float(height)))
+    trim_each = round((1.0 - keep) / 2.0, 4)
+    if trim_each <= 0.001:
+        return Region()
+    return Region(y_min=trim_each, y_max=round(1.0 - trim_each, 4))
 
 
 def is_tall_panel(width, height, threshold_h_over_w=TALL_PANEL_THRESHOLD):
@@ -75,11 +93,14 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
     if script.project_slug != manifest.project_slug or script.chapter_number != manifest.chapter_number:
         raise ValueError("Narration/evidence identity mismatch")
     known = set()
+    panel_by_key = {}
     for panel in manifest.panels:
         evidence_path(chapter_dir, panel)
         if panel.status == PanelStatus.NEEDS_REVIEW:
             raise ValueError(f"Panel needs review: {panel.panel_id}")
-        known.update((panel.panel_id, panel.filename, Path(panel.filename).stem))
+        for key in (panel.panel_id, panel.filename, Path(panel.filename).stem):
+            known.add(key)
+            panel_by_key[key] = panel
     for segment in script.segments:
         ProductionMotion(segment.camera_motion.value)
         if segment.panel_ids != segment.evidence_panel_ids:
@@ -88,6 +109,9 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
             raise ValueError(f"Unresolved narration: {segment.seq_id}")
         if not segment.evidence_panel_ids or any(pid not in known for pid in segment.evidence_panel_ids):
             raise ValueError(f"Narration lacks panel evidence: {segment.seq_id}")
+        for pid in segment.evidence_panel_ids:
+            if panel_by_key[pid].status == PanelStatus.SKIP:
+                raise ValueError(f"Segment {segment.seq_id} references Group 3 SKIP panel: {pid}")
     return manifest
 
 
@@ -142,12 +166,18 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
         if motion_enabled is False and motion == ProductionMotion.SLOW_PAN_DOWN:
             raise ValueError("Motion conflicts with explicitly static setup")
         candidates = []
-        for panel in panels:
+        last_global_displayed_id = (
+            (shots[-1].substitute_panel_id or shots[-1].source_panel_id) if shots else None
+        )
+        same_segment = [p for p in panels if p.panel_id in approved_ids]
+        for idx, panel in enumerate(panels):
             reason = omitted[panel.panel_id]
             substitute = None
             substitution_reason = None
             if reason:
-                same_segment = [p for p in panels if p.panel_id in approved_ids]
+                # In adaptive mode, skip omitted panels when the segment already has ACTIVE art.
+                if motion_enabled is True and same_segment:
+                    continue
                 adjacent = [p for p in evidence_order if p.panel_id in approved_ids
                             and abs(panels_order[p.panel_id] - panels_order[panel.panel_id]) == 1]
                 same_page = [p for p in approved if p.source_image == panel.source_image]
@@ -162,6 +192,23 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
                 else:
                     raise ValueError(f"No evidenced visual substitute: {panel.panel_id}")
             displayed = substitute or panel
+            if motion_enabled is True:
+                prev_seg_displayed_id = (
+                    (candidates[-1]["substitute_panel_id"] or candidates[-1]["source_panel_id"])
+                    if candidates
+                    else None
+                )
+                if prev_seg_displayed_id == displayed.panel_id:
+                    continue
+                if (
+                    not candidates
+                    and last_global_displayed_id == displayed.panel_id
+                    and any(
+                        not omitted[p.panel_id] and p.panel_id != displayed.panel_id
+                        for p in panels[idx + 1 :]
+                    )
+                ):
+                    continue
             metadata = displayed.evidence_metadata
             if not isinstance(metadata.get("text_detection_uncertain", True), bool):
                 raise ValueError("text_detection_uncertain must be an explicit boolean")
@@ -169,27 +216,57 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
             avoid = [Region.model_validate(x) for x in metadata.get("avoid_regions", [])]
             # Uncertain text detection and absent safe focus evidence use full panel.
             uncertain = metadata.get("text_detection_uncertain", True) or bool(avoid and not focus)
-            if uncertain or substitute:
+            tall_hint = metadata.get("tall_motion_hint")
+            if displayed.status != PanelStatus.ACTIVE:
+                raise ValueError(f"Only Group 1 ACTIVE panels may be rendered: {displayed.panel_id}")
+            custom_scroll_rate = None
+            travel_frac_for_scroll = None
+            if uncertain or (substitute and motion_enabled is not True):
                 boxes, used_motion = [Region()], ProductionMotion.STATIC
             elif avoid:
                 safe = [f for f in focus if not any(_intersects(f, a) for a in avoid)]
                 boxes, used_motion = (safe[:1], ProductionMotion.STATIC_FOCUS) if safe else ([Region()], ProductionMotion.STATIC)
-            elif is_tall_panel(panel.width, panel.height):
-                boxes, used_motion = decompose_tall_panel(panel.panel_id, panel.width, panel.height), ProductionMotion.STATIC
+            elif motion_enabled is True:
+                display_box = compute_adaptive_display_box(displayed.width, displayed.height, metadata)
+                crop_w_px = max(1.0, (display_box.x_max - display_box.x_min) * float(displayed.width))
+                crop_h_px = max(1.0, (display_box.y_max - display_box.y_min) * float(displayed.height))
+                disp_r = crop_h_px / crop_w_px
+                viewport_aspect = max(target_height / float(max(1, target_width)), SCROLL_VIEWPORT_H_OVER_W)
+                visible_h_px = min(crop_h_px, crop_w_px * viewport_aspect)
+                travel_frac = max(0.0, (crop_h_px - visible_h_px) / float(max(1, displayed.height)))
+                est_dur = float(segment.duration) / float(max(1, len(panels)))
+                if disp_r > SCROLL_VIEWPORT_H_OVER_W and travel_frac > 0.01 and tall_hint != "static":
+                    req_rate = travel_frac / max(0.001, est_dur)
+                    boxes, used_motion = [display_box], ProductionMotion.SLOW_PAN_DOWN
+                    custom_scroll_rate = min(0.12, max(0.005, round(req_rate, 6)))
+                    travel_frac_for_scroll = travel_frac
+                else:
+                    boxes, used_motion = [display_box], ProductionMotion.STATIC
+            elif is_tall_panel(displayed.width, displayed.height):
+                boxes, used_motion = decompose_tall_panel(displayed.panel_id, displayed.width, displayed.height), ProductionMotion.STATIC
             else:
                 box = Region.model_validate(segment.focus_box.model_dump()) if segment.focus_box else Region()
                 boxes, used_motion = [box], motion
             for box in boxes:
+                scroll_val = (
+                    custom_scroll_rate
+                    if (used_motion == ProductionMotion.SLOW_PAN_DOWN and custom_scroll_rate is not None)
+                    else (0.12 if used_motion == ProductionMotion.SLOW_PAN_DOWN else 0)
+                )
                 candidates.append(dict(source_panel_id=panel.panel_id,
                     substitute_panel_id=substitute.panel_id if substitute else None,
                     source_box=box, focus_regions=focus, avoid_regions=avoid,
                     visual_role=VisualRole.OMIT_VISUAL if reason else VisualRole.SHOW,
                     visual_omit_reason=reason, substitution_reason=substitution_reason,
                     motion_type=used_motion,
-                    scroll_fraction_per_second=0.12 if used_motion == ProductionMotion.SLOW_PAN_DOWN else 0))
+                    scroll_fraction_per_second=scroll_val,
+                    _travel_frac=travel_frac_for_scroll))
             previous_approved = displayed
         duration = segment.duration / len(candidates)
         for item in candidates:
+            travel_frac = item.pop("_travel_frac", None)
+            if travel_frac is not None and item["motion_type"] == ProductionMotion.SLOW_PAN_DOWN:
+                item["scroll_fraction_per_second"] = min(0.12, max(0.005, round(travel_frac / max(0.001, duration), 6)))
             shots.append(Shot(shot_id=f"shot_{len(shots)+1:05d}", segment_id=segment.seq_id,
                               duration_sec=duration, **item))
     inputs = dict(script=script.model_dump(mode="json"), manifest=manifest.model_dump(mode="json"),
@@ -239,15 +316,16 @@ def validate_visual_plan(plan, chapter_dir, manifest, script, target_width, targ
                 # An authored hold may retain the whole panel. Crops must be
                 # evidenced canonical regions (including approved safe focus).
                 if shot.source_box == Region():
-                    if shot.motion_type != ProductionMotion.STATIC:
+                    if shot.motion_type != ProductionMotion.STATIC and motion_enabled is not True:
                         raise ValueError("Tall full-panel hold must remain static")
                 elif not any(shot.source_box == ref.source_box for ref in references):
                     raise ValueError("Tall crop is not a canonical safe region")
-                previous_box = last_tall_box.get(displayed_id)
-                if previous_box is not None and (shot.source_box.y_min < previous_box.y_min - 1e-9
-                        or shot.source_box.y_max < previous_box.y_max - 1e-9):
-                    raise ValueError("Tall shot sequence reverses vertical order")
-                last_tall_box[displayed_id] = shot.source_box
+                if not shot.substitute_panel_id:
+                    previous_box = last_tall_box.get(displayed_id)
+                    if previous_box is not None and (shot.source_box.y_min < previous_box.y_min - 1e-9
+                            or shot.source_box.y_max < previous_box.y_max - 1e-9):
+                        raise ValueError("Tall shot sequence reverses vertical order")
+                    last_tall_box[displayed_id] = shot.source_box
             for field in ("visual_role", "visual_omit_reason", "substitute_panel_id", "substitution_reason", "focus_regions", "avoid_regions"):
                 if getattr(shot, field) != getattr(reference, field):
                     raise ValueError(f"VisualPlan changes evidenced visual classification: {field}")

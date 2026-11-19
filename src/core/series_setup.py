@@ -242,8 +242,9 @@ def validate_complete_setup(
     else:
         return False, ["Invalid data type provided for setup validation."]
 
-    # 1. Check all 10 questions present
-    for qid in ALL_QUESTION_IDS:
+    # 1. Check mandatory core questions (Q06 Animation and Q07 Thumbnail are optional/deprecated)
+    core_ids = [q for q in ALL_QUESTION_IDS if q not in {"Q06", "Q07"}]
+    for qid in core_ids:
         if qid not in raw_answers:
             q_info = QUESTION_METADATA.get(qid, {})
             title = q_info.get("title", qid)
@@ -252,10 +253,10 @@ def validate_complete_setup(
     if errors:
         return False, errors
 
-    # 2. Check each question's properties and domain constraints
+    # 2. Check each present question's properties and domain constraints
     normalized_answers: Dict[str, SetupAnswerItem] = {}
 
-    for qid in ALL_QUESTION_IDS:
+    for qid in [q for q in ALL_QUESTION_IDS if q in raw_answers]:
         item_raw = raw_answers[qid]
         if isinstance(item_raw, SetupAnswerItem):
             item = item_raw
@@ -658,15 +659,18 @@ def _build_project_json(
     if b_subs is not None:
         cfg.render_settings.burn_subtitles = b_subs
 
-    # Q06: Motion
-    q06 = answers["Q06"].user_answer
-    if isinstance(q06, str):
-        if q06.strip().lower() in ("animation", "có", "co", "true"):
-            cfg.render_settings.render_pan_mode = "animation"
-        else:
-            cfg.render_settings.render_pan_mode = "static"
-    elif isinstance(q06, bool):
-        cfg.render_settings.render_pan_mode = "animation" if q06 else "static"
+    # Q06: Motion (optional; defaults to unified adaptive animation)
+    if "Q06" in answers:
+        q06 = answers["Q06"].user_answer
+        if isinstance(q06, str):
+            if q06.strip().lower() in ("animation", "có", "co", "true"):
+                cfg.render_settings.render_pan_mode = "animation"
+            else:
+                cfg.render_settings.render_pan_mode = "static"
+        elif isinstance(q06, bool):
+            cfg.render_settings.render_pan_mode = "animation" if q06 else "static"
+    else:
+        cfg.render_settings.render_pan_mode = "animation"
 
     # Q09: Video Quality
     q09 = str(answers["Q09"].user_answer).strip().lower()

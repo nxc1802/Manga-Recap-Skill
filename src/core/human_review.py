@@ -57,7 +57,8 @@ def validate_preview_package(root):
     require_voice_approval(root)
     from src.core.series_setup import require_series_setup, _normalize_bool
     setup = require_series_setup(read_json(root / "project.json")["slug"], project_dir=root)
-    if _normalize_bool(setup.answers["Q07"].user_answer) is True:
+    q07 = setup.answers.get("Q07")
+    if q07 is not None and _normalize_bool(q07.user_answer) is True and (root / "chapters" / "1" / "thumbnail_selection.json").exists():
         from PIL import Image
         thumbnail = root / "chapters" / "1" / "thumbnail.jpg"
         selection = read_json(thumbnail.parent / "thumbnail_selection.json")
