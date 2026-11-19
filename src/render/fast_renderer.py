@@ -450,7 +450,12 @@ def _render_cue_overlay_png(
         draw.text((lx, curr_y), line, font=font, fill=(255, 255, 255, 255))
         curr_y += line_heights[idx] + line_gap
 
-    img.save(output_path, format="PNG", compress_level=1)
+    # Condense horizontally by 10% (0.90x) to tighten word spacing and line width
+    condensed_w = max(1, int(round(canvas_width * 0.90)))
+    condensed = img.resize((condensed_w, canvas_height), Image.Resampling.LANCZOS)
+    final_img = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
+    final_img.paste(condensed, ((canvas_width - condensed_w) // 2, 0))
+    final_img.save(output_path, format="PNG", compress_level=1)
     return output_path
 
 

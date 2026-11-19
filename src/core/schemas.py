@@ -263,7 +263,7 @@ class SubtitleChunkingMode(str, Enum):
 class SubtitleSettings(BaseModel):
     model_config = ConfigDict(extra="ignore")
     max_lines: int = Field(default=1, ge=1, le=2)
-    font_size: int = Field(default=23, ge=16, le=48)
+    font_size: int = Field(default=30, ge=16, le=48)
     chunking: SubtitleChunkingMode = SubtitleChunkingMode.SENTENCE_AWARE
     max_chars_per_line: int = Field(default=82, ge=20, le=120)
 
