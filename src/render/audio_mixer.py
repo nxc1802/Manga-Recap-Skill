@@ -288,11 +288,15 @@ class AudioMixer:
         # Case 1: No BGM provided or BGM file missing
         if not bgm_path or not Path(bgm_path).exists():
             logger.info("No BGM track provided; outputting speech narration directly.")
-            filter_str = f"volume={voice_volume:.2f},alimiter=limit=0.95:attack=5:release=50,afade=t=out:st={fade_st:.3f}:d={fadeout_seconds:.3f}"
+            filters = []
+            if voice_volume != 1:
+                filters.append(f"volume={voice_volume:.3f}")
+            if fadeout_seconds > 0:
+                filters.append(f"afade=t=out:st={fade_st:.3f}:d={fadeout_seconds:.3f}")
             cmd = [
                 "ffmpeg", "-y",
                 "-i", str(speech_p),
-                "-filter_complex", filter_str,
+                *(["-af", ",".join(filters)] if filters else []),
                 "-c:a", audio_codec,
                 "-b:a", audio_bitrate,
                 "-ar", str(self.target_sample_rate),

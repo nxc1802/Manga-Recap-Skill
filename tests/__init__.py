@@ -1,0 +1,1 @@
+"""Manga Recap test package."""

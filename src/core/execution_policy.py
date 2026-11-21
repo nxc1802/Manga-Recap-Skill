@@ -4,7 +4,7 @@ from src.core.series_setup import require_series_setup
 
 COMMAND_REQUIREMENTS = {
     name: ("series_setup",) for name in (
-        "crawl", "segment", "repack", "panel-inspect", "decide", "tts", "render", "compile", "batch", "produce",
+        "crawl", "segment", "repack", "panel-inspect", "decide", "tts", "render", "compile", "batch",
         "cloud", "youtube", "thumbnail", "archive", "clean", "review-approve", "visual-plan",
     )
 }
@@ -23,11 +23,13 @@ def enforce_execution_policy(command, args):
         return
     if command == "youtube" and getattr(args, "youtube_action", None) in {"accounts", "auth"}:
         return
+    if command == "archive" and getattr(args, "archive_action", None) == "restore":
+        return
     slug = getattr(args, "project", None)
     if not slug:
-        raise CliValidationError(f"{command}: a project and valid Q01-Q10 setup are required")
+        raise CliValidationError(f"{command}: a project and eight confirmed setup answers are required")
     require_series_setup(slug)
-    production = command in {"batch", "produce", "compile"}
+    production = command in {"batch", "compile"}
     production |= command == "tts" and str(getattr(args, "chapter", "1")) != "1"
     production |= command == "render" and (getattr(args, "quality", "final") == "final" or str(getattr(args, "chapter", "1")) != "1")
     production |= command == "cloud" and getattr(args, "cloud_action", "run") in {"produce-series", "produce_series"}

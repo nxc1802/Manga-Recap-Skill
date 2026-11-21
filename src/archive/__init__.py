@@ -1,6 +1,6 @@
 """
 src/archive
-Private Hugging Face Dataset Archive & Restoration Engine for Manga Recap Agentic Skill V4.
+Private Hugging Face dataset archive and restore.
 """
 
 from src.archive.hf_archive import (

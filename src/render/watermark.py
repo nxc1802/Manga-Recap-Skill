@@ -38,8 +38,16 @@ def resolve_channel_watermark(
         if p.is_file():
             return p.resolve()
 
-    wm_root = Path(watermarks_dir) if watermarks_dir is not None else Path("data/watermarks")
-    if not wm_root.is_dir():
+    wm_roots = []
+    if watermarks_dir is not None:
+        wm_roots.append(Path(watermarks_dir))
+    else:
+        if project_dir is not None:
+            # Supports Kaggle runtime layout: /kaggle/working/runtime/data/projects/<slug>
+            wm_roots.append(Path(project_dir).resolve().parent.parent / "watermarks")
+        wm_roots.append(Path("data/watermarks"))
+    wm_roots = [r for r in wm_roots if r.is_dir()]
+    if not wm_roots:
         return None
 
     alias = (channel_alias or "").strip()
@@ -63,10 +71,11 @@ def resolve_channel_watermark(
     for name in candidates:
         if not name:
             continue
-        for ext in _IMAGE_EXTS:
-            cand = wm_root / f"{name}{ext}"
-            if cand.is_file():
-                return cand.resolve()
+        for wm_root in wm_roots:
+            for ext in _IMAGE_EXTS:
+                cand = wm_root / f"{name}{ext}"
+                if cand.is_file():
+                    return cand.resolve()
     return None
 
 

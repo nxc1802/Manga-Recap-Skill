@@ -41,7 +41,7 @@ def handle_crawl(args: argparse.Namespace) -> Dict[str, Any]:
     if not url and not import_dir:
         raise CliValidationError("Either --url or --import-dir must be provided for crawl.")
 
-    # Strict Form Mode: fail-closed if 10/10 questions setup is incomplete or missing
+    # Require the eight confirmed setup answers before ingest.
     from src.core.series_setup import require_series_setup
     require_series_setup(project_slug)
 

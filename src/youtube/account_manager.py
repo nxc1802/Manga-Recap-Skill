@@ -9,6 +9,9 @@ import importlib
 import json
 import os
 import shutil
+import shlex
+import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -243,6 +246,8 @@ class YouTubeAccountManager:
         self,
         account_name: Optional[str] = None,
         force_reauth: bool = False,
+        allow_interactive: bool = False,
+        oauth_timeout_seconds: int = 300,
     ) -> Tuple[Any, YouTubeAccountInfo]:
         """
         Retrieves, validates, and refreshes OAuth2 credentials for the target account.
@@ -251,10 +256,8 @@ class YouTubeAccountManager:
         try:
             req_mod = importlib.import_module("google.auth.transport.requests")
             creds_mod = importlib.import_module("google.oauth2.credentials")
-            flow_mod = importlib.import_module("google_auth_oauthlib.flow")
             Request = req_mod.Request
             Credentials = creds_mod.Credentials
-            InstalledAppFlow = flow_mod.InstalledAppFlow
         except ImportError as e:
             raise DependencyNotFoundError(
                 "Missing Google API client dependencies for YouTube.\n"
@@ -265,6 +268,8 @@ class YouTubeAccountManager:
         token_path = Path(acc.token_file).resolve()
         secrets_path = Path(acc.client_secrets_file).resolve()
 
+        retry_command = f"manga-recap youtube accounts --account-action add --account {shlex.quote(acc.account_name)}"
+        allow_interactive = allow_interactive and sys.stdin.isatty()
         creds = None
         if not force_reauth and token_path.exists():
             try:
@@ -279,11 +284,17 @@ class YouTubeAccountManager:
                 logger.info(f"Credentials for '{acc.account_name}' expired. Refreshing token...")
                 try:
                     creds.refresh(Request())
-                except Exception as e:
-                    logger.error(f"Failed to refresh YouTube credentials: {e}")
+                except Exception:
+                    logger.warning("YouTube token refresh failed for %s", acc.account_name)
                     creds = None
 
-            if not creds:
+            if not creds or not creds.valid:
+                if not allow_interactive:
+                    raise DependencyNotFoundError(
+                        f"YouTube credentials need authorization. Run {retry_command} from a terminal."
+                    )
+                if oauth_timeout_seconds <= 0:
+                    raise ValueError("OAuth timeout must be positive")
                 if not secrets_path.exists():
                     # Fallback check for client_secrets in credentials/ or root
                     candidates = [
@@ -301,23 +312,37 @@ class YouTubeAccountManager:
                             "in 'credentials/' or in the project root."
                         )
 
-                if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get("ALLOW_INTERACTIVE_OAUTH"):
-                    raise CliValidationError("Interactive OAuth flow blocked in automated test runner.")
-
                 logger.info(f"Launching local browser OAuth flow for account '{acc.account_name}'...")
-                flow = InstalledAppFlow.from_client_secrets_file(str(secrets_path), YOUTUBE_SCOPES)
+                try:
+                    flow_class = importlib.import_module("google_auth_oauthlib.flow").InstalledAppFlow
+                except ImportError as exc:
+                    raise DependencyNotFoundError("Install google-auth-oauthlib to authorize YouTube") from exc
+                flow = flow_class.from_client_secrets_file(str(secrets_path), YOUTUBE_SCOPES)
                 if getattr(flow, "client_type", None) == "web":
                     logger.warning(
                         f"Note: '{secrets_path.name}' is of type 'Web application'. If Google displays "
                         "'Error 400: redirect_uri_mismatch', create a 'Desktop app' OAuth Client ID in Google Cloud Console."
                     )
-                creds = flow.run_local_server(port=0)
+                try:
+                    creds = flow.run_local_server(port=0, timeout_seconds=oauth_timeout_seconds)
+                except (TimeoutError, AttributeError) as exc:
+                    # Some oauthlib releases read a missing callback URI after the timeout.
+                    raise DependencyNotFoundError(
+                        f"YouTube authorization did not complete. Run {retry_command} from a terminal."
+                    ) from exc
 
             # Persist authorized credentials
             try:
                 token_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(token_path, "w", encoding="utf-8") as f:
-                    f.write(creds.to_json())
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                                 dir=token_path.parent, delete=False) as file:
+                    pending = Path(file.name)
+                    try:
+                        file.write(creds.to_json())
+                        file.close()
+                        pending.replace(token_path)
+                    finally:
+                        pending.unlink(missing_ok=True)
                 logger.info(f"YouTube credentials for '{acc.account_name}' saved to {token_path}")
             except Exception as e:
                 logger.warning(f"Could not persist credentials to {token_path}: {e}")
@@ -347,24 +372,31 @@ class YouTubeAccountManager:
         token_file: Optional[Union[str, Path]] = None,
         set_default: bool = False,
         force_auth: bool = False,
+        allow_interactive: bool = True,
     ) -> YouTubeAccountInfo:
         """
         Authorizes, tests, and registers a new or existing YouTube channel account.
         """
         clean_name = account_name.strip()
-        if not clean_name:
-            raise CliValidationError("Account name cannot be empty.")
+        if not clean_name or clean_name in {".", ".."} or any(char in clean_name for char in "/\\"):
+            raise CliValidationError("Account name must be a single nonempty name")
 
         sec_file = str(Path(client_secrets_file).resolve()) if client_secrets_file else "client_secrets.json"
         target_token_file = self.tokens_dir / f"{clean_name}.json"
         target_token_file.parent.mkdir(parents=True, exist_ok=True)
 
-        if token_file and Path(token_file).exists():
+        if token_file and Path(token_file).is_file() and Path(token_file).resolve() != target_token_file.resolve():
             shutil.copy2(token_file, target_token_file)
 
         # Register placeholder
-        reg = self.load_registry()
+        previous_registry = self.load_registry()
+        reg = previous_registry.model_copy(deep=True)
         is_first = len(reg.accounts) == 0
+        previous_account = reg.accounts.get(clean_name)
+        if previous_account and not client_secrets_file:
+            sec_file = previous_account.client_secrets_file
+        if previous_account and not token_file:
+            target_token_file = Path(previous_account.token_file)
         new_acc = YouTubeAccountInfo(
             account_name=clean_name,
             channel_title="",
@@ -380,8 +412,11 @@ class YouTubeAccountManager:
 
         # Authenticate and probe channel details
         try:
-            creds, updated_acc = self.get_credentials(account_name=clean_name, force_reauth=force_auth)
-            c_title, c_id = self.fetch_channel_info(creds)
+            creds, updated_acc = self.get_credentials(account_name=clean_name, force_reauth=force_auth,
+                                                     allow_interactive=allow_interactive)
+            c_title, c_id = updated_acc.channel_title, updated_acc.channel_id
+            if not c_title or not c_id:
+                c_title, c_id = self.fetch_channel_info(creds)
             if c_title or c_id:
                 reg = self.load_registry()
                 if clean_name in reg.accounts:
@@ -392,9 +427,9 @@ class YouTubeAccountManager:
                     self.save_registry(reg)
                     updated_acc = reg.accounts[clean_name]
             return updated_acc
-        except Exception as e:
-            logger.debug(f"Online authentication probe note for '{clean_name}': {e}")
-            return new_acc
+        except Exception:
+            self.save_registry(previous_registry)
+            raise
 
 
 # Global manager instance

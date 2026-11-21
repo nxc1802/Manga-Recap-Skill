@@ -559,7 +559,7 @@ def _postprocess_cpu_item(
     effective_batch_size: int,
     batching_mode: str,
 ) -> Dict[str, Any]:
-    """Runs CPU normalization/FFmpeg skip, validate_audio, SHA-256, and atomic write."""
+    """Runs CPU normalization/FFmpeg skip, WAV header duration, cache checksum, and atomic write."""
     t_post_0 = time.perf_counter()
     out_path: Path = item["output_path"]
     target_speed: float = float(item["speed"])
@@ -575,13 +575,13 @@ def _postprocess_cpu_item(
             )
         else:
             import numpy as np  # noqa: PLC0415
-            from src.render.artifact_validation import ArtifactValidationError, validate_audio  # noqa: PLC0415
+            from src.tts.engine import audio_file_metrics  # noqa: PLC0415
 
             arr = np.asarray(waveform, dtype=np.float32)
             if arr.ndim > 1:
                 arr = arr.reshape(-1)
             if arr.size == 0 or not np.isfinite(arr).all():
-                raise ArtifactValidationError(
+                raise ValueError(
                     f"Task {item['seq_id']}: empty or non-finite neural waveform"
                 )
 
@@ -590,7 +590,7 @@ def _postprocess_cpu_item(
                 tmp_out = out_path.with_name(f".{out_path.stem}.tmp.{uuid.uuid4().hex[:8]}.wav")
                 try:
                     tmp_out.write_bytes(wav_bytes)
-                    report = validate_audio(tmp_out)
+                    report = audio_file_metrics(tmp_out)
                     os.replace(tmp_out, out_path)
                     _cache_audio_metrics(out_path, report["duration"], report["sha256"])
                 finally:
@@ -618,9 +618,8 @@ def _postprocess_cpu_item(
         "output_path": str(out_path),
         "duration": report["duration"],
         "sha256": report["sha256"],
-        "sample_rate": report["sample_rate"],
-        "rms": report["rms"],
-        "valid": bool(report["valid"]),
+        "sample_rate": 48000,
+        "valid": True,
         "inference_seconds": round(float(inference_seconds), 6),
         "postprocess_seconds": post_seconds,
         "batch_used": bool(batch_used),

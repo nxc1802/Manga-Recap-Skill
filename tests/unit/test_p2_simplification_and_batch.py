@@ -7,7 +7,7 @@ Comprehensive regression and unit tests for Phase 3 — P2:
 4. Clean code architecture (absence of Supabase, YouTube, and cloud dependencies).
 """
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import argparse
 import ast
@@ -45,7 +45,6 @@ from src.core.storage import (
     read_json,
     update_checkpoint,
 )
-from src.render.video_engine import VideoEngine
 
 
 # ==============================================================================
@@ -247,18 +246,3 @@ class TestP2CodeCleanupAndZeroCloud:
         assert not Path("src/cli/compile_chapters.py").exists()
         assert not Path("src/cli/crawler_cli.py").exists()
         assert not Path("src/cli/import_agent_script.py").exists()
-
-    def test_tts_benchmark_lab_isolation(self):
-        """Verify TTSBenchmarkRunner is isolated and not imported by production CLIs."""
-        production_clis = [
-            Path("src/cli/render_cmd.py"),
-            Path("src/cli/batch_cmd.py"),
-            Path("src/cli/tts_cmd.py"),
-            Path("src/cli/crawl_cmd.py"),
-            Path("src/cli/segment_cmd.py"),
-            Path("src/render/video_engine.py"),
-        ]
-        for cli_file in production_clis:
-            code = cli_file.read_text(encoding="utf-8")
-            assert "TTSBenchmarkRunner" not in code
-            assert "tts_benchmark" not in code or cli_file.name == "main.py"

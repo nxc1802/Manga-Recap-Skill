@@ -27,7 +27,7 @@ def handle_archive(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Project slug (--project) is required for archive commands.")
 
     action = getattr(args, "archive_action", None)
-    repo_id = getattr(args, "repo_id", None) or DEFAULT_HF_REPO_ID
+    repo_id = getattr(args, "repo_id", None)
     token = getattr(args, "token", None)
     revision = getattr(args, "revision", None)
     target_dir_arg = getattr(args, "target_dir", None)

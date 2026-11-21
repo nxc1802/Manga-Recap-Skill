@@ -47,7 +47,6 @@ def test_benchmark_runner_mock_execution(tmp_path):
         voices=["Trúc Ly", "Hải Đăng"],
         emotions=["neutral", "excited"],
         use_mock=True,
-        copy_to_lab=False,
     )
 
     res = runner.run()
@@ -77,7 +76,6 @@ def test_tts_benchmark_cli_with_mock(tmp_path, capsys):
         "--emotions", "neutral",
         "--out-dir", str(out_dir),
         "--mock",
-        "--no-copy-to-lab",
         "--json",
     ])
     assert exit_code == 0
@@ -105,9 +103,7 @@ def test_benchmark_runner_neural_fails_if_neural_unavailable(tmp_path, monkeypat
         voices=["Trúc Ly"],
         emotions=["neutral"],
         use_mock=False,
-        copy_to_lab=False,
     )
 
     with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
         runner.run()
-

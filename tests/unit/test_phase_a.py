@@ -54,7 +54,6 @@ from src.render.subtitle import (
     SubtitleGenerator,
     chunk_vietnamese_text_sentence_aware,
 )
-from src.render.video_engine import VideoEngine
 
 
 # ==============================================================================
@@ -64,7 +63,7 @@ from src.render.video_engine import VideoEngine
 class TestPR01AutoFocusAndSemanticDirector:
     """Tests for PR-01: AutoFocus & Semantic Visual Director."""
 
-    def test_streaming_segmenter_under_height_blank_panel_marked_skip(self, tmp_path):
+    def test_streaming_segmenter_preserves_short_blank_crop(self, tmp_path):
         """
         Verifies that under-height panels (< target_width) with low variance
         are correctly evaluated and marked PanelStatus.SKIP before padding.
@@ -83,16 +82,13 @@ class TestPR01AutoFocusAndSemanticDirector:
 
         assert len(panels) == 1
         panel = panels[0]
-        # Padded to square (1080x1080)
-        assert panel.width == 1080
-        assert panel.height == 1080
-        # BUT marked SKIP because crop_var < sufficiency_variance!
-        assert panel.status == PanelStatus.SKIP
+        assert (panel.width, panel.height) == (1080, 80)
+        assert panel.notes == "variance=0.00"
 
     def test_streaming_segmenter_under_height_content_panel_marked_active(self, tmp_path):
         """
         Verifies that under-height panels with sufficient detail variance
-        are padded to square and remain PanelStatus.ACTIVE.
+        retain their height and remain PanelStatus.ACTIVE.
         """
         output_dir = tmp_path / "panels"
         output_dir.mkdir(parents=True)
@@ -111,7 +107,7 @@ class TestPR01AutoFocusAndSemanticDirector:
         assert len(panels) == 1
         panel = panels[0]
         assert panel.width == 1080
-        assert panel.height == 1080
+        assert panel.height == 200
         assert panel.status == PanelStatus.ACTIVE
 
     def test_visual_shot_and_plan_schema_validation(self):
@@ -241,83 +237,6 @@ class TestPR01AutoFocusAndSemanticDirector:
 # PR-02 Tests: Sentence-Aware Subtitle Intelligence
 # ==============================================================================
 
-class TestPR02SentenceAwareSubtitles:
-    """Tests for PR-02: Sentence-Aware Subtitle Intelligence & CLI."""
-
-    def test_chunk_vietnamese_text_sentence_aware_boundaries(self):
-        """
-        Verifies splitting text strictly at natural sentence ends (.?!…)
-        and clause breaks (,;:—), avoiding orphan words.
-        """
-        text = (
-            "Sau ba năm lưu lạc, thiếu niên cuối cùng cũng trở về cố hương. "
-            "Nhưng cảnh còn người mất, gia tộc xưa đã hoàn toàn lụi tàn!"
-        )
-        chunks = chunk_vietnamese_text_sentence_aware(text, max_chars_per_line=42, max_lines=1)
-        assert len(chunks) >= 2
-        # First sentence should not be cut awkwardly mid-word
-        for c in chunks:
-            assert len(c) <= 50  # Respect safe line length
-            # Minimum 2 words (no orphan word like "tàn!")
-            words = c.split()
-            assert len(words) >= 2
-
-    def test_no_orphan_word_guarantee(self):
-        """
-        Verifies that trailing single words (e.g. 1 word left over)
-        are never emitted as an isolated cue.
-        """
-        # Text constructed where the last word would naturally overflow a 30-char limit
-        text = "Nhân vật chính bước vào đại sảnh trang nghiêm"
-        chunks = chunk_vietnamese_text_sentence_aware(text, max_chars_per_line=30, max_lines=1)
-        for c in chunks:
-            words = c.split()
-            assert len(words) >= 2, f"Orphan word found in chunk: '{c}'"
-
-    def test_subtitle_overlay_matches_srt_text(self, tmp_path):
-        """
-        Verifies that VideoEngine.create_subtitle_overlay_png produces
-        an overlay matching the exact cue text without divergent re-wrapping.
-        """
-        engine = VideoEngine(target_width=1280, target_height=720, fps=30)
-        cue_text = "Hắn quay lưng bước đi, không hề ngoảnh lại."
-        out_png = tmp_path / "sub_overlay.png"
-
-        result_path = engine.create_subtitle_overlay_png(cue_text, out_png, font_size=26)
-        assert Path(result_path).exists()
-        assert Path(result_path).stat().st_size > 0
-
-        # Check image dimensions
-        with Image.open(result_path) as im:
-            assert im.size == (1280, 720)
-            assert im.mode == "RGBA"
-
-    def test_render_cache_fingerprint_invalidated_by_subtitle_settings(self):
-        """
-        Verifies that changing subtitle settings (lines, font_size, chunking)
-        modifies the render cache fingerprint to trigger a fresh render.
-        """
-        base_fp = {
-            "quality": "final",
-            "target_width": 1920,
-            "target_height": 1080,
-            "fps": 30,
-            "subtitle_lines": 1,
-            "subtitle_font_size": 26,
-            "subtitle_chunking": "sentence-aware",
-        }
-
-        # Modify font size
-        fp_font = dict(base_fp, subtitle_font_size=32)
-        assert base_fp != fp_font
-
-        # Modify line count
-        fp_lines = dict(base_fp, subtitle_lines=2)
-        assert base_fp != fp_lines
-
-        # Modify chunking
-        fp_chunk = dict(base_fp, subtitle_chunking="fixed-chars")
-        assert base_fp != fp_chunk
 
 
 # ==============================================================================

@@ -61,6 +61,12 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
             },
         }
 
+    if subaction == "pull":
+        return service.pull(args.project, getattr(args, "chapter", None))
+
+    if subaction == "run" and getattr(args, "chapters", None) and not getattr(args, "chapter", None):
+        subaction = "produce-series"
+
     if subaction == "run":
         project_slug = getattr(args, "project", None)
         chapter_number = getattr(args, "chapter", None)
@@ -119,7 +125,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
 
         try:
             from src.core.series_setup import require_series_setup
-            require_series_setup(project_slug, project_dir=proj_dir, allow_legacy=False)
+            require_series_setup(project_slug, project_dir=proj_dir)
         except Exception as ve:
             return {
                 "status": "error",
@@ -167,8 +173,6 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         raw_burn = getattr(args, "burn_subtitles", False)
         burn_subtitles = True if raw_burn is True else None
         fps = getattr(args, "fps", None)
-        profile = getattr(args, "profile", "B5")
-        autotune = bool(getattr(args, "autotune", True))
 
         logger.info(f"Dispatching cloud series production for {project_slug} chapters={chapters} (GPU={gpu})...")
         try:
@@ -180,8 +184,6 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 skip_preview=skip_preview,
                 compile_feature=compile_feature,
                 render_workers=render_workers,
-                profile=profile,
-                autotune=autotune,
                 video_mode=video_mode,
                 burn_subtitles=burn_subtitles,
                 fps=fps,

@@ -9,7 +9,7 @@ from src.core.schemas import PanelItem, PanelManifest, ScriptSegment, RecapScrip
 from src.core.visual_contract import Shot, VisualPlan, Region, ProductionMotion
 from src.core.storage import calculate_sha256
 from src.render.visual_policy import is_tall_panel, decompose_tall_panel, generate_visual_plan
-from src.render.visual_plan_renderer import render_frame, frame_schedule
+from src.render.fast_renderer import render_frame, frame_schedule
 
 
 @pytest.fixture

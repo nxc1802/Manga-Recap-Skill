@@ -167,11 +167,6 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
     force = getattr(args, "force", False)
     skip_preview = getattr(args, "skip_preview", True)
     allow_placeholders = getattr(args, "allow_placeholders", False)
-    if getattr(args, "cleanup", False):
-        raise CliValidationError(
-            "batch --cleanup bypasses the Two-Receipt Safe Cleanup Gate and is disabled. "
-            "Run 'manga-recap clean --no-dry-run --confirm-project <slug>' after archive and YouTube verification."
-        )
     output_dir = get_output_dir(project_slug)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -243,7 +238,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 err_msg = "; ".join(f"{e.get('target')}: {e.get('message')}" for e in val_res["errors"])
                 raise CliValidationError(f"Script validation failed: {err_msg}")
 
-            if getattr(args, "kaggle", False) and str(chap_num) == "1":
+            if str(chap_num) == "1":
                 # Full-series production promotes the reviewed chapter-one file;
                 # it must never replace that review with a newly generated preview.
                 active_stage = StageType.RENDER
@@ -264,7 +259,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
                 render_res = {
                     "video_path": cloud_res.get("final_video"),
                     "subtitle_path": cloud_res.get("subtitles"),
-                    "telemetry": cloud_res.get("telemetry", {}),
+                    "export_paths": cloud_res.get("export_paths", {}),
                 }
             else:
                 # Operational Stage 3: Audio (VieNeu-TTS)
@@ -314,13 +309,16 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
             src_video = Path(render_res["video_path"]) if render_res.get("video_path") else (chap_dir / "video" / f"chapter_{chap_num}_final.mp4")
             src_srt = Path(render_res["subtitle_path"]) if render_res.get("subtitle_path") else (chap_dir / "subtitles" / f"chapter_{chap_num}.srt")
 
-            staged = stage_chapter_export(
-                project_slug=project_slug,
-                chapter_num=chap_num,
-                video_path=src_video,
-                subtitle_path=src_srt,
+            staged = render_res.get("export_paths") or stage_chapter_export(
+                project_slug=project_slug, chapter_num=chap_num, video_path=src_video, subtitle_path=src_srt,
             )
-            dest_video = staged.get("video_padded") or staged.get("video") or (output_dir / f"chapter_{chap_num}.mp4")
+            staged_video = staged.get("video_padded") or staged.get("video")
+            dest_video = Path(staged_video) if staged_video else src_video
+            if getattr(args, "cleanup", False):
+                from src.cli.clean_cmd import handle_clean
+
+                handle_clean(argparse.Namespace(project=project_slug, chapter=chap_num,
+                                                dry_run=False, confirm_project=project_slug))
 
             c_meta = load_chapter_metadata(chap_dir)
             exp_cp = c_meta.stages.get(StageType.EXPORT)

@@ -15,7 +15,7 @@ Covers 8 critical regression areas:
 
 from __future__ import annotations
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import argparse
 import asyncio

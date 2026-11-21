@@ -11,7 +11,7 @@ Comprehensive Unit & Integration Test Suite for Phase C (PR-07: Single-Session C
 
 from __future__ import annotations
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import argparse
 import json
@@ -28,7 +28,6 @@ from PIL import Image
 
 from src.cli.batch_cmd import handle_batch
 from src.cli.main import build_parser, execute_subcommand
-from src.cli.production_cmd import handle_produce
 from src.cli.render_cmd import handle_render
 from src.cli.tts_cmd import handle_tts
 from src.core.schemas import (
@@ -58,15 +57,6 @@ from src.production.hardware import (
     resolve_video_encoder,
     smoke_test_encoder,
 )
-from src.production.runner import SingleSessionProductionRunner
-from src.production.schemas import (
-    ChapterProductionProgress,
-    ProductionJobConfig,
-    ProductionJobManifest,
-    ProductionJobTelemetry,
-    ProductionStageStatus,
-)
-from src.render.video_engine import VideoEngine
 from src.tts.engine import EngineMode, MockTTSBackend, VieNeuEngine, get_tts_engine
 
 
@@ -355,99 +345,18 @@ Encoders:
 # 3. Video Engine Render Cache Fingerprint Invalidation Tests
 # ==============================================================================
 
-class TestVideoEngineRenderCacheFingerprint:
-    # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
-    pass
-
-    # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
-    pass
 
 
 # ==============================================================================
 # 4. Production Job Manifest Schemas & Zero Secrets Guarantee Tests
 # ==============================================================================
 
-class TestProductionJobManifestAndSchemas:
-    def test_production_job_manifest_serialization(self, tmp_path: Path):
-        """ProductionJobManifest serializes and deserializes accurately with zero loss."""
-        job_file = tmp_path / "production_job.json"
-        config = ProductionJobConfig(
-            project_slug="demo_series",
-            target_chapters=["1", "2", "3"],
-            encoder="h264_nvenc",
-            tts_engine="mock",
-            quality="final",
-        )
-        manifest = ProductionJobManifest(
-            project_slug="demo_series",
-            config=config,
-            chapters={
-                "1": ChapterProductionProgress(chapter_number="1", tts_status=ProductionStageStatus.COMPLETED),
-                "2": ChapterProductionProgress(chapter_number="2", tts_status=ProductionStageStatus.PENDING),
-            },
-            telemetry=ProductionJobTelemetry(
-                resolved_encoder="h264_nvenc",
-                tts_total_seconds=12.4,
-                render_total_seconds=45.2,
-            ),
-        )
-        manifest.save(job_file)
-        assert job_file.exists()
-
-        loaded = ProductionJobManifest.load(job_file)
-        assert loaded.schema_version == "3.0.0"
-        assert loaded.project_slug == "demo_series"
-        assert loaded.config.encoder == "h264_nvenc"
-        assert loaded.chapters["1"].tts_status == ProductionStageStatus.COMPLETED
-        assert loaded.telemetry.tts_total_seconds == 12.4
-
-    def test_production_job_zero_secrets_audit(self):
-        """audit_secrets() succeeds for clean manifests and raises ValueError on API key leaks."""
-        clean_manifest = ProductionJobManifest(
-            project_slug="clean_manga",
-            config=ProductionJobConfig(project_slug="clean_manga", target_chapters=["1"]),
-        )
-        assert clean_manifest.audit_secrets() is True
-
-        # Inject fake API key into config
-        leaky_manifest = ProductionJobManifest(
-            project_slug="leaky_manga",
-            config=ProductionJobConfig(
-                project_slug="leaky_manga",
-                target_chapters=["1"],
-                voice_override="sk-proj-1234567890abcdef",
-            ),
-        )
-        with pytest.raises(ValueError, match="Secret leakage audit violation"):
-            leaky_manifest.audit_secrets()
 
 
 # ==============================================================================
 # 5. SingleSessionProductionRunner Tests (4-Stage Pipeline & Crash-Resume)
 # ==============================================================================
 
-class TestSingleSessionProductionRunner:
-    def test_single_session_runner_load_or_create_fresh(self, mock_cloud_project):
-        """load_or_create initializes a new manifest with target chapters."""
-        p_slug = mock_cloud_project["project_slug"]
-        p_dir = mock_cloud_project["project_dir"]
-
-        runner = SingleSessionProductionRunner.load_or_create(
-            project_slug=p_slug,
-            config=ProductionJobConfig(project_slug=p_slug, target_chapters=["1", "2"]),
-        )
-        assert runner.manifest.project_slug == p_slug
-        assert set(runner.manifest.chapters.keys()) == {"1", "2"}
-        assert (p_dir / "production_job.json").exists()
-
-    # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
-    pass
-
-    # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
-    pass
-
-    # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
-    pass
 
 
 # ==============================================================================
@@ -455,32 +364,6 @@ class TestSingleSessionProductionRunner:
 # ==============================================================================
 
 class TestCliPhaseCIntegration:
-    def test_cli_produce_argument_parsing(self):
-        """CLI parser accepts all produce options and defaults."""
-        parser = build_parser()
-        args = parser.parse_args([
-            "produce",
-            "-p", "test_proj",
-            "-c", "1-3",
-            "--encoder", "h264_nvenc",
-            "--tts-engine", "neural",
-            "--tts-workers", "4",
-            "--render-workers", "3",
-            "--quality", "final",
-            "--no-compile",
-            "--no-export-bundle",
-            "--force",
-        ])
-        assert args.project == "test_proj"
-        assert args.chapters == "1-3"
-        assert args.encoder == "h264_nvenc"
-        assert args.tts_engine == "neural"
-        assert args.tts_workers == 4
-        assert args.render_workers == 3
-        assert args.quality == "final"
-        assert args.compile is False
-        assert args.export_bundle is False
-        assert args.force is True
 
     def test_cli_render_encoder_forwarding(self):
         """manga-recap render accepts and resolves --encoder option."""

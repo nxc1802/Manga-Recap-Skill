@@ -6,7 +6,7 @@ Comprehensive Unit Test Suite for Phase B:
 - PR-06: Thumbnail Director
 """
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import json
 from pathlib import Path

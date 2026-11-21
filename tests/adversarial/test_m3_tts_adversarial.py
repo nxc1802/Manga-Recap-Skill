@@ -103,7 +103,6 @@ class TestMasterAudioFormatAdversarial:
             TTSBenchmarkRunner(
                 output_dir=bench_out,
                 use_mock=True,
-                copy_to_lab=False,
             ).run()
             samples_dir = bench_out / "samples"
 
@@ -364,7 +363,6 @@ class TestOfflineAndZeroCloudGuarantee:
             voices=["Trúc Ly"],
             emotions=["neutral"],
             use_mock=True,
-            copy_to_lab=False,
         )
         report = runner.run()
         assert report is not None
@@ -409,54 +407,7 @@ class TestOfflineAndZeroCloudGuarantee:
 class TestEvaluationLabZeroCDNGate1:
     """Audits docs/lab/index.html and benchmark_data.js for standalone offline execution."""
 
-    def test_index_html_zero_cdn_external_urls(self):
-        """Checks docs/lab/index.html for any external CDN scripts, stylesheets, or web fonts."""
-        lab_html_path = Path("docs/lab/index.html")
-        assert lab_html_path.exists(), "docs/lab/index.html must exist"
 
-        content = lab_html_path.read_text(encoding="utf-8")
-
-        # Check <script> and <link> tags
-        for match in re.finditer(r'<(?:script|link)[^>]+(?:src|href)=["\']([^"\']+)["\']', content, re.IGNORECASE):
-            url = match.group(1).strip()
-            assert not url.startswith("http://") and not url.startswith("https://") and not url.startswith("//"), (
-                f"External CDN link detected in lab HTML: {url}"
-            )
-
-        # Check @import and url() in CSS
-        for match in re.finditer(r'@import\s+url\(["\']?([^"\']+)["\']?\)', content, re.IGNORECASE):
-            url = match.group(1).strip()
-            assert not url.startswith("http://") and not url.startswith("https://") and not url.startswith("//"), (
-                f"External CSS import detected: {url}"
-            )
-
-    def test_benchmark_data_js_structure_and_zero_cors_format(self):
-        """Verifies benchmark_data.js sets window.BENCHMARK_DATA to prevent CORS issues on file:///."""
-        js_path = Path("docs/lab/benchmark_data.js")
-        assert js_path.exists(), "docs/lab/benchmark_data.js must exist"
-
-        js_content = js_path.read_text(encoding="utf-8")
-        assert "window.BENCHMARK_DATA" in js_content, "Must define window.BENCHMARK_DATA for zero-CORS loading"
-
-        # Extract the JSON payload from window.BENCHMARK_DATA = { ... };
-        json_str = js_content.split("window.BENCHMARK_DATA =", 1)[1].strip()
-        if json_str.endswith(";"):
-            json_str = json_str[:-1].strip()
-
-        data = json.loads(json_str)
-        assert "hardware" in data
-        assert "summary" in data
-        assert "samples" in data
-        assert data["summary"]["voices_screened_count"] >= 2
-        assert data["summary"]["emotions_tested_count"] >= 2
-        assert len(data["samples"]) >= 20
-
-        # Validate that each sample contains pre-computed peaks for waveform visualization
-        for s in data["samples"]:
-            assert "peaks" in s
-            assert len(s["peaks"]) == 64
-            for p in s["peaks"]:
-                assert 0.0 <= p <= 1.0
 
     def test_full_25_voice_screening_benchmark_isolated(self, tmp_path):
         """Verifies that running benchmark with all 25 catalog voices produces exactly 74 samples."""
@@ -467,7 +418,6 @@ class TestEvaluationLabZeroCDNGate1:
             voices=[v.name for v in VOICE_CATALOG_25],
             emotions=[ep["id"] for ep in EMOTION_BENCHMARK_PROMPTS],
             use_mock=True,
-            copy_to_lab=False,
         )
         res = runner.run()
         assert res["voices_screened_count"] == 25

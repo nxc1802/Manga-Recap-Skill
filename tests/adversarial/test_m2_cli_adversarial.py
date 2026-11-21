@@ -9,7 +9,7 @@ Authored by M2 Challenger 1 to empirically verify:
 5. Defect regression verification (cleanup safety, FFmpeg returncodes, suffix versioning)
 """
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import json
 import os
@@ -55,7 +55,7 @@ class TestCliExitCodesAndPurity:
     def test_version_flag_success(self):
         proc = run_cli(["--version"])
         assert proc.returncode == 0
-        assert "3.0.0" in proc.stdout or "3.0.0" in proc.stderr
+        assert "5.0.0" in proc.stdout
 
     def test_missing_project_returns_io_error_exit_code_3(self):
         for subcmd in ["inspect", "status", "validate", "tts", "compile"]:
@@ -453,4 +453,3 @@ class TestDefectRegressionsAdversarial:
         """Subcommand argument fuzzing (bad types and choices) must return exit code 2."""
         proc = run_cli(fuzzed_args)
         assert proc.returncode == ExitCode.VALIDATION_ERROR
-

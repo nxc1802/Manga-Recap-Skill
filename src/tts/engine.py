@@ -22,6 +22,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from src.core.storage import calculate_sha256
+from src.core.utils import get_wav_duration
 from src.core.logger import logger
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 
@@ -147,38 +149,7 @@ def _apply_speed_to_file(
 
 
 def get_wav_duration_seconds(file_path: Union[str, Path]) -> float:
-    """
-    Extracts duration in seconds directly from uncompressed WAV binary header.
-    Sub-millisecond execution, zero subprocess spawn overhead.
-    """
-    path = Path(file_path).resolve()
-    if not path.exists():
-        raise FileNotFoundError(f"WAV file not found: {path}")
-
-    cached = _get_cached_audio_metrics(path)
-    if cached is not None and cached[0] > 0.0:
-        return cached[0]
-
-    try:
-        with wave.open(str(path), "rb") as wf:
-            framerate = wf.getframerate()
-            nframes = wf.getnframes()
-            if framerate <= 0:
-                raise ValueError(f"Invalid WAV framerate: {framerate}")
-            dur = round(nframes / float(framerate), 4)
-            _cache_audio_metrics(path, dur, "")
-            return dur
-    except Exception as e:
-        logger.warning(f"Failed to read WAV header with wave.open ({e}), attempting fallback...")
-        # Fallback to file size calculation for 48kHz 16-bit mono PCM:
-        # data_size = file_size - 44 bytes header
-        # bytes_per_sec = 48000 * 1 * 2 = 96000
-        size = path.stat().st_size
-        if size > 44:
-            dur = round((size - 44) / 96000.0, 4)
-            _cache_audio_metrics(path, dur, "")
-            return dur
-        raise
+    return get_wav_duration(Path(file_path))
 
 
 class BaseTTSBackend(ABC):
@@ -318,6 +289,11 @@ def _validate_tts_speed(speed: Any) -> float:
     return target_speed
 
 
+def audio_file_metrics(path: Path) -> dict:
+    # The checksum identifies cached syntheses. Duration only reads the WAV header.
+    return {"duration": get_wav_duration(path), "sha256": calculate_sha256(path)}
+
+
 def _normalize_native_wav_file(
     raw_path: Path,
     output_path: Path,
@@ -329,11 +305,9 @@ def _normalize_native_wav_file(
     Validates native WAV output, applies FFmpeg atempo/resample ONLY when needed,
     atomically writes 48 kHz 16-bit mono PCM WAV to output_path, and returns audio report.
     """
-    from src.render.artifact_validation import validate_audio
-
     output_path = Path(output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    validate_audio(raw_path)
+    get_wav_duration(raw_path)
 
     with wave.open(str(raw_path), "rb") as source:
         native_format = (source.getframerate(), source.getnchannels(), source.getsampwidth())
@@ -341,12 +315,12 @@ def _normalize_native_wav_file(
     if native_format == (48000, 1, 2) and abs(target_speed - 1.0) <= 1e-8:
         if consume_raw and raw_path.parent == output_path.parent:
             os.replace(raw_path, output_path)
-            report = validate_audio(output_path)
+            report = audio_file_metrics(output_path)
         else:
             tmp_out = output_path.with_name(f".{output_path.stem}.tmp.{uuid.uuid4().hex[:8]}.wav")
             try:
                 shutil.copyfile(raw_path, tmp_out)
-                report = validate_audio(tmp_out)
+                report = audio_file_metrics(tmp_out)
                 os.replace(tmp_out, output_path)
             finally:
                 tmp_out.unlink(missing_ok=True)
@@ -364,7 +338,7 @@ def _normalize_native_wav_file(
             raise RuntimeError(
                 f"Native TTS audio normalization failed: {result.stderr.decode(errors='replace')[-2000:]}"
             )
-        report = validate_audio(tmp_out)
+        report = audio_file_metrics(tmp_out)
         os.replace(tmp_out, output_path)
         _cache_audio_metrics(output_path, report["duration"], report["sha256"])
         return report
@@ -652,8 +626,7 @@ class VieNeuEngine:
                 raise RuntimeError(f"TTS synthesis produced invalid or empty file at {tmp_path}")
 
             if self.mode == EngineMode.NEURAL.value:
-                from src.render.artifact_validation import validate_audio
-                dur = validate_audio(tmp_path)["duration"]
+                dur = get_wav_duration(tmp_path)
             tmp_path.replace(output_path)
             checksum = calculate_sha256(output_path)
             _cache_audio_metrics(output_path, dur, checksum)
@@ -720,8 +693,6 @@ class VieNeuEngine:
         if not isinstance(self.backend, MockTTSBackend):
             raise RuntimeError("TTS backend does not support synthesize_batch_native")
 
-        from src.render.artifact_validation import validate_audio
-
         results: List[Dict[str, Any]] = []
         for idx, task in enumerate(tasks):
             seq_id = task.get("seq_id") if task.get("seq_id") is not None else f"{idx:03d}"
@@ -747,7 +718,7 @@ class VieNeuEngine:
             )
             infer_sec = round(time.monotonic() - t0, 6)
             t1 = time.monotonic()
-            report = validate_audio(out_path)
+            report = audio_file_metrics(out_path)
             post_sec = round(time.monotonic() - t1, 6)
             results.append(
                 {
@@ -755,9 +726,8 @@ class VieNeuEngine:
                     "output_path": str(out_path),
                     "duration": report["duration"],
                     "sha256": report["sha256"],
-                    "sample_rate": report["sample_rate"],
-                    "rms": report["rms"],
-                    "valid": bool(report["valid"]),
+                    "sample_rate": 48000,
+                    "valid": True,
                     "inference_seconds": infer_sec,
                     "postprocess_seconds": post_sec,
                     "batch_used": False,

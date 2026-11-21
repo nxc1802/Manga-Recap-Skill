@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tarfile
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +21,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.cloud.account_fallback import with_account_fallback
 from src.core.logger import logger
-from src.core.schemas import RecapScript
 from src.core.storage import atomic_write_json, get_chapter_dir, get_project_dir, read_json
 
 
@@ -255,20 +255,17 @@ class KaggleCloudService:
         except Exception as exc:
             logger.debug("Could not persist cloud_job.json (%s): %s", state_path, exc)
 
-    def package_chapter_payload(
-        self,
-        project_slug: str,
-        chapter_number: str,
-        out_tar_path: Union[str, Path],
-        job_type: str = "produce",
-    ) -> Path:
+    def package_chapter_payload(self, project_slug, chapter_number, out_tar_path, job_type="produce", *, series=False):
         from src.cloud.payload import package_payload
-        path, digest = package_payload(get_project_dir(project_slug), chapter_number, out_tar_path, job_type)
-        self._payload_manifest_hash = digest
+
+        path, self._payload_manifest_hash = package_payload(
+            get_project_dir(project_slug), chapter_number, out_tar_path, job_type, series=series,
+        )
         with tarfile.open(path) as archive:
             manifest = json.load(archive.extractfile("payload_manifest.json"))
         self._dispatch_input_hashes = {relative.removeprefix("project/"): value
-            for relative, value in manifest["files"].items() if relative.startswith("project/")}
+            for relative, value in manifest["files"].items()
+            if relative.startswith("project/") and not relative.endswith("/chapter.json")}
         return path
 
     def generate_worker_script(
@@ -283,6 +280,7 @@ class KaggleCloudService:
         fps: Optional[int] = None,
         target_width: Optional[int] = None,
         target_height: Optional[int] = None,
+        compile_feature: bool = False,
     ) -> str:
         from src.core.series_setup import require_series_setup
         require_series_setup(project_slug)
@@ -299,43 +297,48 @@ class KaggleCloudService:
         encoder = "h264_nvenc" if encoder_preference in {"auto", "nvenc", "h264_nvenc"} else encoder_preference
         if encoder not in {"libx264", "h264_nvenc"}:
             raise ValueError("Unsupported cloud encoder")
-        # Bootstrap uses only stdlib until source inventory has been verified.
-        return "\n".join([
-            "import os, sys, json, hashlib, tarfile, shutil, subprocess",
+        lines = [
+            "import sys, json, hashlib, tarfile, shutil, subprocess",
             "from pathlib import Path",
-            "sys.dont_write_bytecode = True",
-            "root = Path('/kaggle/working/runtime')",
-            "if root.exists(): raise RuntimeError('Runtime must be fresh')",
-            "root.mkdir()",
-            "payloads = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
-            "if len(payloads) == 1:",
-            "    with tarfile.open(payloads[0]) as archive:",
-            "        for entry in archive.getmembers():",
-            "            target = (root / entry.name).resolve()",
-            "            if not target.is_relative_to(root) or not entry.isfile(): raise RuntimeError('Unsafe payload member')",
-            "        archive.extractall(root, filter='data')",
-            "else:",
-            "    manifests = list(Path('/kaggle/input').rglob('payload_manifest.json'))",
-            "    if len(manifests) != 1: raise RuntimeError('Expected one payload archive or extracted manifest')",
-            "    src_root = manifests[0].parent",
-            "    for item in src_root.iterdir():",
-            "        dst = root / item.name",
-            "        if item.is_dir(): shutil.copytree(item, dst)",
-            "        else: shutil.copy2(item, dst)",
-            f"expected = {digest!r}",
-            "manifest_path = root / 'payload_manifest.json'",
-            "if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected: raise RuntimeError('Manifest changed')",
-            "manifest = json.loads(manifest_path.read_text())",
-            "files = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p != manifest_path}",
-            "if files != set(manifest['files']): raise RuntimeError('Payload inventory mismatch')",
-            "for name, digest in manifest['files'].items():",
-            "    if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest: raise RuntimeError('Payload hash mismatch')",
-            "subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(root / 'requirements.txt')], check=True)",
-            "sys.path.insert(0, str(root))",
-            "from src.cloud.canonical_worker import run",
-            f"run(root, expected, Path('/kaggle/working/results'), encoder={encoder!r})",
-            "shutil.rmtree(root, ignore_errors=True)",
-        ])
+            "",
+            "def main():",
+            "    sys.dont_write_bytecode = True",
+            "    root = Path('/kaggle/working/runtime')",
+            "    root.mkdir()",
+            "    try:",
+            "        payload, = Path('/kaggle/input').rglob('payload.tar.gz')",
+            "        with tarfile.open(payload) as archive:",
+            "            seen = set()",
+            "            for entry in archive.getmembers():",
+            "                target = (root / entry.name).resolve()",
+            "                if not target.is_relative_to(root) or not entry.isfile() or target in seen:",
+            "                    raise RuntimeError('Unsafe payload member')",
+            "                seen.add(target)",
+            "            archive.extractall(root)",
+            f"        expected = {digest!r}",
+            "        manifest_path = root / 'payload_manifest.json'",
+            "        if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected:",
+            "            raise RuntimeError('Manifest changed')",
+            "        manifest = json.loads(manifest_path.read_text())",
+            "        files = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() and p != manifest_path}",
+            "        if files != set(manifest['files']): raise RuntimeError('Payload inventory mismatch')",
+            "        for name, digest in manifest['files'].items():",
+            "            with (root / name).open('rb') as f:",
+            "                checksum = hashlib.sha256()",
+            "                while block := f.read(1 << 20): checksum.update(block)",
+            "            if checksum.hexdigest() != digest: raise RuntimeError('Payload hash mismatch')",
+            "        subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', str(root / 'requirements.txt')], check=True)",
+            "        sys.path.insert(0, str(root))",
+            "        from src.cloud.dual_gpu_worker import run",
+            f"        run(root, expected, Path('/kaggle/working/results'), encoder={encoder!r},",
+            f"            render_workers={render_workers!r}, compile_feature={compile_feature!r})",
+            "    finally:",
+            "        shutil.rmtree(root, ignore_errors=True)",
+            "",
+            "if __name__ == '__main__':",
+            "    main()",
+        ]
+        return "\n".join(lines) + "\n"
 
     def dispatch_chapter_job(
         self,
@@ -355,6 +358,8 @@ class KaggleCloudService:
         fps: Optional[int] = None,
         target_width: Optional[int] = None,
         target_height: Optional[int] = None,
+        series_chapters: Optional[List[str]] = None,
+        compile_feature: bool = False,
     ) -> Dict[str, Any]:
         """
         Dispatches a chapter production job to Kaggle Cloud, monitors progress, and returns result.
@@ -364,28 +369,13 @@ class KaggleCloudService:
         - Strict timeout handling (including fast queue_timeout_seconds on QUEUED stalls).
         - No credentials exposure.
         """
-        from src.core.series_setup import require_series_setup
-        require_series_setup(project_slug)
-        if str(chapter_number) != "1":
-            from src.core.human_review import require_preview_approval
-            require_preview_approval(get_project_dir(project_slug))
-        if not self._api:
-            raise RuntimeError("Kaggle API is not authenticated.")
-
         if job_type not in {"tts", "render", "produce"}:
             raise ValueError("Unknown cloud job type")
+        if not self._api:
+            raise RuntimeError("Kaggle API is not authenticated")
+        series = series_chapters is not None
+        chapters = list(series_chapters) if series else [str(chapter_number)]
         chapter = get_chapter_dir(project_slug, chapter_number)
-        if job_type == "render":
-            from src.render.artifact_validation import validate_audio
-            from src.render.chapter_renderer import resolve_audio
-            script = RecapScript.model_validate(read_json(chapter / "script.json"))
-            if not script.segments:
-                raise ValueError("Cannot render an empty chapter")
-            for segment in script.segments:
-                report = validate_audio(resolve_audio(chapter, segment))
-                if segment.checksum != report["sha256"] or segment.duration is None or abs(segment.duration - report["duration"]) > 0.001:
-                    raise ValueError("Render-only audio metadata mismatch")
-
         if gpu:
             quota = self.get_gpu_quota_status()
             if quota and quota.get("exhausted"):
@@ -396,49 +386,10 @@ class KaggleCloudService:
                 )
 
         kernel_slug = (kernel_slug or f"mr-{project_slug[:12]}-c{chapter_number}-{int(time.time())%100000}".lower().replace("_", "-"))[:45].rstrip("-")
-        staging_dir = Path(f"/tmp/kaggle_job_{project_slug}_{chapter_number}_{job_type}").resolve()
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir)
-        staging_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"KaggleCloudService: Packaging chapter payload in {staging_dir} (job_type={job_type})...")
+        staging_dir = Path(tempfile.mkdtemp(prefix="manga-kaggle-"))
         payload_tar = staging_dir / "payload.tar.gz"
-        self.package_chapter_payload(project_slug, chapter_number, payload_tar, job_type=job_type)
-
-        # A fresh private dataset per job avoids racing a mutable shared payload.
-        dataset_slug = f"mr-payload-{self._payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
-        ds_staging = staging_dir / "dataset"
-        ds_staging.mkdir()
-        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
-        ds_ref = f"{self._username}/{dataset_slug}"
-        atomic_write_json(ds_staging / "dataset-metadata.json", {
-            "title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}],
-        })
-        self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
-        ready = False
-        started = time.monotonic()
-        while time.monotonic() - started < 600:
-            time.sleep(5)
-            try:
-                status = self._api.dataset_status(ds_ref)
-            except Exception as err:
-                logger.info(f"Waiting for Kaggle dataset creation to propagate ({ds_ref}): {err}")
-                continue
-            status = getattr(status, "status", status)
-            if isinstance(status, dict):
-                status = status.get("status", "")
-            if str(status).strip().lower().split(".")[-1] == "ready":
-                try:
-                    entries = getattr(self._api.dataset_list_files(ds_ref), "dataset_files", [])
-                    if any(entry.name == "payload.tar.gz" for entry in entries) or entries:
-                        ready = True
-                        break
-                except Exception:
-                    pass
-            if str(status).strip().lower() in {"error", "failed"}:
-                raise RuntimeError(f"Kaggle payload dataset failed: {status}")
-        if not ready:
-            raise TimeoutError("Kaggle payload dataset did not become ready; kernel not launched")
+        self.package_chapter_payload(project_slug, chapters if series else chapter_number,
+                                     payload_tar, job_type=job_type, series=series)
 
         worker_py = staging_dir / "worker.py"
         worker_code = self.generate_worker_script(
@@ -452,8 +403,21 @@ class KaggleCloudService:
             fps=fps,
             target_width=target_width,
             target_height=target_height,
+            compile_feature=compile_feature,
         )
         worker_py.write_text(worker_code, encoding="utf-8")
+
+        # A fresh private dataset per job avoids racing a mutable shared payload.
+        dataset_slug = f"mr-payload-{self._payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
+        ds_staging = staging_dir / "dataset"
+        ds_staging.mkdir()
+        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
+        ds_ref = f"{self._username}/{dataset_slug}"
+        atomic_write_json(ds_staging / "dataset-metadata.json", {
+            "title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}],
+        })
+        self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
+        self._wait_for_dataset_ready(ds_ref, expected_file="payload.tar.gz", timeout_sec=300.0)
 
         metadata = {
             "id": f"{self._username}/{kernel_slug}",
@@ -487,7 +451,8 @@ class KaggleCloudService:
         else:
             target_kernel_ref = f"{self._username}/{kernel_slug}"
 
-        job_state_path = chapter / "cloud_job.json"
+        project = get_project_dir(project_slug)
+        job_state_path = (project if series else chapter) / "cloud_job.json"
         job_meta = {
             "project_slug": project_slug,
             "chapter_number": str(chapter_number),
@@ -497,6 +462,10 @@ class KaggleCloudService:
             "account_name": getattr(self, "account_name", "unknown"),
             "username": self.get_username(),
             "gpu": gpu,
+            "series": series,
+            "chapters": chapters,
+            "payload_manifest_sha256": self._payload_manifest_hash,
+            "input_hashes": self._dispatch_input_hashes,
         }
         if not wait:
             self._write_cloud_job_state(
@@ -526,18 +495,14 @@ class KaggleCloudService:
             job_metadata=job_meta,
         )
 
-        # Download outputs
-        output_dir = Path(f"/tmp/kaggle_out_{project_slug}_{chapter_number}_{job_type}").resolve()
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        logger.info(f"Downloading outputs from '{target_kernel_ref}' to {output_dir}...")
-        self._api.kernels_output(target_kernel_ref, str(output_dir))
-
-        # Unpack back into project directory with strict validation
-        sync_report = self.sync_results(project_slug, chapter_number, output_dir, job_type=job_type)
-        return sync_report
+        with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
+            self._api.kernels_output(target_kernel_ref, download)
+            if series:
+                result = self.sync_series_results(project_slug, chapters, Path(download))
+            else:
+                result = self.sync_results(project_slug, chapter_number, Path(download), job_type=job_type)
+        self._write_cloud_job_state(job_state_path, {**job_meta, "status": "synced", "result": result})
+        return result
 
     @with_account_fallback
     def dispatch_chapter_job_with_fallback(self, *args, **kwargs) -> Dict[str, Any]:
@@ -556,252 +521,65 @@ class KaggleCloudService:
         """Dispatches a full cloud production job (TTS + Render)."""
         return self.dispatch_chapter_job(project_slug, chapter_number, job_type="produce", **kwargs)
 
-    def sync_results(
-        self,
-        project_slug: str,
-        chapter_number: str,
-        downloaded_dir: Path,
-        job_type: str = "produce",
-    ) -> Dict[str, Any]:
-        from src.cloud.result_sync import sync_result
-        root = Path(downloaded_dir)
-        if (root / "results").is_dir():
-            root = root / "results"
-        return sync_result(get_project_dir(project_slug), chapter_number, root, job_type,
-                           getattr(self, "_payload_manifest_hash", None),
-                           getattr(self, "_dispatch_input_hashes", None))
+    def sync_results(self, project_slug, chapter_number, downloaded_dir, job_type="produce"):
+        from src.cloud.payload import sync_results
 
-    # =========================================================================
-    # Multi-Chapter Dual-T4 Single-Session Series Production Methods (P8)
-    # =========================================================================
+        return sync_results(get_project_dir(project_slug), [str(chapter_number)], downloaded_dir, job_type,
+                            getattr(self, "_payload_manifest_hash", None),
+                            getattr(self, "_dispatch_input_hashes", None))
 
-    def check_chapter_1_preview_approval(
-        self, project_slug: str, skip_preview: bool = False
-    ) -> Tuple[bool, Optional[str]]:
-        """
-        Enforces Chapter 1 human preview approval (Gate G6) fail-closed.
-        `skip_preview` is retained for signature compatibility only and NEVER waives G6.
-        """
-        _ = skip_preview
+    def sync_series_results(self, project_slug, chapters, downloaded_dir):
+        from src.cloud.payload import sync_results
+
+        return sync_results(get_project_dir(project_slug), chapters, downloaded_dir, "produce",
+                            getattr(self, "_payload_manifest_hash", None),
+                            getattr(self, "_dispatch_input_hashes", None), series=True)
+
+    def check_chapter_1_preview_approval(self, project_slug, skip_preview=False):
         from src.core.human_review import require_preview_approval
+
         try:
             require_preview_approval(get_project_dir(project_slug))
             return True, None
         except Exception as exc:
             return False, str(exc)
 
-    def package_series_payload(
-        self,
-        project_slug: str,
-        chapters: List[str],
-        out_tar_path: Union[str, Path],
-        *,
-        skip_preview: bool = False,
-        profile: str = "B4",
-    ) -> Path:
-        from src.cloud.series_payload import package_series_payload
-
-        path, digest = package_series_payload(
-            get_project_dir(project_slug),
-            chapters,
-            out_tar_path,
-            skip_preview=False,
-            profile=profile,
-        )
-        self._series_payload_manifest_hash = digest
-        with tarfile.open(path) as archive:
-            manifest = json.load(archive.extractfile("payload_manifest.json"))
-        self._series_dispatch_input_hashes = {
-            relative.removeprefix("project/"): value
-            for relative, value in manifest["files"].items()
-            if relative.startswith("project/")
-        }
-        self._series_chapters = list(manifest.get("chapters", []))
-        return path
-
-    def generate_series_worker_script(
-        self,
-        project_slug: str,
-        chapters: List[str],
-        render_workers: int = 2,
-        encoder_preference: str = "auto",
-        compile_feature: bool = True,
-        profile: str = "B4",
-        autotune: bool = False,
-        video_mode: Optional[str] = None,
-        burn_subtitles: Optional[bool] = None,
-        fps: Optional[int] = None,
-    ) -> str:
-        from src.cloud.series_payload import generate_series_worker_script
-
-        digest = getattr(self, "_series_payload_manifest_hash", None)
-        if not digest:
-            raise ValueError("Package and hash the complete series runtime before generating a worker")
-        return generate_series_worker_script(
-            project_slug,
-            chapters,
-            payload_manifest_hash=digest,
-            project_dir=get_project_dir(project_slug),
-            render_workers=render_workers,
-            encoder_preference=encoder_preference,
-            compile_feature=compile_feature,
-            profile=profile,
-            autotune=autotune,
-            video_mode=video_mode,
-            burn_subtitles=burn_subtitles,
-            fps=fps,
-        )
-
-    def dispatch_series_job(
-        self,
-        project_slug: str,
-        chapters: List[str],
-        *,
-        kernel_slug: Optional[str] = None,
-        gpu: bool = True,
-        wait: bool = True,
-        poll_interval: int = 6,
-        timeout_seconds: int = 3600,
-        skip_preview: bool = False,
-        compile_feature: bool = True,
-        render_workers: int = 2,
-        encoder_preference: str = "auto",
-        profile: str = "B4",
-        autotune: bool = False,
-        video_mode: Optional[str] = None,
-        burn_subtitles: Optional[bool] = None,
-        fps: Optional[int] = None,
-        queue_timeout_seconds: Optional[float] = 300.0,
-    ) -> Dict[str, Any]:
-        from src.core.human_review import require_voice_approval
-        from src.core.series_setup import require_series_setup
-
-        _ = skip_preview  # Never waives Gate G6.
-        proj_dir = get_project_dir(project_slug)
-        require_series_setup(project_slug, project_dir=proj_dir)
-        require_voice_approval(proj_dir)
-        ok, error = self.check_chapter_1_preview_approval(project_slug, skip_preview=False)
-        if not ok:
-            raise ValueError(error or "Chapter 1 human preview approval is required (G6)")
-        if not self._api:
-            raise RuntimeError("Kaggle API is not authenticated.")
-
-        if gpu:
-            quota = self.get_gpu_quota_status()
-            if quota and quota.get("exhausted"):
-                raise KaggleQuotaExhaustedError(
-                    f"Kaggle account '{getattr(self, 'account_name', 'unknown')}' ({self.get_username()}) "
-                    f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
-                    f"refreshes {quota.get('quota_refresh_time') or 'next cycle'})."
-                )
-
-        norm_chapters = [str(c).strip() for c in chapters if str(c).strip()]
-        if not norm_chapters:
-            raise ValueError("No valid chapters specified for series cloud production")
-
-        kernel_slug = (
-            kernel_slug
-            or f"mr-{project_slug[:12]}-series-{int(time.time()) % 100000}".lower().replace("_", "-")
-        )[:45].rstrip("-")
-        staging_dir = Path(f"/tmp/kaggle_series_{project_slug}").resolve()
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir)
-        staging_dir.mkdir(parents=True, exist_ok=True)
-
-        payload_tar = staging_dir / "payload.tar.gz"
-        self.package_series_payload(
-            project_slug,
-            norm_chapters,
-            payload_tar,
-            skip_preview=False,
-            profile=profile,
-        )
-
-        dataset_slug = f"mr-series-{self._series_payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
-        ds_staging = staging_dir / "dataset"
-        ds_staging.mkdir()
-        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
-        ds_ref = f"{self._username}/{dataset_slug}"
-        atomic_write_json(
-            ds_staging / "dataset-metadata.json",
-            {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
-        )
-        self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
-        self._wait_for_dataset_ready(ds_ref, expected_file="payload.tar.gz", timeout_sec=600.0)
-
-        worker_py = staging_dir / "worker.py"
-        worker_code = self.generate_series_worker_script(
-            project_slug=project_slug,
-            chapters=norm_chapters,
-            render_workers=render_workers,
-            encoder_preference=encoder_preference,
-            compile_feature=compile_feature,
-            profile=profile,
-            autotune=autotune,
-            video_mode=video_mode,
-            burn_subtitles=burn_subtitles,
-            fps=fps,
-        )
-        worker_py.write_text(worker_code, encoding="utf-8")
-
-        metadata = {
-            "id": f"{self._username}/{kernel_slug}",
-            "title": kernel_slug,
-            "code_file": "worker.py",
-            "language": "python",
-            "kernel_type": "script",
-            "is_private": True,
-            "enable_gpu": gpu,
-            "enable_tpu": False,
-            "enable_internet": True,
-            "machine_shape": "NvidiaTeslaT4" if gpu else "None",
-            "dataset_sources": [ds_ref],
-            "competition_sources": [],
-            "kernel_sources": [],
-            "model_sources": [],
-        }
-        (staging_dir / "kernel-metadata.json").write_text(
-            json.dumps(metadata, indent=2), encoding="utf-8"
-        )
-
-        push_res = self._api.kernels_push(str(staging_dir))
-        self._require_kernel_submission(push_res)
-        assigned_ref = getattr(push_res, "ref", None)
-        target_kernel_ref = (
-            assigned_ref.replace("/code/", "").strip()
-            if assigned_ref
-            else f"{self._username}/{kernel_slug}"
-        )
-
-        if not wait:
-            return {
-                "status": "dispatched",
-                "kernel_ref": target_kernel_ref,
-                "staging_dir": str(staging_dir),
-                "job_type": "produce_series",
-                "chapters": norm_chapters,
-                "payload_manifest_sha256": self._series_payload_manifest_hash,
-            }
-
-        self._poll_kernel_until_complete(
-            target_kernel_ref,
-            timeout_seconds=timeout_seconds,
-            queue_timeout_seconds=queue_timeout_seconds if gpu else None,
-            poll_interval=poll_interval,
-            label="Series",
-        )
-
-        output_dir = Path(f"/tmp/kaggle_series_out_{project_slug}").resolve()
-        if output_dir.exists():
-            shutil.rmtree(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        self._api.kernels_output(target_kernel_ref, str(output_dir))
-        return self.sync_series_results(project_slug, norm_chapters, output_dir)
+    def dispatch_series_job(self, project_slug, chapters, *, skip_preview=False, **kwargs):
+        numbers = [str(number).strip() for number in chapters]
+        if not numbers:
+            raise ValueError("Expected at least one chapter")
+        return self.dispatch_chapter_job(project_slug, numbers[0], series_chapters=numbers, **kwargs)
 
     @with_account_fallback
-    def dispatch_series_job_with_fallback(self, *args, **kwargs) -> Dict[str, Any]:
-        """Dispatches a series job, rotating across configured Kaggle accounts on quota/queue failure."""
+    def dispatch_series_job_with_fallback(self, *args, **kwargs):
         return self.dispatch_series_job(*args, **kwargs)
+
+    def pull(self, project_slug, chapter_number=None):
+        chapter = get_chapter_dir(project_slug, chapter_number) if chapter_number else get_project_dir(project_slug)
+        state = read_json(chapter / "cloud_job.json")
+        if state["project_slug"] != project_slug:
+            raise ValueError("Cloud job project mismatch")
+        if state.get("status") == "synced":
+            return state["result"]
+        if state["username"] != self.get_username():
+            for index, account in enumerate(self._accounts):
+                if account[0] == state["account_name"]:
+                    self._select_account(index)
+                    break
+        if state["username"] != self.get_username() or not self.is_authenticated:
+            raise RuntimeError("Authenticate the Kaggle account that dispatched this job")
+        self._payload_manifest_hash = state["payload_manifest_sha256"]
+        self._dispatch_input_hashes = state["input_hashes"]
+        self._poll_kernel_until_complete(state["kernel_ref"], timeout_seconds=1800,
+                                         queue_timeout_seconds=300, poll_interval=6)
+        with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
+            self._api.kernels_output(state["kernel_ref"], download)
+            if state["series"]:
+                result = self.sync_series_results(project_slug, state["chapters"], Path(download))
+            else:
+                result = self.sync_results(project_slug, state["chapter_number"], Path(download), state["job_type"])
+        self._write_cloud_job_state(chapter / "cloud_job.json", {**state, "status": "synced", "result": result})
+        return result
 
     def _wait_for_dataset_ready(
         self,
@@ -959,237 +737,3 @@ class KaggleCloudService:
             "queue_sec": round(queue_sec, 4),
             "remote_wall_sec": round(t_done - t0, 4),
         }
-
-    def dispatch_benchmark_matrix_job(
-        self,
-        project_slug: str,
-        chapters: List[str],
-        *,
-        variants: Tuple[str, ...] = ("B0", "B1", "B2", "B3", "B4", "B5"),
-        repeats: int = 1,
-        warmup: bool = False,
-        kernel_slug: Optional[str] = None,
-        output_dir: Optional[Union[str, Path]] = None,
-        wait: bool = True,
-        poll_interval: int = 6,
-        timeout_seconds: int = 5400,
-        encoder_preference: str = "auto",
-        compile_feature: bool = False,
-        dataset_poll_interval: float = 5.0,
-    ) -> Dict[str, Any]:
-        """
-        Dispatches ONE self-contained Dual-T4 benchmark matrix kernel (`B0`..`B5`) on a pinned
-        series payload, separating dataset upload, queue, boot, warmup/model load, compute,
-        and download timings, and verifying SHA-256 receipts + `all_valid` before returning.
-        """
-        from src.cloud.series_payload import (
-            generate_benchmark_worker_script,
-            package_series_payload,
-        )
-        from src.core.human_review import require_voice_approval
-        from src.core.series_setup import require_series_setup
-        from src.render.artifact_validation import fingerprint
-
-        proj_dir = get_project_dir(project_slug)
-        require_series_setup(project_slug, project_dir=proj_dir)
-        require_voice_approval(proj_dir)
-        ok, error = self.check_chapter_1_preview_approval(project_slug, skip_preview=False)
-        if not ok:
-            raise ValueError(error or "Chapter 1 human preview approval is required (G6)")
-        if not self._api:
-            raise RuntimeError("Kaggle API is not authenticated.")
-
-        norm_chapters = [str(c).strip() for c in chapters if str(c).strip()]
-        norm_variants = [str(v).strip().upper() for v in variants if str(v).strip()]
-        if not norm_chapters or not norm_variants:
-            raise ValueError("Benchmark dispatch requires non-empty chapters and variants")
-
-        kernel_slug = (
-            kernel_slug
-            or f"mr-{project_slug[:10]}-p9bench-{int(time.time()) % 100000}".lower().replace("_", "-")
-        )[:45].rstrip("-")
-        staging_dir = Path(f"/tmp/kaggle_bench_{project_slug}").resolve()
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir)
-        staging_dir.mkdir(parents=True, exist_ok=True)
-
-        t_upload0 = time.monotonic()
-        payload_tar = staging_dir / "payload.tar.gz"
-        _, digest = package_series_payload(
-            proj_dir,
-            norm_chapters,
-            payload_tar,
-            skip_preview=False,
-            profile="B4",
-            job_type="benchmark_matrix",
-            include_benchmark_harness=True,
-            extra_metadata={
-                "variants": norm_variants,
-                "repeats": int(repeats),
-                "warmup": bool(warmup),
-            },
-        )
-        self._series_payload_manifest_hash = digest
-
-        dataset_slug = f"mr-bench-{digest[:12]}-{time.time_ns() % 1000000000}"
-        ds_staging = staging_dir / "dataset"
-        ds_staging.mkdir()
-        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
-        ds_ref = f"{self._username}/{dataset_slug}"
-        atomic_write_json(
-            ds_staging / "dataset-metadata.json",
-            {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
-        )
-        self._api.dataset_create_new(str(ds_staging), public=False, quiet=True)
-        self._wait_for_dataset_ready(
-            ds_ref,
-            expected_file="payload.tar.gz",
-            timeout_sec=600.0,
-            poll_interval=dataset_poll_interval,
-        )
-        dataset_upload_sec = round(max(0.0, time.monotonic() - t_upload0), 4)
-
-        worker_code = generate_benchmark_worker_script(
-            project_slug=project_slug,
-            chapters=norm_chapters,
-            payload_manifest_hash=digest,
-            project_dir=proj_dir,
-            variants=norm_variants,
-            repeats=repeats,
-            warmup=warmup,
-            encoder_preference=encoder_preference,
-            compile_feature=compile_feature,
-        )
-        (staging_dir / "worker.py").write_text(worker_code, encoding="utf-8")
-
-        metadata = {
-            "id": f"{self._username}/{kernel_slug}",
-            "title": kernel_slug,
-            "code_file": "worker.py",
-            "language": "python",
-            "kernel_type": "script",
-            "is_private": True,
-            "enable_gpu": True,
-            "enable_tpu": False,
-            "enable_internet": True,
-            "machine_shape": "NvidiaTeslaT4",
-            "dataset_sources": [ds_ref],
-            "competition_sources": [],
-            "kernel_sources": [],
-            "model_sources": [],
-        }
-        (staging_dir / "kernel-metadata.json").write_text(
-            json.dumps(metadata, indent=2), encoding="utf-8"
-        )
-
-        push_res = self._api.kernels_push(str(staging_dir))
-        self._require_kernel_submission(push_res)
-        assigned_ref = getattr(push_res, "ref", None)
-        target_kernel_ref = (
-            assigned_ref.replace("/code/", "").strip()
-            if assigned_ref
-            else f"{self._username}/{kernel_slug}"
-        )
-
-        if not wait:
-            return {
-                "status": "dispatched",
-                "kernel_ref": target_kernel_ref,
-                "dataset_ref": ds_ref,
-                "staging_dir": str(staging_dir),
-                "job_type": "benchmark_matrix",
-                "chapters": norm_chapters,
-                "variants": norm_variants,
-                "payload_manifest_sha256": digest,
-                "dataset_upload_sec": dataset_upload_sec,
-            }
-
-        poll_metrics = self._poll_kernel_until_complete(
-            target_kernel_ref,
-            timeout_seconds=timeout_seconds,
-            poll_interval=poll_interval,
-            label="Benchmark",
-        )
-
-        dl_dir = (
-            Path(output_dir).resolve()
-            if output_dir is not None
-            else Path(f"/tmp/kaggle_bench_out_{project_slug}").resolve()
-        )
-        if dl_dir.exists():
-            shutil.rmtree(dl_dir)
-        dl_dir.mkdir(parents=True, exist_ok=True)
-
-        t_dl0 = time.monotonic()
-        self._api.kernels_output(target_kernel_ref, str(dl_dir))
-        results_root = (dl_dir / "results") if (dl_dir / "results").is_dir() else dl_dir
-
-        manifest_path = results_root / "dual_t4_result_manifest.json"
-        if not manifest_path.is_file():
-            raise ValueError("Missing downloaded benchmark result manifest: dual_t4_result_manifest.json")
-        receipt = read_json(manifest_path)
-        if (
-            receipt.get("payload_manifest_sha256") != digest
-            or receipt.get("project_slug") != project_slug
-            or receipt.get("job_type") != "benchmark_matrix"
-        ):
-            raise ValueError("Downloaded benchmark result does not match dispatched benchmark job")
-
-        actual_files = set()
-        for p in results_root.rglob("*"):
-            if p.is_symlink():
-                raise ValueError("Symlink in downloaded benchmark results")
-            if p.is_file() and p != manifest_path:
-                actual_files.add(p.relative_to(results_root).as_posix())
-        expected_files = dict(receipt.get("files") or {})
-        if actual_files != set(expected_files):
-            raise ValueError("Downloaded benchmark result inventory mismatch")
-        for rel, file_digest in expected_files.items():
-            p = (results_root / rel).resolve()
-            if not p.is_relative_to(results_root) or fingerprint(p) != file_digest:
-                raise ValueError(f"Downloaded benchmark result hash mismatch: {rel}")
-
-        bench_json_path = results_root / "benchmark_matrix_results.json"
-        if not bench_json_path.is_file():
-            raise ValueError("Missing benchmark_matrix_results.json in downloaded bundle")
-        bench_data = read_json(bench_json_path)
-
-        download_sec = round(max(0.0, time.monotonic() - t_dl0), 4)
-        phase_timings = dict(bench_data.get("phase_timings") or {})
-        phase_timings["dataset_upload_sec"] = dataset_upload_sec
-        phase_timings["queue_sec"] = poll_metrics["queue_sec"]
-        phase_timings["download_sec"] = download_sec
-        bench_data["phase_timings"] = phase_timings
-        bench_data["kernel_ref"] = target_kernel_ref
-        bench_data["dataset_ref"] = ds_ref
-
-        runs = list(bench_data.get("runs") or [])
-        if not runs or not bench_data.get("all_valid") or any(not r.get("all_valid") for r in runs):
-            raise RuntimeError("Benchmark matrix aborted: one or more variants failed artifact validation")
-
-        atomic_write_json(bench_json_path, bench_data)
-        if results_root != dl_dir:
-            atomic_write_json(dl_dir / "benchmark_matrix_results.json", bench_data)
-        return bench_data
-
-    def produce_series_job(self, project_slug, chapters, **kwargs):
-        return self.dispatch_series_job(project_slug, chapters, **kwargs)
-
-    def sync_series_results(
-        self,
-        project_slug: str,
-        chapters: List[str],
-        downloaded_dir: Union[str, Path],
-    ) -> Dict[str, Any]:
-        from src.cloud.series_payload import sync_series_results
-
-        root = Path(downloaded_dir)
-        if (root / "results").is_dir():
-            root = root / "results"
-        return sync_series_results(
-            get_project_dir(project_slug),
-            chapters,
-            root,
-            getattr(self, "_series_payload_manifest_hash", None),
-            getattr(self, "_series_dispatch_input_hashes", None),
-        )

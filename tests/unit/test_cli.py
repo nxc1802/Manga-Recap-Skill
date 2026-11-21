@@ -7,7 +7,7 @@ Unit tests verifying the unified CLI suite (manga-recap):
 - Subcommand implementations: inspect, validate, status, crawl, tts, tts_benchmark, render, compile
 """
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import argparse
 import io
@@ -45,7 +45,7 @@ class TestCliParserAndDispatch:
         code = main(["--version"])
         assert code == 0
         captured = capsys.readouterr()
-        assert "3.0.0" in captured.out or "3.0.0" in captured.err
+        assert "5.0.0" in captured.out
 
     def test_subcommand_help_flag(self, capsys):
         for subcmd in ["inspect", "validate", "status", "crawl", "tts", "tts_benchmark", "render", "compile"]:
@@ -386,13 +386,12 @@ class TestSubcommandImplementations:
 
 
     def test_tts_benchmark_command(self, tmp_path, capsys):
-        """Verifies tts_benchmark runs with isolated output dir and does not clobber docs/lab/."""
+        """Verifies the benchmark writes the requested output."""
         bench_out = tmp_path / "cli_bench_out"
         code = main([
             "tts_benchmark",
             "--voices", "Trúc Ly,Adam bựa",
             "--out-dir", str(bench_out),
-            "--no-copy-to-lab",
             "--mock",
             "--json",
         ])
@@ -406,27 +405,6 @@ class TestSubcommandImplementations:
         assert (bench_out / "report.json").exists()
         assert (bench_out / "SUMMARY.md").exists()
 
-    def test_tts_benchmark_does_not_modify_lab_when_no_copy(self, tmp_path, capsys):
-        """Verifies that running benchmark with --no-copy-to-lab never modifies docs/lab/ assets."""
-        lab_data_file = Path("docs/lab/benchmark_data.js")
-        before_mtime = lab_data_file.stat().st_mtime_ns if lab_data_file.exists() else None
-
-        bench_out = tmp_path / "isolated_bench"
-        code = main([
-            "tts_benchmark",
-            "--voices", "Trúc Ly",
-            "--out-dir", str(bench_out),
-            "--no-copy-to-lab",
-            "--mock",
-            "--json",
-        ])
-        assert code == ExitCode.SUCCESS
-
-        if before_mtime is not None:
-            after_mtime = lab_data_file.stat().st_mtime_ns
-            assert after_mtime == before_mtime, (
-                "docs/lab/benchmark_data.js was modified despite --no-copy-to-lab!"
-            )
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass
@@ -492,5 +470,3 @@ class TestContractAlignment:
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass
-
-

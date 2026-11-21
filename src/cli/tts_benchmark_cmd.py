@@ -21,18 +21,6 @@ def handle_tts_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     emotions_arg = getattr(args, "emotions", "all")
     repeats = getattr(args, "repeats", 1)
     use_mock = getattr(args, "mock", False)
-    copy_to_lab = getattr(args, "copy_to_lab", True)
-
-    # Guard against clobbering full lab dataset with partial voice benchmark
-    if copy_to_lab and voices_arg != "all" and not getattr(args, "force_copy_to_lab", False):
-        import logging
-        logging.getLogger(__name__).warning(
-            "Partial voice benchmark detected (%s). Skipping docs/lab copy to prevent clobbering 25-voice dataset. "
-            "Use --voices all to update the lab.",
-            voices_arg,
-        )
-        copy_to_lab = False
-
     out_dir = Path(out_dir_str).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +45,6 @@ def handle_tts_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
         emotions=selected_emotions,
         repeats=repeats,
         use_mock=use_mock,
-        copy_to_lab=copy_to_lab,
         include_ab_tests=getattr(args, "ab_tests", False),
     )
 

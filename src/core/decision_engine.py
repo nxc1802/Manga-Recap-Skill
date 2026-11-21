@@ -30,6 +30,7 @@ from src.core.panel_repack import (
 )
 from src.core.schemas import PanelManifest, PanelStatus, utc_iso_now
 from src.core.storage import atomic_write_json, load_manifest
+from src.render.visual_policy import SCROLL_VIEWPORT_H_OVER_W
 
 DECISIONS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/decisions"
 DECISIONS_MODEL = "gemini-decision-1"
@@ -176,8 +177,8 @@ def _build_panel_questions(width: int, height: int) -> Tuple[str, Dict[str, Dict
             "type": "choice",
             "instructions": "Select video camera motion for this panel based on its aspect ratio and layout.",
             "criteria": {
-                "static": "Keep static with side padding (square, landscape, or standard portrait panel with H/W <= 1.85).",
-                "slow_pan_down": "Smooth downward scroll (only for very tall vertical strips with H/W > 1.85 whose width would look too narrow if fit statically).",
+                "static": f"Keep static when the display crop has H/W <= {SCROLL_VIEWPORT_H_OVER_W}.",
+                "slow_pan_down": f"Scroll down only when the display crop has H/W > {SCROLL_VIEWPORT_H_OVER_W}.",
             },
         },
     }

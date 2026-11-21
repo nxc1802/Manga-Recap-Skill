@@ -2,7 +2,7 @@
 from src.core.execution_policy import enforce_execution_policy
 from src.core.storage import get_project_dir, load_manifest, load_recap_script, read_json
 from src.render.visual_policy import generate_visual_plan, resolve_visual_plan
-from src.render.artifact_validation import fingerprint
+from src.core.storage import calculate_sha256
 
 
 def handle_visual_plan(args):
@@ -17,7 +17,7 @@ def handle_visual_plan(args):
     if args.regenerate:
         plan = generate_visual_plan(chapter, manifest, script, **kwargs)
         if path.exists():
-            path.replace(chapter / f"visual_plan.stale.{fingerprint(path)[:16]}.json")
+            path.replace(chapter / f"visual_plan.stale.{calculate_sha256(path)[:16]}.json")
     else:
         plan = resolve_visual_plan(chapter, manifest, script, **kwargs)
     plan.save(path)

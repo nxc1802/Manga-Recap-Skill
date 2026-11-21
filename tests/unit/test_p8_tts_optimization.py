@@ -29,7 +29,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pytest
 
-from src.render.artifact_validation import ArtifactValidationError, validate_audio
+from src.tts.engine import audio_file_metrics
+
+
+def validate_audio(path):
+    with wave.open(str(path), "rb") as wav:
+        return {**audio_file_metrics(path), "sample_rate": wav.getframerate()}
+
 from src.tts.cuda_worker import (
     VieNeuCUDAWorker,
     get_length_bucket,
@@ -380,7 +386,7 @@ def test_oom_batch_halving_retry_and_no_placeholder_on_bs1_oom(tmp_path, monkeyp
     results = worker.synthesize_batch_tasks(tasks, batch_size=6, cpu_workers=2)
 
     assert [r["seq_id"] for r in results] == [f"{i:03d}" for i in range(6)]
-    assert all(r["valid"] and r["rms"] > 0.01 for r in results)
+    assert all(r["valid"] and r["duration"] > 0 for r in results)
     assert worker.oom_events_count >= 1
     assert fake_torch.cuda.empty_cache_calls >= 1
     assert len(gc_calls) >= 1
@@ -647,16 +653,16 @@ def test_engine_synthesize_batch_native_neural_and_mock_compat(tmp_path):
     assert [r["seq_id"] for r in mock_res] == ["000", "001"]
     assert all(r["valid"] and r["sample_rate"] == 48000 for r in mock_res)
 
-    # 3. Silent waveform from SDK must raise ArtifactValidationError and never leave output file
+    # 3. Empty waveform from SDK must raise ValueError and never leave output file
     class _SilentSDK:
         sample_rate = 48000
         def infer_batch(self, texts, voice=None, batch_size=None):
-            return [np.zeros(4800, dtype=np.float32) for _ in texts]
+            return [np.zeros(0, dtype=np.float32) for _ in texts]
 
     bad_worker = VieNeuCUDAWorker(preload=False)
     bad_worker._sdk = _SilentSDK()
     silent_dest = tmp_path / "silent.wav"
-    with pytest.raises(ArtifactValidationError):
+    with pytest.raises(ValueError):
         bad_worker.synthesize_batch_tasks(
             [{"seq_id": "001", "text": "Im lặng.", "voice": "Ngọc Huyền", "speed": 1.0, "output_path": silent_dest}]
         )

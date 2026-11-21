@@ -12,7 +12,6 @@ from src.core.streaming_segmenter import StreamingSegmenter
 from src.core.visual_contract import ProductionMotion
 from src.render.visual_policy import generate_visual_plan
 
-pytestmark = pytest.mark.ci_l1
 
 
 def _make_synthetic_chapter(tmp_path: Path) -> Path:

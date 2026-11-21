@@ -1,6 +1,6 @@
 """
 src/core/storage.py
-Local JSON Storage Engine & File Locking for Manga Recap Agentic Skill V3.
+Atomic JSON storage and file locking for Manga Recap.
 Features:
 - Crash-consistent atomic JSON writes with fsync and inode replacement
 - Safe JSON reader with structured exception handling
@@ -799,7 +799,6 @@ def safe_cleanup_chapter_intermediates(
         "release_state.json",
         "series_setup_answers.json",
         "visual_plan.json",
-        "artifact_validation.json",
         "archive_manifest.json",
         "archive_receipt.json",
         "youtube_receipt.json",

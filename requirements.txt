@@ -4,6 +4,7 @@
 
 # Core Application & Storage
 httpx
+requests
 pydantic
 pillow
 pyyaml
@@ -16,7 +17,7 @@ beautifulsoup4
 vieneu>=3.8.3
 
 
-# Hugging Face private archive and verified restore (V4)
+# Hugging Face private archive and verified restore
 huggingface_hub>=0.26.0
 
 # Testing & Quality Assurance

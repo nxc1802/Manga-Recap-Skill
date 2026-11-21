@@ -68,7 +68,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     """Synthesizes speech audio for chapter script segments using local VieNeu-TTS engine."""
     from src.core.execution_policy import enforce_execution_policy
     enforce_execution_policy("tts", args)
-    from src.render.artifact_validation import validate_audio
+    from src.core.utils import get_wav_duration
     project_slug = getattr(args, "project", "")
     chapter_num = getattr(args, "chapter", None)
     voice_override = getattr(args, "voice", None)
@@ -149,32 +149,11 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
             for old_clip in audio_clips_dir.glob("*.wav"):
                 old_clip.unlink(missing_ok=True)
 
-        # Check if voice_selection.json exists to load approved strategy, voice, and speed
-        voice_sel_file = project_dir / "voice_selection.json"
-        if not voice_sel_file.exists():
-            voice_sel_file = chap_dir / "voice_selection.json"
-
-        approved_voice = None
-        approved_speed = None
-        approved_character_mapping: Dict[str, str] = {}
-        if voice_sel_file.exists():
-            try:
-                import json
-                from src.core.schemas import VoiceSelectionApproval
-                sel_data = json.loads(voice_sel_file.read_text(encoding="utf-8"))
-                appr = VoiceSelectionApproval.model_validate(sel_data)
-                if appr.is_approved():
-                    approved_voice = appr.primary_voice
-                    approved_speed = appr.speed
-                    approved_character_mapping = appr.character_voice_mapping or {}
-            except Exception:
-                pass
-
-        from src.core.series_setup import require_series_setup
+        from src.core.human_review import require_voice_approval
         from src.tts.catalog import resolve_voice_id
-        confirmed = require_series_setup(project_slug, project_dir=project_dir)
-        default_voice = resolve_voice_id(str(confirmed.answers["Q03"].user_answer))
-        default_speed = float(str(confirmed.answers["Q04"].user_answer).lower().rstrip("x"))
+        approval = require_voice_approval(project_dir)
+        default_voice = resolve_voice_id(approval.primary_voice)
+        default_speed = approval.speed
         if voice_override and resolve_voice_id(voice_override) != default_voice:
             raise CliValidationError("Voice override conflicts with confirmed Q03")
         if speed_override and speed_override != default_speed:
@@ -228,7 +207,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                     and (seg.synthesized_voice == voice or seg.voice_id == voice)
                 ):
                     try:
-                        dur = validate_audio(seg_audio_file)["duration"]
+                        dur = get_wav_duration(seg_audio_file)
                         if dur > 0:
                             actual_checksum = calculate_sha256(seg_audio_file)
                             if seg.checksum == actual_checksum:
@@ -260,7 +239,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                     emotion_cue=s.emotion_cue,
                     force=force_resynth,
                 )
-                dur = validate_audio(s_file)["duration"]
+                dur = get_wav_duration(s_file)
                 s.synthesized_voice = v
                 if v_s == "manual":
                     s.voice_id = v
@@ -268,7 +247,7 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                 else:
                     s.voice_id = v
                     s.voice_source = "tts"
-                actual_checksum = calculate_sha256(s_file)
+                actual_checksum = checksum
                 s.audio_path = str(s_file.relative_to(chap_dir))
                 s.duration = dur
                 s.checksum = actual_checksum
@@ -312,13 +291,14 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
                         sf.unlink()
                     except Exception:
                         pass
+            (chap_dir / "visual_plan.json").unlink(missing_ok=True)
             reset_stage_checkpoint(chap_dir, StageType.RENDER)
             reset_stage_checkpoint(chap_dir, StageType.FINALIZE)
 
         if not script_obj.segments:
             raise CliValidationError("Empty script cannot complete audio stage")
         for segment in script_obj.segments:
-            validate_audio(chap_dir / segment.audio_path)
+            get_wav_duration(chap_dir / segment.audio_path)
         # Checkpoint -> COMPLETED
         update_checkpoint(
             chap_dir,

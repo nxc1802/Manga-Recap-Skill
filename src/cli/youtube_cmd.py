@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.cli.exit_codes import CliValidationError
-from src.core.contracts import ReleaseState, YouTubeReceipt
+from src.core.schemas import YouTubeReceipt
 from src.core.logger import logger
-from src.core.schemas import ChapterMarker, FeatureTimeline, YouTubeMetadata, utc_iso_now
+from src.core.schemas import FeatureTimeline, YouTubeMetadata, utc_iso_now
 from src.core.series_setup import _normalize_bool, require_series_setup
 from src.core.storage import (
     StorageFileNotFoundError,
@@ -33,385 +33,19 @@ from src.core.utils import DependencyNotFoundError
 from src.youtube.account_manager import YOUTUBE_SCOPES, YouTubeAccountManager, account_manager
 
 
-def format_seconds_to_timestamp(seconds: float) -> str:
-    """Formats seconds to standard YouTube MM:SS or HH:MM:SS timestamp string."""
-    total_secs = int(max(0, seconds))
-    hours = total_secs // 3600
-    minutes = (total_secs % 3600) // 60
-    secs = total_secs % 60
-    if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
+from src.youtube.metadata import (
+    build_youtube_chapter_markers, build_youtube_description, format_seconds_to_timestamp,
+    generate_timestamps_from_script, handle_youtube_metadata,
+)
 
 
-def generate_timestamps_from_script(script_data: Dict[str, Any]) -> List[Dict[str, str]]:
-    """
-    Computes cumulative timestamps for segments from script.json duration metadata.
-    Guarantees first marker is 00:00 and provides minimum 3 key markers.
-    """
-    segments = script_data.get("segments", [])
-    if not segments:
-        return [{"time": "00:00", "label": "Bắt đầu câu chuyện"}]
-
-    timestamps: List[Dict[str, str]] = []
-    current_time = 0.0
-
-    # Ensure 00:00 start marker
-    first_seg = segments[0]
-    initial_label = "Mở đầu & Bối cảnh"
-    if first_seg.get("narrator_text"):
-        # Extract short phrase for label
-        first_words = first_seg["narrator_text"][:40].strip()
-        if first_words:
-            initial_label = f"Mở đầu: {first_words}..."
-    timestamps.append({"time": "00:00", "label": initial_label})
-
-    # Select spaced highlight points (every 30-45s or major action shift)
-    last_marker_time = 0.0
-    for idx, seg in enumerate(segments):
-        duration = float(seg.get("duration", 0.0) or 4.0)
-        current_time += duration
-
-        # If more than 25 seconds elapsed and not last segment, create a chapter marker
-        if current_time - last_marker_time >= 25.0 and idx < len(segments) - 1:
-            t_str = format_seconds_to_timestamp(current_time)
-            text_snippet = seg.get("narrator_text", "")[:35].strip()
-            char = seg.get("character", "")
-            if char and char != "narrator":
-                label = f"{char}: {text_snippet}..."
-            elif text_snippet:
-                label = f"{text_snippet}..."
-            else:
-                label = f"Diễn biến hồi {len(timestamps) + 1}"
-
-            timestamps.append({"time": t_str, "label": label})
-            last_marker_time = current_time
-
-    # If fewer than 3 markers, synthesize midpoint and climax markers
-    if len(timestamps) < 3 and current_time > 10.0:
-        mid_time = current_time / 2.0
-        timestamps.insert(1, {"time": format_seconds_to_timestamp(mid_time), "label": "Cao trào xung đột"})
-
-    return timestamps
-
-
-def build_youtube_chapter_markers(
-    timeline: FeatureTimeline,
-    min_interval_seconds: float = 10.0,
-    min_markers_count: int = 3,
-) -> List[Dict[str, str]]:
-    """
-    Ensures strict compliance with YouTube Chapters specification:
-    1. First timestamp MUST start at 00:00.
-    2. At least 3 chapter markers.
-    3. Each marker interval >= 10.0 seconds.
-    4. Strictly monotonic and ascending.
-    """
-    markers: List[Dict[str, Any]] = []
-
-    use_chapters = len(timeline.chapters) >= min_markers_count
-    if use_chapters:
-        for idx in range(1, len(timeline.chapters)):
-            if timeline.chapters[idx].start_seconds - timeline.chapters[idx - 1].start_seconds < min_interval_seconds:
-                use_chapters = False
-                break
-
-    if use_chapters:
-        for idx, ch in enumerate(timeline.chapters):
-            t_str = "00:00" if idx == 0 else ch.start_timestamp
-            c_label = ch.title
-            if not c_label.lower().startswith(f"tập {ch.chapter_number}".lower()):
-                c_label = f"Tập {ch.chapter_number}: {ch.title}"
-            markers.append({
-                "time": t_str,
-                "label": c_label,
-                "seconds": 0.0 if idx == 0 else ch.start_seconds,
-            })
-    else:
-        # Fallback expansion using sub_markers from each chapter
-        all_sub_markers: List[ChapterMarker] = []
-        for ch in timeline.chapters:
-            all_sub_markers.extend(ch.sub_markers)
-
-        spaced_markers: List[ChapterMarker] = []
-        last_sec = -999.0
-        for sm in all_sub_markers:
-            if sm.seconds - last_sec >= min_interval_seconds or not spaced_markers:
-                spaced_markers.append(sm)
-                last_sec = sm.seconds
-
-        if spaced_markers:
-            if spaced_markers[0].seconds > 0.0 or spaced_markers[0].time != "00:00":
-                spaced_markers[0] = ChapterMarker(time="00:00", label="Mở đầu câu chuyện", seconds=0.0)
-        else:
-            spaced_markers.append(ChapterMarker(time="00:00", label="Mở đầu câu chuyện", seconds=0.0))
-
-        if len(spaced_markers) < min_markers_count and timeline.total_duration_seconds >= 30.0:
-            step = timeline.total_duration_seconds / float(min_markers_count)
-            spaced_markers = [
-                ChapterMarker(time="00:00", label="Mở đầu & Xuất thế", seconds=0.0),
-                ChapterMarker(time=format_seconds_to_timestamp(step), label="Cao trào xung đột", seconds=round(step, 2)),
-                ChapterMarker(time=format_seconds_to_timestamp(step * 2), label="Quyết chiến hồi kết", seconds=round(step * 2, 2)),
-            ]
-
-        for sm in spaced_markers:
-            markers.append({
-                "time": sm.time,
-                "label": sm.label,
-                "seconds": sm.seconds,
-            })
-
-    # Return clean format
-    return [{"time": m["time"], "label": m["label"]} for m in markers]
-
-
-def build_youtube_description(
-    project_title: str,
-    chapter_num: str,
-    story_summary: str,
-    timestamps: List[Dict[str, str]],
-    custom_hook: Optional[str] = None,
-) -> str:
-    """Builds a rich, search-engine-optimized description block adhering to YouTube guidelines."""
-    hook_line = custom_hook or (
-        f"🔥 Khám phá tập {chapter_num} siêu phẩm '{project_title}' — Đón xem cuộc phiêu lưu kịch tính không thể rời mắt!"
-    )
-
-    # Format timestamps block
-    ts_lines = [f"{m['time']} - {m['label']}" for m in timestamps]
-    timestamps_block = "\n".join(ts_lines)
-
-    # Clean story summary (extract up to 2 paragraphs)
-    summary_clean = ""
-    if story_summary:
-        paragraphs = [p.strip() for p in story_summary.split("\n\n") if p.strip() and not p.startswith("#")]
-        if paragraphs:
-            summary_clean = "\n\n".join(paragraphs[:2])
-
-    if not summary_clean:
-        summary_clean = f"Chào mừng bạn đến với video tóm tắt và đánh giá trọn bộ tập {chapter_num} của bộ truyện '{project_title}'."
-
-    description_parts = [
-        hook_line,
-        "👉 Đăng ký kênh và bấm chuông 🔔 để không bỏ lỡ các tập tiếp theo!",
-        "",
-        "═══════════════════════════════════════",
-        "📌 MỤC LỤC & TIMESTAMPS:",
-        timestamps_block,
-        "",
-        "═══════════════════════════════════════",
-        "📖 TÓM TẮT NỘI DUNG TẬP:",
-        summary_clean,
-        "",
-        "═══════════════════════════════════════",
-        "⚖️ DISCLAIMER & BẢN QUYỀN:",
-        "Copyright Disclaimer Under Section 107 of the Copyright Act 1976: Allowance is made for 'fair use' for purposes such as criticism, comment, news reporting, teaching, scholarship, and research.",
-        "Mọi hình ảnh và nội dung thuộc quyền sở hữu của tác giả gốc. Video được biên tập và thuyết minh nhằm mục đích đánh giá và giới thiệu tác phẩm nghệ thuật đến bạn đọc.",
-        "",
-        "#MangaRecap #ReviewTruyen #Webtoon #Manhwa #TomTatTruyen",
-    ]
-
-    return "\n".join(description_parts)
-
-
-def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
-    """Generates and persists YouTube publishing metadata (title, description, tags, timestamps)."""
-    project_slug = getattr(args, "project", "")
-    chapter_num = getattr(args, "chapter", None)
-
-    if not project_slug:
-        raise CliValidationError("Project slug (--project) is required.")
-    if chapter_num is None:
-        raise CliValidationError("Chapter number (--chapter) is required.")
-
-    proj_dir = get_project_dir(project_slug)
-    out_dir = get_output_dir(project_slug)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    is_feature = str(chapter_num).lower() in ("feature", "all", "compilation", "full")
-
-    # 1. Load project info & story summary
-    project_title = project_slug
-    project_json = proj_dir / "project.json"
-    if project_json.exists():
-        try:
-            p_data = read_json(project_json)
-            project_title = p_data.get("title") or project_slug
-        except Exception:
-            pass
-
-    story_summary_text = ""
-    summary_path = proj_dir / "story_summary.md"
-    if summary_path.exists():
-        story_summary_text = summary_path.read_text(encoding="utf-8")
-
-    thumb_concept = "Ảnh nhân vật chính trong trạng thái biến đổi hoặc giao đấu gay cấn, viền vàng nổi bật"
-
-    if is_feature:
-        # Check feature timeline
-        timeline_path = proj_dir / "feature_timeline.json"
-        if not timeline_path.exists():
-            timeline_path = out_dir / f"{project_slug}_timeline.json"
-
-        if timeline_path.exists():
-            t_data = read_json(timeline_path)
-            timeline = FeatureTimeline.model_validate(t_data)
-            timestamps = build_youtube_chapter_markers(timeline)
-            first_c = timeline.chapters[0].chapter_number if timeline.chapters else "1"
-            last_c = timeline.chapters[-1].chapter_number if timeline.chapters else "1"
-            default_title = f"[Trọn Bộ] {project_title} - Full Recap Tập {first_c}-{last_c}"
-        else:
-            timestamps = [{"time": "00:00", "label": "Bắt đầu full recap"}]
-            default_title = f"[Trọn Bộ] {project_title} - Full Recap Toàn Bộ Các Tập"
-
-        # Check for feature thumbnail
-        feat_thumb = out_dir / "feature_thumbnail.jpg"
-        if feat_thumb.exists():
-            thumb_concept = f"Ảnh đại diện feature chất lượng cao tại {feat_thumb.name}"
-
-        # Formulate Title & Description
-        title = getattr(args, "title", None) or default_title
-        if len(title) > 90:
-            title = title[:87] + "..."
-
-        description = getattr(args, "description", None) or build_youtube_description(
-            project_title=project_title,
-            chapter_num="Trọn Bộ",
-            story_summary=story_summary_text,
-            timestamps=timestamps,
-        )
-
-        user_tags = getattr(args, "tags", None)
-        tags = [t.strip() for t in user_tags.split(",") if t.strip()] if user_tags else [
-            "Manga Recap",
-            "Review Truyện",
-            project_title,
-            f"{project_title} trọn bộ",
-            "Webtoon",
-            "Manhwa",
-            "Tóm tắt truyện tranh",
-            "Full recap",
-        ]
-
-        privacy = getattr(args, "privacy", "private") or "private"
-
-        metadata = YouTubeMetadata(
-            project_slug=project_slug,
-            chapter_number="feature",
-            title=title,
-            description=description,
-            tags=tags,
-            category_id="24",
-            privacy_status=privacy,
-            made_for_kids=False,
-            timestamps=timestamps,
-            thumbnail_concept=thumb_concept,
-        )
-
-        meta_path = out_dir / "feature.youtube.json"
-        atomic_write_json(meta_path, metadata)
-        staged_meta_path = meta_path
-        logger.info(f"Feature YouTube metadata generated: {meta_path}")
-
-        return {
-            "status": "success",
-            "project_slug": project_slug,
-            "chapter_number": "feature",
-            "metadata_path": str(meta_path),
-            "staged_path": str(staged_meta_path),
-            "title": title,
-            "timestamps_count": len(timestamps),
-            "tags_count": len(tags),
-        }
-
-    else:
-        chap_dir = get_chapter_dir(project_slug, chapter_num)
-        if not chap_dir.exists():
-            raise StorageFileNotFoundError(f"Chapter directory does not exist: {chap_dir}")
-
-        script_path = chap_dir / "script.json"
-        if not script_path.exists():
-            raise StorageFileNotFoundError(f"script.json missing in {chap_dir}. Run agent scripting first.")
-
-        script_data = read_json(script_path)
-        timestamps = generate_timestamps_from_script(script_data)
-
-        # Check if AI-generated thumbnail exists in output directory
-        chap_thumb = out_dir / f"chapter_{chapter_num}_thumbnail.jpg"
-        if chap_thumb.exists():
-            thumb_concept = f"AI Generated Thumbnail tại {chap_thumb.name}"
-
-        user_title = getattr(args, "title", None)
-        if user_title:
-            title = user_title.strip()
-        else:
-            title = f"[Review Truyện] {project_title} - Tập {chapter_num}"
-            if len(title) > 90:
-                title = title[:87] + "..."
-
-        user_desc = getattr(args, "description", None)
-        description = user_desc.strip() if user_desc else build_youtube_description(
-            project_title=project_title,
-            chapter_num=str(chapter_num),
-            story_summary=story_summary_text,
-            timestamps=timestamps,
-        )
-
-        user_tags = getattr(args, "tags", None)
-        tags = [t.strip() for t in user_tags.split(",") if t.strip()] if user_tags else [
-            "Manga Recap",
-            "Review Truyện",
-            project_title,
-            f"{project_title} tập {chapter_num}",
-            "Webtoon",
-            "Manhwa",
-            "Tóm tắt truyện tranh",
-            "Truyện tranh hay",
-        ]
-
-        privacy = getattr(args, "privacy", "private") or "private"
-
-        metadata = YouTubeMetadata(
-            project_slug=project_slug,
-            chapter_number=str(chapter_num),
-            title=title,
-            description=description,
-            tags=tags,
-            category_id="24",
-            privacy_status=privacy,
-            made_for_kids=False,
-            timestamps=timestamps,
-            thumbnail_concept=thumb_concept,
-        )
-
-        meta_path = chap_dir / "youtube_metadata.json"
-        atomic_write_json(meta_path, metadata)
-
-        staged_meta_name = format_chapter_filename(chapter_num, ext="youtube.json", padded=True)
-        staged_meta_path = out_dir / staged_meta_name
-        shutil.copy2(meta_path, staged_meta_path)
-
-        logger.info(f"YouTube metadata generated successfully: {meta_path} (Staged to {staged_meta_path})")
-
-        return {
-            "status": "success",
-            "project_slug": project_slug,
-            "chapter_number": str(chapter_num),
-            "metadata_path": str(meta_path),
-            "staged_path": str(staged_meta_path),
-            "title": title,
-            "timestamps_count": len(timestamps),
-            "tags_count": len(tags),
-        }
-
-
-
-def get_youtube_oauth_credentials(account_name: Optional[str] = None, force_reauth: bool = False):
+def get_youtube_oauth_credentials(account_name: Optional[str] = None, force_reauth: bool = False, *, allow_interactive: bool = False):
     """
     Retrieves and refreshes YouTube OAuth2 credentials for the specified or default account.
     Maintains 100% backward compatibility with legacy 0-argument callers.
     """
-    creds, _ = account_manager.get_credentials(account_name=account_name, force_reauth=force_reauth)
+    creds, _ = account_manager.get_credentials(account_name=account_name, force_reauth=force_reauth,
+                                               allow_interactive=allow_interactive)
     return creds
 
 
@@ -442,6 +76,7 @@ def handle_youtube_accounts(args: argparse.Namespace) -> Dict[str, Any]:
             account_name=account_name,
             client_secrets_file=secrets,
             set_default=set_default,
+            allow_interactive=not (getattr(args, "json", False) or getattr(args, "json_mode", False)),
         )
         reg = account_manager.load_registry()
         return {
@@ -493,10 +128,7 @@ def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
     account_name = getattr(args, "account", None)
     force = getattr(args, "force", False)
 
-    try:
-        creds = get_youtube_oauth_credentials(account_name=account_name, force_reauth=force)
-    except TypeError:
-        creds = get_youtube_oauth_credentials()
+    creds = get_youtube_oauth_credentials(account_name=account_name, force_reauth=force)
 
     legacy_token_env = os.getenv("YOUTUBE_CREDENTIALS_FILE")
     if legacy_token_env and not account_name:
@@ -732,10 +364,8 @@ def _validate_upload_readiness(
     out_dir: Path,
     video_path: Path,
 ) -> None:
-    """Validate human preview approval, final rendered artifacts, and release state before upload."""
+    """Check preview approval and required export files before upload."""
     from src.core.human_review import require_preview_approval
-    from src.core.state_machine import load_release_record
-    from src.render.artifact_validation import ArtifactValidationError
     from src.render.chapter_renderer import validate_existing_chapter
 
     require_preview_approval(proj_dir)
@@ -749,7 +379,7 @@ def _validate_upload_readiness(
             for ch in timeline.chapters:
                 try:
                     validate_existing_chapter(proj_dir, str(ch.chapter_number), quality="final")
-                except (ArtifactValidationError, ValueError) as exc:
+                except (OSError, ValueError) as exc:
                     raise CliValidationError(
                         f"Feature readiness failed for chapter {ch.chapter_number}: {exc}"
                     ) from exc
@@ -759,18 +389,11 @@ def _validate_upload_readiness(
 
     try:
         validate_existing_chapter(proj_dir, str(chapter_num), quality="final", video_path=video_path)
-    except (ArtifactValidationError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise CliValidationError(
             f"Chapter {chapter_num} final artifact validation failed before upload: {exc}"
         ) from exc
 
-    if (proj_dir / "release_state.json").is_file():
-        rec = load_release_record(proj_dir)
-        if rec.chapter_number == str(chapter_num) and rec.state != ReleaseState.PRODUCTION_READY:
-            raise CliValidationError(
-                f"Chapter {chapter_num} release_state is '{rec.state.value}'; "
-                "must be 'PRODUCTION_READY' before YouTube upload."
-            )
 
 
 def _extract_upload_evidence(
@@ -831,6 +454,9 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         or getattr(args, "confirm_gate", False)
     )
 
+    allow_oauth = is_interactive_flag and not is_json_mode and sys.stdin.isatty()
+    if is_interactive_flag and not allow_oauth:
+        raise CliValidationError("Interactive channel selection requires a terminal without --json.")
     if is_interactive_flag or (cli_account is None and not is_json_mode and sys.stdin.isatty()):
         target_account = prompt_interactive_channel_selection(account_manager)
         channel_reconfirmed = True
@@ -874,18 +500,18 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         chapter_num, proj_dir, chap_dir, out_dir, getattr(args, "thumbnail", None)
     )
 
-    # 4. Validate chapter readiness (require_preview_approval + final artifact validation + release state)
+    # Check preview approval and the files selected for upload.
     _validate_upload_readiness(project_slug, chapter_num, proj_dir, out_dir, video_path)
 
-    # 5. Enforce Q07 thumbnail existence before uploading video
-    q07_enabled = _normalize_bool(setup.answers["Q07"].user_answer) is True
+    # An older series can still require a custom thumbnail.
+    thumbnail_choice = setup.answers.get("Q07")
+    q07_enabled = thumbnail_choice is not None and _normalize_bool(thumbnail_choice.user_answer) is True
     if q07_enabled and (thumbnail_path is None or not thumbnail_path.is_file()):
         raise CliValidationError(
-            f"Q07 thumbnail is enabled for '{project_slug}', but thumbnail.jpg is missing for chapter {chapter_num}."
+            f"A custom thumbnail is required for '{project_slug}', but thumbnail.jpg is missing for chapter {chapter_num}."
         )
     if (
         not is_feature
-        and q07_enabled
         and thumbnail_path is not None
         and (chap_dir / "thumbnail_selection.json").is_file()
         and thumbnail_path == (chap_dir / "thumbnail.jpg").resolve()
@@ -917,10 +543,7 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     channel_title = acc_info.channel_title
     channel_id = acc_info.channel_id
 
-    try:
-        creds = get_youtube_oauth_credentials(account_name=target_account)
-    except TypeError:
-        creds = get_youtube_oauth_credentials()
+    creds = get_youtube_oauth_credentials(account_name=target_account, allow_interactive=allow_oauth)
 
     import importlib
     try:
@@ -1109,12 +732,6 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     receipt_file.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(receipt_file, receipt_obj)
 
-    if not is_feature and (proj_dir / "release_state.json").is_file():
-        from src.core.state_machine import advance_release_state, load_release_record
-        rec = load_release_record(proj_dir)
-        if rec.chapter_number == str(chapter_num) and rec.state == ReleaseState.PRODUCTION_READY:
-            advance_release_state(proj_dir, ReleaseState.UPLOADED, chapter_number=str(chapter_num))
-
     if getattr(args, "wait", False):
         verify_args = argparse.Namespace(
             youtube_action="verify",
@@ -1163,11 +780,36 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _wait_for_youtube_processing(youtube, video_id, account, timeout, interval, max_backoff, max_attempts):
+    deadline = time.monotonic() + timeout
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = youtube.videos().list(part="status,snippet,contentDetails", id=video_id).execute()
+        except Exception as exc:
+            raise CliValidationError(f"Could not check YouTube video {video_id}: {exc}") from exc
+        items = response.get("items", [])
+        if not items:
+            raise CliValidationError(f"YouTube video {video_id} was not found on account {account}")
+        status = items[0].get("status", {})
+        state = str(status.get("uploadStatus", "")).strip()
+        if state == "processed":
+            return items[0], attempt
+        if state not in _TRANSIENT_UPLOAD_STATUSES:
+            reason = status.get("rejectionReason") or status.get("failureReason") or "unknown"
+            raise CliValidationError(f"YouTube processing failed for {video_id}: {state} ({reason})")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or attempt >= max_attempts:
+            raise CliValidationError(f"Timed out waiting for YouTube video {video_id} (last status: {state})")
+        if interval > 0:
+            time.sleep(min(interval, remaining))
+            interval = min(max_backoff, interval * 1.5)
+
+
 def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
     """
     Polls YouTube Data API until uploadStatus == 'processed' (within bounded timeout/backoff),
     verifies channel_id, privacy_status, closed captions, and thumbnail evidence,
-    emits a validated YouTubeReceipt (status='verified'), and advances ReleaseState.YOUTUBE_VERIFIED.
+    writes a YouTubeReceipt with status='verified'.
     """
     project_slug = getattr(args, "project", "")
     chapter_num = getattr(args, "chapter", "1")
@@ -1226,10 +868,7 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("YouTube verification must use the exact upload account.")
     acc_info = account_manager.get_account(target_account)
     account_name_resolved = acc_info.account_name
-    try:
-        creds = get_youtube_oauth_credentials(account_name=target_account)
-    except TypeError:
-        creds = get_youtube_oauth_credentials()
+    creds = get_youtube_oauth_credentials(account_name=target_account)
 
     try:
         import importlib
@@ -1239,55 +878,11 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
         raise DependencyNotFoundError("Missing googleapiclient. Install with: pip install google-api-python-client") from e
 
     youtube = build("youtube", "v3", credentials=creds)
-    logger.info(f"Polling YouTube Data API for video {video_id} (timeout={timeout}s, interval={poll_interval}s)...")
-
-    start_time = time.monotonic()
-    simulated_elapsed = 0.0
-    current_interval = poll_interval
-    attempt = 0
-    max_zero_interval_attempts = int(getattr(args, "max_attempts", 50) or 50)
-    v_item: Dict[str, Any] = {}
-    upload_status = ""
-
-    while True:
-        attempt += 1
-        try:
-            video_res = youtube.videos().list(part="status,snippet,contentDetails", id=video_id).execute()
-        except Exception as e:
-            raise CliValidationError(f"Failed to query YouTube Data API for video {video_id}: {e}") from e
-
-        items = video_res.get("items", [])
-        if not items:
-            raise CliValidationError(
-                f"Video ID '{video_id}' not found on YouTube for account '{account_name_resolved}'."
-            )
-
-        v_item = items[0]
-        v_status = v_item.get("status", {})
-        upload_status = str(v_status.get("uploadStatus", "")).strip()
-
-        if upload_status == "processed":
-            break
-
-        if upload_status in _TERMINAL_FAILURE_STATUSES or upload_status not in _TRANSIENT_UPLOAD_STATUSES:
-            rejection = v_status.get("rejectionReason") or v_status.get("failureReason") or "unknown"
-            raise CliValidationError(
-                f"YouTube video {video_id} uploadStatus failed: '{upload_status}' (reason: {rejection})"
-            )
-
-        effective_elapsed = max(time.monotonic() - start_time, simulated_elapsed)
-        if effective_elapsed >= timeout or (poll_interval == 0 and attempt >= max_zero_interval_attempts):
-            raise CliValidationError(
-                f"Timed out after {timeout:.1f}s waiting for YouTube video {video_id} uploadStatus='processed' "
-                f"(last status: '{upload_status}', attempts: {attempt})"
-            )
-
-        sleep_for = min(current_interval, max(0.0, timeout - effective_elapsed))
-        if sleep_for > 0:
-            time.sleep(sleep_for)
-            simulated_elapsed += sleep_for
-        if current_interval > 0:
-            current_interval = min(max_backoff, current_interval * 1.5)
+    v_item, attempt = _wait_for_youtube_processing(
+        youtube, video_id, account_name_resolved, timeout, poll_interval, max_backoff,
+        int(getattr(args, "max_attempts", 50 if poll_interval == 0 else 10_000)),
+    )
+    upload_status = "processed"
 
     snippet = v_item.get("snippet", {})
     v_status = v_item.get("status", {})
@@ -1392,17 +987,6 @@ def handle_youtube_verify(args: argparse.Namespace) -> Dict[str, Any]:
     if not is_feature and out_dir.exists():
         staged_name = format_chapter_filename(chapter_num, ext="youtube_receipt.json", padded=True)
         atomic_write_json(out_dir / staged_name, verified_receipt)
-
-    if not is_feature and (proj_dir / "release_state.json").is_file():
-        from src.core.state_machine import advance_release_state, load_release_record
-        rec = load_release_record(proj_dir)
-        if rec.chapter_number == str(chapter_num):
-            if rec.state == ReleaseState.UPLOADED:
-                advance_release_state(proj_dir, ReleaseState.YOUTUBE_VERIFIED, chapter_number=str(chapter_num))
-            elif rec.state != ReleaseState.YOUTUBE_VERIFIED:
-                raise CliValidationError(
-                    f"Chapter {chapter_num} release_state is '{rec.state.value}'; expected 'UPLOADED' before verification."
-                )
 
     logger.info(f"YouTube verification successful for video {video_id}! Emitted receipt: {receipt_file}")
     return {

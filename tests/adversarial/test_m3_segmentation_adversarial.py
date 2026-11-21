@@ -8,7 +8,7 @@ Authored by M3 Challenger 1 to empirically challenge and verify:
 4. Schema & Checkpoint Integrity: PanelManifest compliance and CLI manga-recap segment exit codes / JSON envelopes
 """
 
-from v4_fixtures import init_confirmed_project
+from tests.v4_fixtures import init_confirmed_project
 
 import json
 import os
@@ -92,7 +92,7 @@ class TestBoundaryAndCornerCases:
     def test_zero_gutters_continuous_content(self, tmp_path):
         """
         Adversarial case: Chapter has ZERO gutters (continuous high-variance artwork across 3 pages).
-        Segmenter must not crash, must fall back to tall panel splitting, and must retain 100% of rows.
+        Segmenter keeps an uninterrupted strip for later panel routing.
         """
         raw_dir = tmp_path / "raw"
         panels_dir = tmp_path / "panels"
@@ -115,9 +115,9 @@ class TestBoundaryAndCornerCases:
         intervals = segmenter.detect_cut_intervals(row_means, row_vars)
         assert intervals == [(0, total_rows)]
 
-        # Refinement splits into valid panels
+        # Refinement retains the natural continuous strip.
         refined = segmenter.refine_intervals(intervals, row_vars)
-        assert len(refined) > 1
+        assert refined == [(0, total_rows)]
 
         # Check contiguity: start of next equals end of prev
         assert refined[0][0] == 0
@@ -195,11 +195,12 @@ class TestBoundaryAndCornerCases:
         assert (panels_dir / p.filename).exists()
         with Image.open(panels_dir / p.filename) as p_img:
             assert p_img.width == 1080
-            assert p_img.height == 2074
+            assert p_img.height == p.height == p.crop_box[3] - p.crop_box[1]
+            assert 1300 <= p_img.height <= 1320
 
-    def test_under_height_panel_padding_to_square(self, tmp_path):
+    def test_under_height_panel_preserves_natural_crop(self, tmp_path):
         """
-        Panel shorter than target_width (e.g. 600px < 1080px) must be padded evenly to 1080x1080 square.
+        A short panel keeps its natural dimensions for the Decision stage.
         """
         raw_dir = tmp_path / "raw"
         panels_dir = tmp_path / "panels"
@@ -217,11 +218,11 @@ class TestBoundaryAndCornerCases:
         assert len(panels) == 1
         p = panels[0]
         assert p.width == 1080
-        assert p.height == 1080
-        assert p.aspect_ratio == 1.0
+        assert p.height == 600
+        assert p.aspect_ratio == 1080 / 600
 
         with Image.open(panels_dir / p.filename) as p_img:
-            assert p_img.size == (1080, 1080)
+            assert p_img.size == (1080, 600)
 
     def test_very_long_panel_splitting(self, tmp_path):
         """

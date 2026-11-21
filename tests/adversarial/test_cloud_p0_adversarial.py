@@ -79,69 +79,6 @@ def cloud_service():
 # 1. Malicious Archive Extraction (Zip-Slip / Tar-Slip Attacks)
 # ==============================================================================
 
-class TestAdversarialArchiveSecurity:
-    """Stress tests protecting against path traversal in cloud output extraction."""
-
-    def test_tar_slip_deep_parent_traversal(self, cloud_service, adversarial_workspace):
-        """Attempts to write outside chapter directory using ../../../../tmp."""
-        chap_dir = adversarial_workspace["chapter_dir"]
-        escaped_file = adversarial_workspace["root"] / "pwned_deep_parent.txt"
-        if escaped_file.exists():
-            escaped_file.unlink()
-
-        tar_buf = io.BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w:gz") as tar:
-            data = b"TRAVERSAL_PAYLOAD"
-            # Target deeply outside chapter directory
-            ti = tarfile.TarInfo(name=f"../../../../{escaped_file.name}")
-            ti.size = len(data)
-            ti.mtime = int(time.time())
-            tar.addfile(ti, io.BytesIO(data))
-
-        download_dir = adversarial_workspace["root"] / "dl_slip_1"
-        download_dir.mkdir(parents=True, exist_ok=True)
-        (download_dir / "audio_clips.tar.gz").write_bytes(tar_buf.getvalue())
-        (download_dir / "chapter_1.mp4").write_bytes(b"\x00\x00\x00 ftypisom" + b"X" * 1024)
-
-        try:
-            cloud_service.sync_results("adv_project", "1", download_dir)
-        except (ValueError, RuntimeError, PermissionError):
-            pass
-
-        assert not escaped_file.exists(), "CRITICAL SECURITY BREACH: Deep parent Tar-Slip escaped boundary!"
-
-    def test_tar_slip_absolute_path_traversal(self, cloud_service, adversarial_workspace):
-        """Attempts to write to absolute path via tarball entry."""
-        chap_dir = adversarial_workspace["chapter_dir"]
-        escaped_file = adversarial_workspace["root"] / "pwned_absolute.txt"
-        if escaped_file.exists():
-            escaped_file.unlink()
-
-        tar_buf = io.BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w:gz") as tar:
-            data = b"ABSOLUTE_PATH_PAYLOAD"
-            ti = tarfile.TarInfo(name=str(escaped_file.resolve()))
-            ti.size = len(data)
-            ti.mtime = int(time.time())
-            tar.addfile(ti, io.BytesIO(data))
-
-        download_dir = adversarial_workspace["root"] / "dl_slip_2"
-        download_dir.mkdir(parents=True, exist_ok=True)
-        (download_dir / "audio_clips.tar.gz").write_bytes(tar_buf.getvalue())
-        (download_dir / "chapter_1.mp4").write_bytes(b"\x00\x00\x00 ftypisom" + b"X" * 1024)
-
-        try:
-            cloud_service.sync_results("adv_project", "1", download_dir)
-        except (ValueError, RuntimeError, PermissionError):
-            pass
-
-        assert not escaped_file.exists(), "CRITICAL SECURITY BREACH: Absolute path Tar-Slip escaped boundary!"
-
-
-# ==============================================================================
-# 2. Corrupted and Incomplete Cloud Artifacts
-# ==============================================================================
-
 class TestAdversarialCorruptedArtifacts:
     """Stress tests verifying that corrupted artifacts never mark stages completed."""
 

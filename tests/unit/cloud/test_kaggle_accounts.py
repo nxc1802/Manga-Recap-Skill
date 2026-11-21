@@ -156,7 +156,7 @@ def test_reused_service_tries_all_accounts_without_persisting_failure_state(acco
 
 
 # The canonical fixture contains isolated image/PCM inputs, not live production evidence.
-from unit.test_canonical_workflow import unit_project
+from tests.unit.test_canonical_workflow import unit_project
 
 
 def test_real_dispatch_fallback_on_rejected_submission(accounts,unit_project,monkeypatch):

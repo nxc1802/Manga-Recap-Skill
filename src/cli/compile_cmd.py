@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -30,8 +31,7 @@ from src.core.storage import (
     read_json,
 )
 from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
-from src.render.validator import FFprobeValidator
-from src.cli.youtube_cmd import format_seconds_to_timestamp
+from src.youtube.metadata import format_seconds_to_timestamp
 
 
 
@@ -80,10 +80,10 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
             c_video_dir = chapters_dir / c_entry / "video"
             if c_video_dir.exists():
                 candidate_mp4s = [f for f in c_video_dir.glob("*.mp4") if not f.name.startswith(".")]
-                finals = sorted([f for f in candidate_mp4s if "final" in f.name.lower()])
-                non_previews = sorted([f for f in candidate_mp4s if "preview" not in f.name.lower()])
+                finals = sorted(f for f in candidate_mp4s if "final" in f.name.lower() and not f.name.startswith(("final.previous.", "final.stale.")))
+                non_previews = sorted(f for f in candidate_mp4s if "preview" not in f.name.lower() and not f.name.startswith(("final.previous.", "final.stale.")))
                 if finals:
-                    chapter_videos[c_num] = finals[-1]
+                    chapter_videos[c_num] = next((file for file in finals if file.name == "final.mp4"), finals[-1])
                 elif non_previews:
                     chapter_videos[c_num] = non_previews[-1]
                 elif candidate_mp4s:
@@ -225,8 +225,10 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
     def _probe_duration(vid_path: Path) -> float:
         if shutil.which("ffprobe"):
             try:
-                validator = FFprobeValidator()
-                probe_data = validator.probe_media_file(vid_path)
+                probe_data = json.loads(subprocess.check_output(
+                    ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(vid_path)],
+                    timeout=15,
+                ))
                 fmt_dur = probe_data.get("format", {}).get("duration")
                 if fmt_dur is not None:
                     d = float(fmt_dur)

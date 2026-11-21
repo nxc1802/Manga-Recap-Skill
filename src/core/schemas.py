@@ -1,6 +1,6 @@
 """
 src/core/schemas.py
-Enterprise Pydantic v2 schemas for Manga Recap Agentic Skill V3.
+Pydantic models for local manga recap projects.
 Governs: project.json, chapter.json, script.json, characters.json, manifest.json.
 """
 
@@ -653,7 +653,6 @@ Manifest = PanelManifest
 class VoiceSelectionApproval(BaseModel):
     """
     Schema for Review Gate 1 voice selection approval.
-    Fully synchronized with Lab UI export and backend validation contract.
     """
     model_config = ConfigDict(extra="ignore")
 
@@ -843,5 +842,52 @@ class FeatureTimeline(BaseModel):
     youtube_chapter_markers: List[ChapterMarker] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_iso_now)
 
+
+
+
+
+class ArchiveReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["4.0.0"] = "4.0.0"
+    receipt_type: Literal["huggingface_archive"] = "huggingface_archive"
+    project_slug: str
+    repo_id: str
+    commit_sha: str = Field(pattern=r"^[a-f0-9]{40}$")
+    remote_url: str
+    created_at: str
+    verified_file_count: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    status: Literal["uploaded", "verified"]
+    verification_revision: str | None = None
+    last_verified_at: str | None = None
+    restore_verified_at: str | None = None
+    restored_revision: str | None = None
+    restored_verified_files: int | None = Field(default=None, ge=0)
+
+
+class YouTubeReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["4.0.0"] = "4.0.0"
+    receipt_type: Literal["youtube_upload", "youtube_verification"] = "youtube_upload"
+    project_slug: str
+    chapter_number: str
+    video_id: str
+    video_url: str
+    account: str
+    channel_title: str
+    channel_id: str
+    title: str | None = None
+    upload_status: str | None = None
+    has_captions: bool | None = None
+    has_custom_thumbnail: bool | None = None
+    verified_at: str | None = None
+    privacy_status: Literal["private", "unlisted", "public"]
+    captions_uploaded: bool
+    thumbnail_uploaded: bool
+    captions_required: bool
+    thumbnail_required: bool
+    uploaded_at: str
+    status: Literal["uploaded", "verified"]
 
 

@@ -1,6 +1,7 @@
 import os
 import re
 import unicodedata
+import wave
 from pathlib import Path
 from src.core.storage import (
     read_json,
@@ -8,6 +9,22 @@ from src.core.storage import (
     cleanup_intermediate_files,
     StorageManager,
 )
+
+def assert_file_nonempty(path: Path) -> None:
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise FileNotFoundError(f"Missing or empty file: {path}")
+
+
+def get_wav_duration(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as wav:
+            if wav.getnframes() > 0 and wav.getframerate() > 0:
+                return wav.getnframes() / wav.getframerate()
+    except (wave.Error, EOFError) as exc:
+        raise ValueError(f"Invalid WAV header: {path}") from exc
+    raise ValueError(f"WAV contains no frames: {path}")
+
 
 def slugify_project_title(project_title: str) -> str:
     """

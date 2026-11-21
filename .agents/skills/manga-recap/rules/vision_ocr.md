@@ -95,3 +95,13 @@ Video Engine V2 supports 9 cinematic camera motion modes:
   - **Khuyến nghị 1 (An toàn nhất)**: Dùng chế độ `static` (dual-layer blurred background). Toàn bộ chiều dài tranh được giữ nguyên sắc nét, hai bên là cánh nền mờ nghệ thuật.
   - **Khuyến nghị 2 (Chuyển động)**: Dùng `vertical_scroll` hoặc `pan_down` với thời lượng đủ dài, bắt đầu từ đỉnh đầu nhân vật và kết thúc ở chân/đòn đánh, không cuộn qua khoảng trắng vô nghĩa.
   - Nếu User chọn `--no-animation`, toàn bộ panel được áp dụng chế độ `static` an toàn 100%.
+
+## Render aspect ratios
+
+| Ratio H/W | Behavior |
+| --- | --- |
+| Display crop at most 1.3 | Static with side fill |
+| Display crop above 1.3 | Slow downward pan when there is room to travel and the evidence permits it |
+| Source above 2.4 in a series configured for static motion | Static crops ordered from top to bottom |
+
+The automatic center crop keeps at least 80% of the image height. An explicit Decision crop takes precedence. When text location is uncertain, retain the full panel and use static framing.

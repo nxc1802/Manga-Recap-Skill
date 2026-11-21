@@ -312,28 +312,13 @@ class TestSecurityInvariants:
             tar.addfile(ti, io.BytesIO(data))
         evil_tar_path.write_bytes(tar_buf.getvalue())
 
+        from src.cloud.kaggle_service import safe_extract_tar
+
         downloaded_dir = synthetic_workspace["root"] / "downloaded_evil"
-        downloaded_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(evil_tar_path, downloaded_dir / "audio_clips.tar.gz")
-        # Provide valid video so it gets past video check if needed
-        (downloaded_dir / "chapter_1.mp4").write_bytes(b"\x00\x00\x00 ftypisom")
-
-        target_escaped_file = chap_dir.parent / "escaped_exploit.txt"
-        if target_escaped_file.exists():
-            target_escaped_file.unlink()
-
-        try:
-            cloud_service.sync_results(
-                synthetic_workspace["project_slug"],
-                synthetic_workspace["chapter_number"],
-                downloaded_dir,
-            )
-        except (ValueError, RuntimeError, PermissionError):
-            pass  # Rejection via exception is valid
-
-        assert not target_escaped_file.exists(), (
-            "Security vulnerability: Archive extraction extracted files outside the destination directory!"
-        )
+        downloaded_dir.mkdir()
+        with tarfile.open(evil_tar_path) as archive, pytest.raises(ValueError, match="Traversal"):
+            safe_extract_tar(archive, downloaded_dir)
+        assert not list(downloaded_dir.iterdir())
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass

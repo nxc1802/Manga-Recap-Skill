@@ -106,10 +106,6 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
         }
 
     # 2. Composition Mode
-    from src.core.series_setup import require_series_setup, _normalize_bool
-    setup = require_series_setup(project_slug)
-    if _normalize_bool(setup.answers["Q07"].user_answer) is not True:
-        raise CliValidationError("Thumbnail composition requires explicit Q07 enablement")
     if getattr(args, "auto", False):
         raise CliValidationError("Select source panels explicitly; --auto cannot satisfy the thumbnail detail gate")
     if getattr(args, "upload", False):
@@ -173,14 +169,14 @@ def handle_thumbnail(args: argparse.Namespace) -> Dict[str, Any]:
     # Sync copy to chapter internal dir
     shutil.copy2(final_thumb_p, chap_thumb_p)
     from src.core.storage import atomic_write_json
-    from src.render.artifact_validation import fingerprint
+    from src.core.storage import calculate_sha256
     atomic_write_json(chap_dir / "thumbnail_selection.json", {
         "schema_version": "4.1.0", "selection_source": "explicit_cli_arguments",
-        "panels": {str(path.resolve().relative_to(chap_dir.resolve())): fingerprint(path)
+        "panels": {str(path.resolve().relative_to(chap_dir.resolve())): calculate_sha256(path)
                    for path in (left_path, center_path, right_path) if path},
         "title": title, "subtitle": subtitle, "badge": badge,
         "has_text": has_text, "color_preset": color_preset, "font": font_hint,
-        "artifact_sha256": fingerprint(chap_thumb_p),
+        "artifact_sha256": calculate_sha256(chap_thumb_p),
     })
 
     return {

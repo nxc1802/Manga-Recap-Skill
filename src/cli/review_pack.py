@@ -580,11 +580,11 @@ def handle_review_pack(args: argparse.Namespace) -> Dict[str, Any]:
 
     if str(chapter_num) == "1" and (chap_dir / "video" / "preview.mp4").is_file():
         from src.core.human_review import review_fingerprint
-        from src.render.artifact_validation import fingerprint
+        from src.core.storage import calculate_sha256
         data["review_binding"] = {
             "artifact_path": "video/preview.mp4",
             "config_fingerprint": review_fingerprint(project_dir),
-            "artifact_hash": fingerprint(chap_dir / "video" / "preview.mp4"),
+            "artifact_hash": calculate_sha256(chap_dir / "video" / "preview.mp4"),
         }
 
     # 5. Write Markdown

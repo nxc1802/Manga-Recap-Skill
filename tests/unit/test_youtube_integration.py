@@ -5,8 +5,8 @@ Unit tests for YouTube metadata generation, packaging, timestamps, and upload co
 
 from __future__ import annotations
 
-from v4_fixtures import init_confirmed_project
-from unit.test_series_setup import _make_valid_answers_dict
+from tests.v4_fixtures import init_confirmed_project
+from tests.unit.test_series_setup import _make_valid_answers_dict
 
 import argparse
 import shutil
@@ -29,11 +29,10 @@ from src.cli.youtube_cmd import (
     handle_youtube_upload,
     handle_youtube_verify,
 )
-from src.core.contracts import ReleaseState, YouTubeReceipt
+from src.core.schemas import YouTubeReceipt
 from src.core.human_review import approve_preview, review_fingerprint
 from src.core.schemas import PanelItem, PanelManifest, RecapScript, ScriptSegment, YouTubeMetadata
 from src.core.series_setup import record_series_setup
-from src.core.state_machine import advance_release_state, load_release_record
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
@@ -45,7 +44,6 @@ from src.core.storage import (
     init_project_layout,
     read_json,
 )
-from src.render.artifact_validation import fingerprint
 from src.render.chapter_renderer import render_chapter
 
 
@@ -175,7 +173,7 @@ def _build_ready_youtube_project(
     q07: bool = False,
     q08: Any = None,
 ) -> dict:
-    """Create a real V4-compliant project advanced to ReleaseState.PRODUCTION_READY."""
+    """Create a test project with a rendered and approved chapter."""
     data_dir = tmp_path / "data"
     output_dir = tmp_path / "output"
     monkeypatch.setenv("MANGA_RECAP_DATA_DIR", str(data_dir))
@@ -191,7 +189,6 @@ def _build_ready_youtube_project(
     answers = _make_valid_answers_dict()
     answers["Q02"]["user_answer"] = "local"
     answers["Q05"]["user_answer"] = False
-    answers["Q07"]["user_answer"] = q07
     answers["Q08"]["user_answer"] = q08 if q08 is not None else {"account": "kênh_review_vip", "privacy": "unlisted"}
     answers["Q09"]["user_answer"] = "preview"
     answers["Q10"]["user_answer"] = False
@@ -262,35 +259,27 @@ def _build_ready_youtube_project(
             {
                 "schema_version": "4.1.0",
                 "selection_source": "explicit_cli_arguments",
-                "panels": {"panels/p1.png": fingerprint(panel_path)},
+                "panels": {"panels/p1.png": calculate_sha256(Path(panel_path))},
                 "title": "TEST",
                 "subtitle": None,
                 "badge": None,
                 "has_text": True,
                 "color_preset": "yellow_black",
                 "font": None,
-                "artifact_sha256": fingerprint(thumb_path),
+                "artifact_sha256": calculate_sha256(Path(thumb_path)),
             },
         )
 
-    advance_release_state(root, ReleaseState.SETUP_VALID, chapter_number="1")
-    advance_release_state(root, ReleaseState.SOURCE_READY, chapter_number="1")
-    advance_release_state(root, ReleaseState.SCRIPT_READY, chapter_number="1")
-    advance_release_state(root, ReleaseState.AUDIO_VALID, chapter_number="1")
 
     render_chapter(root, "1", quality="preview")
-    advance_release_state(root, ReleaseState.VISUAL_PLAN_VALID, chapter_number="1")
-    advance_release_state(root, ReleaseState.RENDER_VALID, chapter_number="1")
-    advance_release_state(root, ReleaseState.TECHNICALLY_VALID, chapter_number="1")
 
     approve_preview(
         root,
         "qa_human",
         review_fingerprint(root),
-        fingerprint(chap_dir / "video" / "preview.mp4"),
+        calculate_sha256(Path(chap_dir / "video" / "preview.mp4")),
     )
     render_chapter(root, "1", quality="final")
-    advance_release_state(root, ReleaseState.PRODUCTION_READY, chapter_number="1")
 
     return {
         "slug": slug,
@@ -304,7 +293,7 @@ def _build_ready_youtube_project(
 
 def _install_mock_youtube(monkeypatch, *, account_name="kênh_review_vip", channel_title="Review Truyện VIP", channel_id="UC_VIP_999", video_id="yt_video_12345"):
     mock_creds = MagicMock()
-    monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda account_name=None: mock_creds)
+    monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda account_name=None, **kwargs: mock_creds)
 
     mock_acc_info = MagicMock()
     mock_acc_info.account_name = account_name
@@ -420,7 +409,6 @@ class TestYouTubeCliCommands:
         assert receipt.receipt_type == "youtube_upload"
         assert receipt.captions_required is True
         assert receipt.captions_uploaded is True
-        assert load_release_record(proj["project_dir"]).state == ReleaseState.UPLOADED
 
     def test_handle_youtube_auth(self, monkeypatch, tmp_path):
         token_path = tmp_path / ".test_token.json"
@@ -429,7 +417,7 @@ class TestYouTubeCliCommands:
         mock_creds = MagicMock()
         mock_creds.valid = True
         mock_creds.expiry = None
-        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda: mock_creds)
+        monkeypatch.setattr("src.cli.youtube_cmd.get_youtube_oauth_credentials", lambda **kwargs: mock_creds)
 
         args = argparse.Namespace(
             youtube_action="auth",
@@ -467,7 +455,7 @@ class TestYouTubeMultiAccountManagement:
         # Mock credentials resolution to avoid real network call
         mock_creds = MagicMock()
         mock_creds.valid = True
-        monkeypatch.setattr(mgr, "get_credentials", lambda account_name, force_reauth=False: (
+        monkeypatch.setattr(mgr, "get_credentials", lambda account_name, force_reauth=False, **kwargs: (
             mock_creds,
             mgr.get_account(account_name)
         ))
@@ -520,7 +508,7 @@ class TestYouTubeMultiAccountManagement:
         mock_creds.valid = True
 
         monkeypatch.setattr("src.cli.youtube_cmd.account_manager", mgr)
-        monkeypatch.setattr(mgr, "get_credentials", lambda account_name=None, force_reauth=False: (
+        monkeypatch.setattr(mgr, "get_credentials", lambda account_name=None, force_reauth=False, **kwargs: (
             mock_creds,
             mgr.get_account(account_name)
         ))
@@ -600,6 +588,8 @@ class TestYouTubeMultiAccountManagement:
         dummy_tok = account_setup["dir"] / "dummy.json"
         dummy_tok.write_text("{}", encoding="utf-8")
 
+        monkeypatch.setattr(mgr, "get_credentials", lambda account_name, **kwargs: (MagicMock(), mgr.get_account(account_name)))
+        monkeypatch.setattr(mgr, "fetch_channel_info", lambda _: ("Test Channel", "UC_TEST"))
         mgr.add_or_update_account("chan1", token_file=dummy_tok)
         mgr.add_or_update_account("chan2", token_file=dummy_tok)
 
@@ -621,6 +611,7 @@ class TestYouTubeMultiAccountManagement:
 
     def test_upload_interactive_mode(self, tmp_path, monkeypatch):
         proj = _build_ready_youtube_project(tmp_path, monkeypatch)
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
         _install_mock_youtube(monkeypatch, video_id="yt_interactive_123")
         monkeypatch.setattr("src.cli.youtube_cmd.prompt_interactive_channel_selection", lambda mgr: "kênh_review_vip")
 
@@ -757,7 +748,6 @@ class TestYouTubeUploadV4Gates:
                 )
             )
         assert not (proj["chap_dir"] / "youtube_receipt.json").exists()
-        assert load_release_record(proj["project_dir"]).state == ReleaseState.PRODUCTION_READY
 
     def test_q07_thumbnail_failure_fails_closed_and_success_records_evidence(self, tmp_path, monkeypatch):
         proj = _build_ready_youtube_project(tmp_path, monkeypatch, q07=True)
@@ -870,7 +860,6 @@ class TestYouTubeUploadV4Gates:
         receipt = YouTubeReceipt.model_validate(read_json(Path(res["receipt_path"])))
         assert receipt.status == "verified"
         assert receipt.receipt_type == "youtube_verification"
-        assert load_release_record(proj["project_dir"]).state == ReleaseState.YOUTUBE_VERIFIED
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg/FFprobe required")
@@ -936,7 +925,6 @@ class TestYouTubeVerify:
         assert receipt.status == "verified"
         assert receipt.upload_status == "processed"
         assert (proj["out_proj_dir"] / "chapter_001.youtube_receipt.json").is_file()
-        assert load_release_record(proj["project_dir"]).state == ReleaseState.YOUTUBE_VERIFIED
 
     def test_verify_timeout_rejected(self, tmp_path, monkeypatch):
         proj, mock_yt = self._upload_chapter_one(tmp_path, monkeypatch, q07=False)
@@ -956,7 +944,6 @@ class TestYouTubeVerify:
                 )
             )
         assert read_json(proj["chap_dir"] / "youtube_receipt.json")["status"] == "uploaded"
-        assert load_release_record(proj["project_dir"]).state == ReleaseState.UPLOADED
 
     @pytest.mark.parametrize("bad_status", ["rejected", "failed", "deleted"])
     def test_verify_terminal_failure_status_rejected(self, tmp_path, monkeypatch, bad_status):

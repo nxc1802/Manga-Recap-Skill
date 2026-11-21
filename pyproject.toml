@@ -4,12 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "manga-recap"
-version = "3.0.0"
-description = "Manga Recap Pipeline Orchestrator with VieNeu-TTS and Video Engine V2"
+version = "5.0.0"
+description = "Manga Recap V5 Slim with VieNeu-TTS and FFmpeg"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "httpx",
+    "requests",
     "pydantic",
     "pillow",
     "pyyaml",

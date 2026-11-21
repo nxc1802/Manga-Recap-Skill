@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import shutil
 import subprocess
@@ -13,10 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from src.core.logger import logger
 from src.core.schemas import PanelManifest
+from src.core.utils import DependencyNotFoundError, assert_file_nonempty
 from src.core.visual_contract import ProductionMotion, Region, Shot, VisualPlan
 from src.production.hardware import (
     get_encoder_codec_args,
@@ -25,14 +25,51 @@ from src.production.hardware import (
     resolve_video_encoder,
 )
 from src.render.subtitle import SubtitleCue, SubtitleGenerator, sanitize_subtitle_text
-from src.render.visual_policy import evidence_path
-from src.render.visual_plan_renderer import SCROLL_VIEWPORT_H_OVER_W, frame_schedule, render_frame
+from src.render.visual_policy import SCROLL_VIEWPORT_H_OVER_W, evidence_path
 
 MAX_CANVAS_CACHE_ENTRIES = 512
 _CANVAS_LOCK = threading.Lock()
 _CANVAS_KEY_LOCKS: Dict[str, threading.Lock] = {}
 _CAPABILITY_CACHE_LOCK = threading.Lock()
 _FFMPEG_CAPS_CACHE: Optional[Dict[str, bool]] = None
+
+
+def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> Image.Image:
+    if not 0 <= elapsed <= shot.duration_sec:
+        raise ValueError("Frame time outside shot")
+    image = image.convert("RGB")
+    width, height = image.size
+    box = shot.source_box
+    left, top, right, bottom = box.x_min * width, box.y_min * height, box.x_max * width, box.y_max * height
+    if shot.motion_type == ProductionMotion.SLOW_PAN_DOWN:
+        viewport_aspect = max(plan.target_height / float(max(1, plan.target_width)), SCROLL_VIEWPORT_H_OVER_W)
+        visible_height = min(bottom - top, (right - left) * viewport_aspect)
+        travel = min(bottom - top - visible_height, shot.scroll_fraction_per_second * height * elapsed)
+        top += travel
+        bottom = top + visible_height
+    crop = image.crop((round(left), round(top), max(round(left)+1, round(right)), max(round(top)+1, round(bottom))))
+    size = (plan.target_width, plan.target_height)
+    if shot.motion_type == ProductionMotion.SLOW_PAN_DOWN:
+        canvas = crop.resize(size, Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=20))
+    else:
+        canvas = ImageOps.fit(crop, size).filter(ImageFilter.GaussianBlur(radius=20))
+    subject = ImageOps.contain(crop, size, Image.Resampling.LANCZOS)
+    canvas.paste(subject, ((size[0] - subject.width) // 2, (size[1] - subject.height) // 2))
+    return canvas
+
+
+def frame_schedule(plan, start_seconds=0.0):
+    # Quantize cumulative boundaries, never round each shot independently.
+    elapsed = start_seconds
+    end = round(elapsed * plan.fps)
+    for shot in plan.shots:
+        elapsed += shot.duration_sec
+        next_end = round(elapsed * plan.fps)
+        count = next_end - end
+        if count <= 0:
+            raise ValueError(f"Shot too short for requested fps: {shot.shot_id}")
+        yield shot, count
+        end = next_end
 
 
 def _get_ffmpeg_capabilities(force_refresh: bool = False) -> Dict[str, bool]:
@@ -199,24 +236,6 @@ def _remember_canvas(cache: Dict[str, Any], key: str, path: Path) -> None:
     cache[key] = path
 
 
-def _ensure_ffmpeg_safe_panel_image(panel_path: Path, cache_dir: Path, shot_id: str) -> Path:
-    """Converts exotic image modes/containers (e.g. CMYK/WebP/palette) to RGB PNG for FFmpeg."""
-    suffix = panel_path.suffix.lower()
-    with Image.open(panel_path) as img:
-        if suffix in {".jpg", ".jpeg", ".png"} and img.mode in {"RGB", "L", "RGBA"}:
-            return panel_path
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        norm_path = cache_dir / f"norm_{shot_id}_{hashlib.sha256(str(panel_path).encode()).hexdigest()[:10]}.png"
-        if not norm_path.is_file():
-            tmp = norm_path.with_suffix(".tmp.png")
-            try:
-                img.convert("RGB").save(tmp, format="PNG", compress_level=1)
-                tmp.replace(norm_path)
-            finally:
-                tmp.unlink(missing_ok=True)
-        return norm_path
-
-
 def _get_or_create_pan_strip_png(
     panel_path: Path,
     pan_geom: Dict[str, Any],
@@ -270,7 +289,7 @@ def _get_or_create_pan_strip_png(
                 final_strip = bg
             else:
                 final_strip = subject
-            tmp = strip_path.with_suffix(".tmp.png")
+            tmp = strip_path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp.png")
             try:
                 final_strip.save(tmp, format="PNG", compress_level=1)
                 tmp.replace(strip_path)
@@ -459,7 +478,7 @@ def _render_cue_overlay_png(
     return output_path
 
 
-def _slice_cues_for_window(
+def slice_cues_for_window(
     cues: Sequence[SubtitleCue],
     win_start: float,
     win_end: float,
@@ -540,11 +559,16 @@ def _write_local_srt(cues: Sequence[Dict[str, Any]], srt_path: Path) -> Path:
 
 
 def _run_ffmpeg_checked(cmd: List[str], *, cwd: Optional[Path] = None, encoder: str = "libx264", timeout: int = 600) -> None:
-    if encoder == "h264_videotoolbox":
-        with get_hardware_encoder_lock():
+    try:
+        if encoder == "h264_videotoolbox":
+            with get_hardware_encoder_lock():
+                res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
+        else:
             res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
-    else:
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
+    except FileNotFoundError as exc:
+        if shutil.which(cmd[0]) is None:
+            raise DependencyNotFoundError("Install FFmpeg and add it to PATH") from exc
+        raise
     if res.returncode:
         raise RuntimeError(f"FFmpeg fast renderer failed ({res.returncode}): {res.stderr.decode(errors='replace')[-2000:]}")
 
@@ -563,9 +587,10 @@ def build_shot_render_tasks(
     quality_mode: Optional[str] = None,
     watermark_png_path: Optional[Path] = None,
     watermark_xy: Optional[Tuple[int, int]] = None,
+    start_seconds: float = 0.0,
+    start_index: int = 0,
 ) -> List[Dict[str, Any]]:
     """Builds deterministic per-shot render tasks quantized to frame_schedule(plan)."""
-    plan = VisualPlan.model_validate(plan.model_dump(mode="json"))
     effective_fps = int(fps_override) if fps_override is not None else plan.fps
     schedule_plan = plan if effective_fps == plan.fps else plan.model_copy(update={"fps": effective_fps})
 
@@ -584,8 +609,8 @@ def build_shot_render_tasks(
     resolved_enc = _resolve_encoder_name(encoder)
 
     tasks: List[Dict[str, Any]] = []
-    cum_frames = 0
-    for idx, (shot, frame_count) in enumerate(frame_schedule(schedule_plan)):
+    cum_frames = round(start_seconds * effective_fps)
+    for idx, (shot, frame_count) in enumerate(frame_schedule(schedule_plan, start_seconds), start=start_index):
         pid = shot.substitute_panel_id or shot.source_panel_id
         panel = panels[pid]
         panel_path = verified_paths[pid]
@@ -595,7 +620,7 @@ def build_shot_render_tasks(
 
         local_cues: List[Dict[str, Any]] = []
         if burn_subtitles and subtitle_cues:
-            local_cues = _slice_cues_for_window(subtitle_cues, win_start, win_end)
+            local_cues = slice_cues_for_window(subtitle_cues, win_start, win_end)
 
         canvas_key = _compute_canvas_key(
             panel_id=pid,
@@ -623,7 +648,7 @@ def build_shot_render_tasks(
                 "fps": int(effective_fps),
                 "encoder": resolved_enc,
                 "quality_mode": quality_mode,
-                "output_clip_path": clips_dir / f"shot_{idx:05d}_{shot.shot_id}.mp4",
+                "output_clip_path": clips_dir / f"shot_{idx:05d}.mp4",
                 "canvas_key": canvas_key,
                 "work_dir": work_dir,
                 "burn_subtitles": bool(burn_subtitles),
@@ -760,9 +785,23 @@ def render_shot_clip(
             shot_sub_dir.mkdir(parents=True, exist_ok=True)
             if caps.get("subtitles"):
                 _write_local_srt(local_cues, shot_sub_dir / "shot_captions.srt")
-                sub_f = f"subtitles=shot_captions.srt:force_style='Fontsize={font_size}'"
-                vf_chain = ",".join(part for part in (base_vf, sub_f, "setsar=1,format=yuv420p") if part)
-                cmd += ["-vf", vf_chain]
+                # libass default PlayResY=288 scales Fontsize by (height/288); convert 720p-based
+                # font_size to match Pillow's (font_size * height/720) visual height (~0.4x).
+                ass_font_size = max(10, int(round(float(font_size) * 0.4)))
+                sub_f = (
+                    f"subtitles=shot_captions.srt:"
+                    f"force_style='Fontsize={ass_font_size},WrapStyle=2,MarginV=16,Outline=2,Shadow=0'"
+                )
+                if pan_geom["is_animated"] and wm_png is not None:
+                    cmd += ["-i", str(wm_png)]
+                    wx, wy = int(wm_xy[0]), int(wm_xy[1])
+                    pre = f"[0:v]{base_vf}[base];" if base_vf else ""
+                    src_label = "[base]" if base_vf else "[0:v]"
+                    fc = f"{pre}{src_label}[1:v]overlay={wx}:{wy}:format=auto,{sub_f},setsar=1,format=yuv420p[v]"
+                    cmd += ["-filter_complex", fc, "-map", "[v]"]
+                else:
+                    vf_chain = ",".join(part for part in (base_vf, sub_f, "setsar=1,format=yuv420p") if part)
+                    cmd += ["-vf", vf_chain]
                 run_cwd = shot_sub_dir
             else:
                 static_intervals = (
@@ -861,231 +900,53 @@ def render_shot_clip(
         partial.unlink(missing_ok=True)
 
 
-def _probe_clip_geometry(clip_path: Path, default_height: int) -> Tuple[int, int, float]:
-    res = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            str(clip_path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    if res.returncode == 0 and res.stdout:
-        parsed = json.loads(res.stdout)
-        stream = (parsed.get("streams") or [{}])[0]
-        fmt = parsed.get("format") or {}
-        w = int(stream.get("width") or round(default_height * 16 / 9))
-        h = int(stream.get("height") or default_height)
-        dur = float(fmt.get("duration") or 0.0)
-        return w, h, dur
-    return round(default_height * 16 / 9), default_height, 0.0
-
-
-def _total_clips_duration(shot_clips: Sequence[Path], default_height: int) -> Tuple[int, int, float]:
-    width, height = round(default_height * 16 / 9), default_height
-    total = 0.0
-    for idx, clip in enumerate(shot_clips):
-        cw, ch, cdur = _probe_clip_geometry(clip, default_height)
-        if idx == 0:
-            width, height = cw, ch
-        total += cdur
-    return width, height, total
-
-
 def _audio_codec_args(audio_path: Path) -> List[str]:
     if audio_path.suffix.lower() in {".m4a", ".aac", ".mp4"}:
         return ["-c:a", "copy"]
     return ["-c:a", "aac", "-b:a", "192k"]
 
 
-def concat_shot_clips(
-    shot_clips: List[Path],
-    output_video: Path,
-    *,
-    work_dir: Optional[Path] = None,
-    audio_path: Optional[Path] = None,
-    subtitle_path: Optional[Path] = None,
-    burn_subtitles: bool = False,
-    target_height: int = 1080,
-    fps: int = 30,
-    encoder: str = "libx264",
-    subtitle_font_size: int = 24,
-    quality_mode: Optional[str] = None,
-    gpu_index: int = 0,
-) -> Path:
-    """Concatenates uniform shot clips with -c:v copy, optionally muxing audio and burning subtitles."""
+def concat_shot_clips(shot_clips, output_video, *, work_dir=None, audio_path=None):
+    """Assemble encoded shots and mux the master audio without re-encoding video."""
     if not shot_clips:
-        raise ValueError("shot_clips must contain at least one clip")
-    resolved_clips = [Path(p).resolve() for p in shot_clips]
+        raise ValueError("At least one shot clip is required")
+    resolved_clips = [Path(clip).resolve() for clip in shot_clips]
     for clip in resolved_clips:
-        if not clip.is_file():
-            raise FileNotFoundError(f"Missing shot clip for concat: {clip}")
-
+        assert_file_nonempty(clip)
     output = Path(output_video).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    partial = output.with_name(f".{output.stem}.{os.getpid()}.partial.mp4")
-
-    temp_ctx = None
-    if work_dir is None:
-        temp_ctx = tempfile.TemporaryDirectory(prefix="p8_concat_")
-        active_work = Path(temp_ctx.name).resolve()
-    else:
-        active_work = Path(work_dir).resolve()
-        active_work.mkdir(parents=True, exist_ok=True)
-
-    try:
-        concat_list = active_work / "concat_list.txt"
+    with tempfile.TemporaryDirectory(prefix="manga-mux-", dir=work_dir) as directory:
+        concat_list = Path(directory) / "shots.txt"
         concat_list.write_text(
-            "".join(f"file '{_escape_concat_path(clip)}'\n" for clip in resolved_clips),
-            encoding="utf-8",
+            "".join(f"file '{_escape_concat_path(clip)}'\n" for clip in resolved_clips), encoding="utf-8",
         )
-        resolved_audio = Path(audio_path).resolve() if audio_path is not None else None
-        resolved_sub = Path(subtitle_path).resolve() if subtitle_path is not None else None
-
-        should_burn = bool(burn_subtitles and resolved_sub is not None)
-        if not should_burn:
-            cmd = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list)]
-            if resolved_audio is not None:
-                cmd += ["-i", str(resolved_audio), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", *_audio_codec_args(resolved_audio)]
-            else:
-                cmd += ["-map", "0:v:0", "-c:v", "copy", "-an"]
-            cmd += ["-movflags", "+faststart", str(partial)]
-            _run_ffmpeg_checked(cmd, encoder="copy")
-            partial.replace(output)
-            return output
-
-        assert resolved_sub is not None
-        resolved_enc = _resolve_encoder_name(encoder)
-        codec_args = get_encoder_codec_args(resolved_enc, quality_mode=quality_mode, gpu_index=gpu_index, profile="high")
-        caps = _get_ffmpeg_capabilities()
-        timescale = int(fps) * 1000
-
-        if caps.get("subtitles"):
-            local_srt = active_work / "captions.srt"
-            shutil.copy2(resolved_sub, local_srt)
-            cmd = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list)]
-            if resolved_audio is not None:
-                cmd += ["-i", str(resolved_audio), "-map", "0:v:0", "-map", "1:a:0"]
-            else:
-                cmd += ["-map", "0:v:0", "-an"]
-            cmd += [
-                "-vf",
-                f"subtitles=captions.srt:force_style='Fontsize={int(subtitle_font_size)}',setsar=1,format=yuv420p",
-                *codec_args,
-                "-pix_fmt",
-                "yuv420p",
-                "-r",
-                str(fps),
-                "-fps_mode",
-                "cfr",
-                "-video_track_timescale",
-                str(timescale),
-            ]
-            if resolved_audio is not None:
-                cmd += _audio_codec_args(resolved_audio)
-            cmd += ["-movflags", "+faststart", str(partial)]
-            _run_ffmpeg_checked(cmd, cwd=active_work, encoder=resolved_enc)
-            partial.replace(output)
-            return output
-
-        # Fallback when FFmpeg lacks libass (e.g., Kaggle Ubuntu FFmpeg 6.1.1 / Homebrew FFmpeg):
-        # render transparent Pillow PNG subtitle overlays and composite in a single overlay pass.
-        cues = SubtitleGenerator().parse_srt(resolved_sub)
-        if not cues:
-            return concat_shot_clips(
-                resolved_clips,
-                output,
-                work_dir=active_work,
-                audio_path=resolved_audio,
-                subtitle_path=None,
-                burn_subtitles=False,
-                target_height=target_height,
-                fps=fps,
-                encoder=resolved_enc,
-            )
-
-        vid_w, vid_h, total_dur = _total_clips_duration(resolved_clips, target_height)
-        total_dur = max(total_dur, cues[-1].end_seconds)
-        cue_dicts = [{"start_sec": c.start_seconds, "end_sec": c.end_seconds, "text": c.text} for c in cues]
-        ov_manifest = _build_overlay_concat_manifest(
-            cue_dicts,
-            total_duration_sec=total_dur,
-            canvas_width=vid_w,
-            canvas_height=vid_h,
-            font_size=int(subtitle_font_size),
-            overlay_dir=active_work / "concat_subs",
-        )
-        if ov_manifest is None:
-            return concat_shot_clips(
-                resolved_clips,
-                output,
-                work_dir=active_work,
-                audio_path=resolved_audio,
-                subtitle_path=None,
-                burn_subtitles=False,
-                target_height=target_height,
-                fps=fps,
-                encoder=resolved_enc,
-            )
-
-        cmd = [
-            "ffmpeg",
-            "-v",
-            "error",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(concat_list),
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            str(ov_manifest),
-        ]
-        if resolved_audio is not None:
-            cmd += ["-i", str(resolved_audio)]
-        fc = f"[1:v]format=rgba,fps={fps}[ov];[0:v][ov]overlay=0:0:eof_action=pass,setsar=1,format=yuv420p[v]"
-        cmd += ["-filter_complex", fc, "-map", "[v]"]
-        if resolved_audio is not None:
-            cmd += ["-map", "2:a:0", *_audio_codec_args(resolved_audio)]
+        command = ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list)]
+        if audio_path is not None:
+            assert_file_nonempty(audio_path)
+            command += ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0", *_audio_codec_args(Path(audio_path))]
         else:
-            cmd += ["-an"]
-        cmd += [
-            *codec_args,
-            "-pix_fmt",
-            "yuv420p",
-            "-r",
-            str(fps),
-            "-fps_mode",
-            "cfr",
-            "-video_track_timescale",
-            str(timescale),
-            "-movflags",
-            "+faststart",
-            str(partial),
-        ]
-        _run_ffmpeg_checked(cmd, encoder=resolved_enc)
-        partial.replace(output)
-        return output
-    finally:
-        partial.unlink(missing_ok=True)
-        if temp_ctx is not None:
-            temp_ctx.cleanup()
+            command += ["-map", "0:v:0", "-an"]
+        with tempfile.NamedTemporaryFile(dir=output.parent, suffix=".mp4", delete=False) as file:
+            partial = Path(file.name)
+        try:
+            _run_ffmpeg_checked([*command, "-c:v", "copy", "-movflags", "+faststart", str(partial)])
+            assert_file_nonempty(partial)
+            partial.replace(output)
+        finally:
+            partial.unlink(missing_ok=True)
+    return output
+
+
+def prepare_shot_watermark(chapter_dir, work_dir, width, height, watermark_path=None):
+    from src.render.watermark import compute_watermark_xy, prepare_watermark_rgba, resolve_channel_watermark
+
+    source = watermark_path or resolve_channel_watermark(project_dir=Path(chapter_dir).parent.parent)
+    if source is None or not Path(source).is_file():
+        return None, None
+    overlay = prepare_watermark_rgba(Path(source), target_height=height)
+    path = work_dir / "watermark_overlay.png"
+    overlay.save(path, format="PNG")
+    return path, compute_watermark_xy(width, height, overlay.width, overlay.height)
 
 
 def render_visual_plan_fast(
@@ -1114,16 +975,8 @@ def render_visual_plan_fast(
 
     with tempfile.TemporaryDirectory(prefix="p8_fast_render_") as tmp_dir:
         work_dir = Path(tmp_dir).resolve()
-        from src.render.watermark import compute_watermark_xy, prepare_watermark_rgba, resolve_channel_watermark
-
-        wm_src = watermark_path or resolve_channel_watermark(project_dir=Path(chapter_dir).parent.parent)
-        wm_png: Optional[Path] = None
-        wm_xy: Optional[Tuple[int, int]] = None
-        if wm_src is not None and Path(wm_src).is_file():
-            wm_rgba = prepare_watermark_rgba(Path(wm_src), target_height=plan.target_height)
-            wm_png = work_dir / "watermark_overlay.png"
-            wm_rgba.save(wm_png, format="PNG")
-            wm_xy = compute_watermark_xy(plan.target_width, plan.target_height, wm_rgba.width, wm_rgba.height)
+        wm_png, wm_xy = prepare_shot_watermark(
+            chapter_dir, work_dir, plan.target_width, plan.target_height, watermark_path)
 
         tasks = build_shot_render_tasks(
             Path(chapter_dir),
@@ -1155,17 +1008,4 @@ def render_visual_plan_fast(
 
         # Subtitles (if enabled) were already burned once inside each shot clip above;
         # assemble all shots + optional audio via zero-reencode -c:v copy concat.
-        return concat_shot_clips(
-            shot_clips,
-            output,
-            work_dir=work_dir,
-            audio_path=audio_path,
-            subtitle_path=None,
-            burn_subtitles=False,
-            target_height=plan.target_height,
-            fps=plan.fps,
-            encoder=encoder,
-            subtitle_font_size=subtitle_font_size,
-            quality_mode=quality_mode,
-            gpu_index=gpu_index,
-        )
+        return concat_shot_clips(shot_clips, output, work_dir=work_dir, audio_path=audio_path)

@@ -106,7 +106,6 @@ class TestMasterAudioFormatInvariantsChallenger2:
             TTSBenchmarkRunner(
                 output_dir=bench_out,
                 use_mock=True,
-                copy_to_lab=False,
             ).run()
             samples_dir = bench_out / "samples"
         assert samples_dir.exists(), f"Benchmark samples directory {samples_dir} does not exist"
@@ -308,7 +307,6 @@ class TestOfflineIsolationAndZeroCloudChallenger2:
             voices=["Trúc Ly", "Hải Đăng"],
             emotions=["neutral"],
             use_mock=True,
-            copy_to_lab=False,
         )
         res = runner.run()
         assert res["status"] == "completed"
@@ -351,128 +349,3 @@ class TestOfflineIsolationAndZeroCloudChallenger2:
 # ==============================================================================
 # Challenge 4: PR-06 Zero-CDN Compliance & Evaluation Lab
 # ==============================================================================
-
-class TestZeroCDNComplianceAndEvaluationLabChallenger2:
-    """Rigorous audit of docs/lab/index.html, benchmark_data.js, and Human Review Gate 1 export."""
-
-    def test_zero_cdn_compliance_exhaustive_html_audit(self):
-        """Verifies docs/lab/index.html contains ZERO external CDNs, fonts, or scripts."""
-        lab_html = Path("docs/lab/index.html")
-        assert lab_html.exists(), "docs/lab/index.html must exist"
-        content = lab_html.read_text(encoding="utf-8")
-
-        class TagExtractor(html.parser.HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.links = []
-                self.scripts = []
-                self.images = []
-
-            def handle_starttag(self, tag, attrs):
-                attr_dict = dict(attrs)
-                if tag == "link" and "href" in attr_dict:
-                    self.links.append(attr_dict["href"])
-                elif tag == "script" and "src" in attr_dict:
-                    self.scripts.append(attr_dict["src"])
-                elif tag == "img" and "src" in attr_dict:
-                    self.images.append(attr_dict["src"])
-
-        parser = TagExtractor()
-        parser.feed(content)
-
-        all_resources = parser.links + parser.scripts + parser.images
-        for res in all_resources:
-            res_clean = res.strip().lower()
-            assert not res_clean.startswith("http://") and not res_clean.startswith("https://") and not res_clean.startswith("//"), (
-                f"External CDN violation detected in HTML tag: {res}"
-            )
-
-        # Check inline CSS for @import or remote url()
-        css_imports = re.findall(r"@import\s+(?:url\()?['\"]?([^'\"\)]+)['\"]?\)?", content, re.IGNORECASE)
-        for imp in css_imports:
-            imp_clean = imp.strip().lower()
-            assert not imp_clean.startswith("http://") and not imp_clean.startswith("https://"), (
-                f"External CDN violation in CSS @import: {imp}"
-            )
-
-    def test_full_25_voice_benchmark_data_generation_and_lab_structure(self, tmp_path):
-        """Verifies full benchmark run across 25 voices produces valid zero-CORS benchmark_data.js."""
-        bench_out = tmp_path / "bench_full"
-        runner = TTSBenchmarkRunner(
-            output_dir=bench_out,
-            voices=[v.name for v in CATALOG_VOICES.values()],
-            emotions=[ep["id"] for ep in EMOTION_BENCHMARK_PROMPTS],
-            use_mock=True,
-            copy_to_lab=False,
-        )
-        res = runner.run()
-        assert res["status"] == "completed"
-        assert res["voices_screened_count"] == 25
-        assert res["emotions_tested_count"] == 8
-
-        js_file = bench_out / "benchmark_data.js"
-        assert js_file.exists()
-        content = js_file.read_text(encoding="utf-8")
-        assert "window.BENCHMARK_DATA" in content
-
-        json_match = re.search(r"window\.BENCHMARK_DATA\s*=\s*(\{.*?\});?\s*$", content, re.DOTALL)
-        assert json_match
-        payload = json.loads(json_match.group(1))
-
-        assert payload["summary"]["voices_screened_count"] == 25
-        assert payload["summary"]["emotions_tested_count"] == 8
-        assert len(payload["samples"]) == 74
-
-        for s in payload["samples"]:
-            sample_wav = bench_out / s["audio_file"]
-            assert sample_wav.exists()
-            assert len(s["peaks"]) == 64
-            assert all(0.0 <= p <= 1.0 for p in s["peaks"])
-
-    def test_cli_benchmark_default_clobber_vulnerability(self, tmp_path):
-        """
-        Adversarial test revealing the test-pollution defect:
-        Running 'tts_benchmark' without --no-copy-to-lab or custom --out-dir
-        silently overwrites the production docs/lab/ dataset with partial voice lists.
-        """
-        # When tts_benchmark runs with default args and partial voices, it clobbers docs/lab
-        test_out = tmp_path / "custom_bench"
-        runner = TTSBenchmarkRunner(
-            output_dir=test_out,
-            voices=["Trúc Ly", "Adam bựa"],
-            emotions=["neutral"],
-            use_mock=True,
-            copy_to_lab=False,
-        )
-        res = runner.run()
-        assert res["voices_screened_count"] == 2
-        # Verify that with copy_to_lab=False, docs/lab is safely untouched by this runner
-        # (Defect in test_cli.py was omitting --no-copy-to-lab)
-
-    def test_human_review_gate_1_voice_selection_export_spec(self):
-        """Tests that the exported voice_selection.json matches Human Review Gate 1 schema."""
-        # Simulated export payload from docs/lab/index.html exportVoiceSelection()
-        payload = {
-            "schema_version": "3.0.0",
-            "project_slug": "warrior_grandpa_ch02",
-            "reviewed_at": "2026-11-03T12:00:00Z",
-            "reviewer": "Human Reviewer (Gate 1)",
-            "voice_strategy": "single_narrator",
-            "primary_voice": "Trúc Ly",
-            "default_speed": 1.0,
-            "audio_spec": {
-                "sample_rate": 48000,
-                "channels": 1,
-                "format": "wav_pcm_s16le",
-            },
-            "character_voice_mapping": {},
-            "decision_notes": "Warm tone, excellent Vietnamese diacritic clarity",
-            "status": "approved",
-        }
-
-        assert payload["schema_version"] == "3.0.0"
-        assert payload["status"] == "approved"
-        assert payload["primary_voice"] in CATALOG_VOICES
-        assert payload["audio_spec"]["sample_rate"] == 48000
-        assert payload["audio_spec"]["channels"] == 1
-        assert payload["audio_spec"]["format"] == "wav_pcm_s16le"

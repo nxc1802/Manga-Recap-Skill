@@ -9,7 +9,7 @@ from PIL import Image
 from src.core.schemas import PanelStatus
 from src.core.visual_contract import Region, Shot, VisualPlan, VisualRole, ProductionMotion
 from src.core.storage import load_manifest, load_recap_script, calculate_sha256
-from src.render.visual_plan_renderer import SCROLL_VIEWPORT_H_OVER_W
+SCROLL_VIEWPORT_H_OVER_W = 1.3
 
 TALL_PANEL_THRESHOLD = 2.4
 
@@ -115,11 +115,8 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
     return manifest
 
 
-def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920,
-                         target_height=1080, fps=30, motion_enabled=None,
-                         max_panel_aspect_h_over_w=TALL_PANEL_THRESHOLD):
-    if max_panel_aspect_h_over_w != TALL_PANEL_THRESHOLD:
-        raise ValueError("Production tall-panel threshold is frozen at H/W > 2.4")
+def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, motion_enabled):
+    """Yield shots in narration order. Each segment needs its duration before iteration reaches it."""
     root = Path(chap_dir)
     manifest = manifest if manifest is not None else load_manifest(root)
     script = script if script is not None else load_recap_script(root)
@@ -146,8 +143,6 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
     for segment in script.segments:
         if segment.status == "needs_review" or "[CAN_XAC_MINH" in segment.narrator_text:
             raise ValueError(f"Unresolved narration: {segment.seq_id}")
-        if not segment.duration or not math.isfinite(segment.duration) or segment.duration <= 0:
-            raise ValueError(f"Measured audio duration required: {segment.seq_id}")
         if not segment.evidence_panel_ids:
             raise ValueError(f"Narration has no evidence: {segment.seq_id}")
         try:
@@ -159,6 +154,9 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
     shots = []
     previous_approved = None
     for segment, panels in resolved:
+        if not segment.duration or not math.isfinite(segment.duration) or segment.duration <= 0:
+            raise ValueError(f"Measured audio duration required: {segment.seq_id}")
+        first_shot = len(shots)
         if segment.shots:
             raise ValueError("Legacy embedded shots must be migrated to canonical VisualPlan")
         # No aliasing of legacy pan, zoom, subject pan or jitter is permitted.
@@ -269,6 +267,22 @@ def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920
                 item["scroll_fraction_per_second"] = min(0.12, max(0.005, round(travel_frac / max(0.001, duration), 6)))
             shots.append(Shot(shot_id=f"shot_{len(shots)+1:05d}", segment_id=segment.seq_id,
                               duration_sec=duration, **item))
+        yield shots[first_shot:]
+
+
+def generate_visual_plan(chap_dir, manifest=None, script=None, target_width=1920,
+                         target_height=1080, fps=30, motion_enabled=None,
+                         max_panel_aspect_h_over_w=TALL_PANEL_THRESHOLD):
+    if max_panel_aspect_h_over_w != TALL_PANEL_THRESHOLD:
+        raise ValueError("Production tall-panel threshold must be H/W > 2.4")
+    manifest = manifest if manifest is not None else load_manifest(chap_dir)
+    script = script if script is not None else load_recap_script(chap_dir)
+    shots = [shot for group in iter_segment_shots(chap_dir, manifest, script, target_width,
+             target_height, motion_enabled) for shot in group]
+    return assemble_visual_plan(manifest, script, shots, target_width, target_height, fps, motion_enabled)
+
+
+def assemble_visual_plan(manifest, script, shots, target_width, target_height, fps, motion_enabled):
     inputs = dict(script=script.model_dump(mode="json"), manifest=manifest.model_dump(mode="json"),
                   width=target_width, height=target_height, fps=fps, motion_enabled=motion_enabled)
     input_fingerprint = hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()

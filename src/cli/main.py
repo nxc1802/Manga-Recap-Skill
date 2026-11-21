@@ -1,6 +1,6 @@
 """
 src/cli/main.py
-Unified CLI entry point for Manga Recap Agentic Skill V3 (`manga-recap`).
+Unified CLI entry point for Manga Recap V5 Slim (`manga-recap`).
 """
 
 from __future__ import annotations
@@ -64,11 +64,11 @@ def build_parser() -> JsonAwareArgumentParser:
 
     parser = JsonAwareArgumentParser(
         prog="manga-recap",
-        description="Deterministic CLI Suite for Manga Recap Agentic Skill V3",
+        description="Deterministic CLI Suite for Manga Recap V5 Slim",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         parents=[common_parent],
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 3.0.0")
+    parser.add_argument("--version", action="version", version="%(prog)s 5.0.0")
 
     subparsers = parser.add_subparsers(dest="subcommand", title="subcommands", required=True)
 
@@ -160,7 +160,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bm.add_argument("--repeats", type=int, default=1, help="Number of repetitions per prompt")
     p_bm.add_argument("--mock", action="store_true", help="Use deterministic mock synthesis mode")
     p_bm.add_argument("--ab-tests", action="store_true", help="Include controlled A/B emotion cue comparison tests")
-    p_bm.add_argument("--copy-to-lab", action=argparse.BooleanOptionalAction, default=True, help="Copy results to docs/lab/")
 
     # 7. render
     p_ren = subparsers.add_parser("render", help="Render video clips, mix audio, and burn subtitles", parents=[common_parent])
@@ -239,7 +238,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_yt.add_argument("--title", default=None, help="Video title override")
     p_yt.add_argument("--description", default=None, help="Video description override")
     p_yt.add_argument("--tags", default=None, help="Comma-separated tags")
-    p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default="private", help="Video privacy status (default: private)")
+    p_yt.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Override the confirmed YouTube visibility")
     p_yt.add_argument("--thumbnail", default=None, help="Custom thumbnail image path (default: auto-detected from output/<slug>/chapter_<num>_thumbnail.jpg)")
     p_yt.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
     p_yt.add_argument("--video-id", default=None, help="Target YouTube video ID for verification")
@@ -252,30 +251,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cln.add_argument("--confirm-project", default=None, help="Explicit project slug confirmation required for actual deletion")
     p_cln.add_argument("--bypass-receipts", action="store_true", help="Dry-run inspection only; destructive use is rejected and cannot bypass receipts")
     p_cln.add_argument("--purge-raw", action="store_true", help="Also purge raw pages and panel crops after archive verification")
-
-    # 13. produce
-    p_prod = subparsers.add_parser("produce", help="Single-session cloud production runner (Kaggle/Colab)", parents=[common_parent])
-    p_prod.add_argument("-p", "--project", required=True, help="Project slug")
-    p_prod.add_argument("-c", "--chapters", default=None, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
-    p_prod.add_argument("--job-file", default=None, help="Custom path to production_job.json")
-    p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default="auto", help="Video encoder (default: auto)")
-    p_prod.add_argument("--tts-engine", choices=["neural"], default="neural", help="Production requires local neural VieNeu-TTS")
-    p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers (default: 2)")
-    p_prod.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
-    p_prod.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality (default: final)")
-    p_prod.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video framing mode")
-    p_prod.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles directly onto video frames")
-    p_prod.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
-    p_prod.add_argument("--bgm", default=None, help="Background music audio file path")
-    p_prod.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
-    p_prod.add_argument("--export-bundle", action=argparse.BooleanOptionalAction, default=True, help="Stage complete export bundle (default: True)")
-    p_prod.add_argument("--cleanup", action="store_true", help="Clean intermediate clips after successful render")
-    p_prod.add_argument("--force", action="store_true", help="Force re-execution of completed stages")
-    p_prod.add_argument("--voice", default=None, help="Voice override")
-    p_prod.add_argument("--speed", type=float, default=None, help="Speed override")
-    p_prod.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Subtitle max lines")
-    p_prod.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle font size")
-    p_prod.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy")
 
     # 14. cloud
     p_cld = subparsers.add_parser("cloud", help="Kaggle/Remote Cloud GPU runner for extreme speed", parents=[common_parent])
@@ -357,8 +332,8 @@ def build_parser() -> JsonAwareArgumentParser:
     p_arc.add_argument("--target-dir", default=None, help="Local sandbox destination directory for restore")
 
     # 18. setup
-    p_stp = subparsers.add_parser("setup", help="Strict Form 10-question user configuration gate and lifecycle management", parents=[common_parent])
-    p_stp.add_argument("setup_action", choices=["validate", "record", "show", "migrate"], help="Setup action: 'validate', 'record', 'show', or 'migrate'")
+    p_stp = subparsers.add_parser("setup", help="Record eight user-confirmed series settings", parents=[common_parent])
+    p_stp.add_argument("setup_action", choices=["validate", "record", "show"], help="Setup action")
     p_stp.add_argument("-p", "--project", required=True, help="Project slug")
     p_stp.add_argument("--answers-json", "--answers", dest="answers_json", default=None, help="Path to answers JSON file or inline JSON string")
     p_stp.add_argument("--reviewer", default="user", help="Reviewer identifier (default: user)")
@@ -437,9 +412,6 @@ def _dispatch_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str,
     elif subcommand == "clean":
         from src.cli.clean_cmd import handle_clean
         return handle_clean(args)
-    elif subcommand == "produce":
-        from src.cli.production_cmd import handle_produce
-        return handle_produce(args)
     elif subcommand == "cloud":
         from src.cli.cloud_cmd import handle_cloud
         return handle_cloud(args)
@@ -479,7 +451,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     detected_subcommand = "manga-recap"
     for arg in raw_args:
         if not arg.startswith("-") and arg in {
-            "crawl", "segment", "repack", "panel-inspect", "decide", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "produce", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "thumbnail", "archive", "setup"
+            "crawl", "segment", "repack", "panel-inspect", "decide", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "thumbnail", "archive", "setup"
         }:
             detected_subcommand = arg
             break
@@ -502,6 +474,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         args = parser.parse_args(raw_args)
+        args.json = json_mode
         subcommand = getattr(args, "subcommand", detected_subcommand)
         data = execute_subcommand(subcommand, args)
         duration = round(time.monotonic() - start_time, 4)

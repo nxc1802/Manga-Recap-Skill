@@ -321,6 +321,8 @@ class SubtitleGenerator:
         self,
         segments: List[ScriptSegment],
         inter_segment_pause: float = 0.0,
+        *,
+        start_offset: float = 0.0,
     ) -> List[SubtitleCue]:
         """
         Constructs a unified, continuous timeline of SubtitleCue objects aligned to actual audio durations.
@@ -328,7 +330,7 @@ class SubtitleGenerator:
         to word/syllable counts, with the final block clamped to exact utterance end time.
         """
         cues: List[SubtitleCue] = []
-        current_time = 0.0
+        current_time = start_offset
         cue_index = 1
 
         for seg in segments:
