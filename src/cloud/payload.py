@@ -78,7 +78,7 @@ def package_payload(project_dir, chapter_number, output, job_type, *, series=Fal
                 if wm_file.is_file() and not wm_file.is_symlink() and wm_file.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
                     files[f"data/watermarks/{wm_file.name}"] = wm_file
         allowed_roots = {"raw", "panels", "audio", "subtitles", "contact_sheets"}
-        allowed_files = {"chapter.json", "script.json", "manifest.json", "visual_plan.json", "thumbnail.jpg", "thumbnail.png", "thumbnail_selection.json"}
+        allowed_files = {"chapter.json", "script.json", "manifest.json", "visual_plan.json", "thumbnail.jpg", "thumbnail.png"}
         for number in dict.fromkeys((["1"] if needs_preview else []) + chapters):
             chapter = root / "chapters" / number
             if not chapter.is_dir():

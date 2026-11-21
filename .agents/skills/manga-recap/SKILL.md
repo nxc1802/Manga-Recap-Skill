@@ -37,4 +37,4 @@ Record the approved narrator in `voice_selection.json`. Run `tts`, then `render 
 
 ## Package and publish
 
-Generate a 16:9 thumbnail and save it as `thumbnail.jpg` or pass its path to `youtube upload --thumbnail`. The `thumbnail` CLI can also compose selected panels. Use `youtube metadata` and reconfirm the destination before uploading. Archive to a private Hugging Face dataset when requested. `clean` lists removable intermediates by default. [YouTube publishing](rules/youtube_publishing.md)
+By default, the agent selects 2–3 representative panels as visual references, generates a clean 16:9 thumbnail with no speech bubbles, and saves it to `chapters/<num>/thumbnail.jpg` (or `.png`) before running `youtube upload` (or passing its path via `--thumbnail`). Use `youtube metadata` and reconfirm the destination before uploading. Archive to a private Hugging Face dataset when requested. `clean` lists removable intermediates by default. [YouTube publishing](rules/youtube_publishing.md)

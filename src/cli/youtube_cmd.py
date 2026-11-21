@@ -343,12 +343,16 @@ def _resolve_upload_thumbnail_path(
     if _is_feature_chapter(chapter_num):
         candidates = [
             out_dir / "feature_thumbnail.jpg",
+            out_dir / "feature_thumbnail.png",
             proj_dir / "thumbnail.jpg",
+            proj_dir / "thumbnail.png",
         ]
     else:
         candidates = [
             chap_dir / "thumbnail.jpg",
+            chap_dir / "thumbnail.png",
             out_dir / f"chapter_{chapter_num}_thumbnail.jpg",
+            out_dir / f"chapter_{chapter_num}_thumbnail.png",
         ]
 
     for cand in candidates:
@@ -510,15 +514,6 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError(
             f"A custom thumbnail is required for '{project_slug}', but thumbnail.jpg is missing for chapter {chapter_num}."
         )
-    if (
-        not is_feature
-        and thumbnail_path is not None
-        and (chap_dir / "thumbnail_selection.json").is_file()
-        and thumbnail_path == (chap_dir / "thumbnail.jpg").resolve()
-    ):
-        selection = read_json(chap_dir / "thumbnail_selection.json")
-        if selection.get("artifact_sha256") != calculate_sha256(thumbnail_path):
-            raise CliValidationError("Chapter thumbnail.jpg differs from thumbnail_selection.json artifact_sha256.")
 
     # 6. Resolve metadata (eliminating hardcoded feature strings and meta_obj NameError)
     meta_file = out_dir / "feature.youtube.json" if is_feature else chap_dir / "youtube_metadata.json"
@@ -647,9 +642,10 @@ def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
         thumbnail_local_sha256 = calculate_sha256(thumbnail_path)
         try:
             logger.info(f"Uploading custom thumbnail from {thumbnail_path}...")
+            thumb_mimetype = "image/png" if thumbnail_path.suffix.lower() == ".png" else "image/jpeg"
             youtube.thumbnails().set(
                 videoId=video_id,
-                media_body=MediaFileUpload(str(thumbnail_path), mimetype="image/jpeg"),
+                media_body=MediaFileUpload(str(thumbnail_path), mimetype=thumb_mimetype),
             ).execute()
             thumbnail_uploaded = True
             thumbnail_upload_at = utc_iso_now()

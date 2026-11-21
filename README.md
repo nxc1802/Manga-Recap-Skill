@@ -29,7 +29,7 @@ Local TTS uses VieNeu model weights. `decide` uses a Gemini Decision API key. Ka
 | Ingest and inspect | `crawl`, `segment`, `decide`, `inspect`, `validate`, `repack`, `panel-inspect` |
 | Synthesize and render | `tts`, `tts_benchmark`, `visual-plan`, `render`, `batch`, `compile` |
 | Kaggle | `cloud accounts/info/run/produce-series/pull` |
-| Publish and store | `thumbnail`, `youtube accounts/metadata/upload/verify`, `archive push/verify/restore`, `clean` |
+| Publish and store | `youtube accounts/metadata/upload/verify`, `archive push/verify/restore`, `clean` |
 
 Pass `--project <slug>`, `--chapter <N>`, and `--json` where applicable. See `manga-recap <command> --help` for options. If YouTube authorization expires, run `manga-recap youtube accounts --account-action add --account <name>` in a terminal. Browser authorization waits up to five minutes. Headless jobs return exit code 4 when authorization is needed.
 

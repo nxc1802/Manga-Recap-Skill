@@ -254,21 +254,6 @@ def _build_ready_youtube_project(
         thumb_path = chap_dir / "thumbnail.jpg"
         Image.new("RGB", (1280, 720), color=(210, 120, 40)).save(thumb_path, format="JPEG")
         shutil.copy2(thumb_path, out_proj_dir / "chapter_1_thumbnail.jpg")
-        atomic_write_json(
-            chap_dir / "thumbnail_selection.json",
-            {
-                "schema_version": "4.1.0",
-                "selection_source": "explicit_cli_arguments",
-                "panels": {"panels/p1.png": calculate_sha256(Path(panel_path))},
-                "title": "TEST",
-                "subtitle": None,
-                "badge": None,
-                "has_text": True,
-                "color_preset": "yellow_black",
-                "font": None,
-                "artifact_sha256": calculate_sha256(Path(thumb_path)),
-            },
-        )
 
 
     render_chapter(root, "1", quality="preview")
@@ -1049,9 +1034,35 @@ class TestYouTubeVerify:
         with pytest.raises(CliValidationError, match="no_upload"):
             handle_youtube_verify(argparse.Namespace(project=proj_no_up["slug"], chapter="1"))
 
-    def test_thumbnail_cmd_has_no_dead_get_authenticated_service(self):
-        thumb_src = Path("src/cli/thumbnail_cmd.py").read_text(encoding="utf-8")
-        assert "get_authenticated_service" not in thumb_src
+    @pytest.mark.parametrize("ext,expected_mime", [("jpg", "image/jpeg"), ("png", "image/png")])
+    def test_upload_auto_detects_jpg_and_png_thumbnails_with_correct_mimetype(
+        self, tmp_path, monkeypatch, ext, expected_mime
+    ):
+        proj = _build_ready_youtube_project(tmp_path, monkeypatch, slug=f"thumb_{ext}", q07=False)
+        chap_dir = proj["chap_dir"]
+        thumb_path = chap_dir / f"thumbnail.{ext}"
+        fmt = "PNG" if ext == "png" else "JPEG"
+        Image.new("RGB", (1280, 720), color=(40, 120, 210)).save(thumb_path, format=fmt)
+        assert not (chap_dir / "thumbnail_selection.json").exists()
+
+        mock_yt = _install_mock_youtube(monkeypatch)
+        args = argparse.Namespace(
+            project=proj["slug"],
+            chapter="1",
+            account="kênh_review_vip",
+            privacy="unlisted",
+            thumbnail=None,
+            no_captions=True,
+            wait=False,
+            interactive=False,
+        )
+        res = handle_youtube_upload(args)
+        assert res["thumbnail_uploaded"] is True
+        mock_yt.thumbnails.return_value.set.assert_called_once()
+        media_calls = sys.modules["googleapiclient.http"].MediaFileUpload.call_args_list
+        thumb_call = media_calls[-1]
+        assert Path(thumb_call.args[0]).resolve() == thumb_path.resolve()
+        assert thumb_call.kwargs["mimetype"] == expected_mime
 
 
 

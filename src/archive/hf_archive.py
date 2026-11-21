@@ -34,7 +34,7 @@ _ROOT_ROLES = dict.fromkeys((
 _CHAPTER_ROLES = {
     "chapter.json": "chapter_metadata", "manifest.json": "chapter_manifest",
     "script.json": "script", "visual_plan.json": "visual_plan", "panel_plan.json": "panel_plan",
-    "thumbnail_selection.json": "thumbnail_selection", "youtube_metadata.json": "youtube_metadata",
+    "youtube_metadata.json": "youtube_metadata",
     "youtube_receipt.json": "youtube_receipt", "thumbnail.jpg": "thumbnail", "thumbnail.png": "thumbnail",
 }
 _CHAPTER_MEDIA = {

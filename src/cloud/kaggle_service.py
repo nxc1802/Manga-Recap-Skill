@@ -140,6 +140,9 @@ class KaggleCloudService:
                     raise RuntimeError("Kaggle username unavailable")
                 self._api, self._username = api, username
                 logger.info("Kaggle account '%s' authenticated", self.account_name)
+            except ModuleNotFoundError as exc:
+                self._api = None
+                logger.warning("Kaggle account '%s' could not authenticate: missing dependency '%s'", self.account_name, exc.name)
             except (Exception, SystemExit):
                 self._api = None
                 logger.warning("Kaggle account '%s' could not authenticate", self.account_name)
@@ -306,15 +309,21 @@ class KaggleCloudService:
             "    root = Path('/kaggle/working/runtime')",
             "    root.mkdir()",
             "    try:",
-            "        payload, = Path('/kaggle/input').rglob('payload.tar.gz')",
-            "        with tarfile.open(payload) as archive:",
-            "            seen = set()",
-            "            for entry in archive.getmembers():",
-            "                target = (root / entry.name).resolve()",
-            "                if not target.is_relative_to(root) or not entry.isfile() or target in seen:",
-            "                    raise RuntimeError('Unsafe payload member')",
-            "                seen.add(target)",
-            "            archive.extractall(root)",
+            "        tarballs = list(Path('/kaggle/input').rglob('payload.tar.gz'))",
+            "        if len(tarballs) == 1:",
+            "            with tarfile.open(tarballs[0]) as archive:",
+            "                seen = set()",
+            "                for entry in archive.getmembers():",
+            "                    target = (root / entry.name).resolve()",
+            "                    if not target.is_relative_to(root) or not entry.isfile() or target in seen:",
+            "                        raise RuntimeError('Unsafe payload member')",
+            "                    seen.add(target)",
+            "                archive.extractall(root)",
+            "        else:",
+            "            manifests = list(Path('/kaggle/input').rglob('payload_manifest.json'))",
+            "            if len(manifests) != 1:",
+            "                raise RuntimeError(f'Payload not found in /kaggle/input (tarballs={len(tarballs)}, manifests={len(manifests)})')",
+            "            shutil.copytree(manifests[0].parent, root, dirs_exist_ok=True)",
             f"        expected = {digest!r}",
             "        manifest_path = root / 'payload_manifest.json'",
             "        if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != expected:",

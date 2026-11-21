@@ -82,7 +82,6 @@ class TestSecurityWhitelistFilter:
             (Path("chapters/1/script.json"), "script"),
             (Path("chapters/1/manifest.json"), "chapter_manifest"),
             (Path("chapters/1/visual_plan.json"), "visual_plan"),
-            (Path("chapters/1/thumbnail_selection.json"), "thumbnail_selection"),
             (Path("chapters/1/youtube_metadata.json"), "youtube_metadata"),
             (Path("chapters/1/youtube_receipt.json"), "youtube_receipt"),
             (Path("chapters/1/raw/001.jpg"), "raw_image"),

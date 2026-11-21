@@ -5,7 +5,7 @@ from src.core.series_setup import require_series_setup
 COMMAND_REQUIREMENTS = {
     name: ("series_setup",) for name in (
         "crawl", "segment", "repack", "panel-inspect", "decide", "tts", "render", "compile", "batch",
-        "cloud", "youtube", "thumbnail", "archive", "clean", "review-approve", "visual-plan",
+        "cloud", "youtube", "archive", "clean", "review-approve", "visual-plan",
     )
 }
 
