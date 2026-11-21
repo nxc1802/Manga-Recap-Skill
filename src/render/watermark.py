@@ -57,10 +57,14 @@ def resolve_channel_watermark(
             try:
                 setup = read_json(setup_file)
                 q08 = (setup.get("answers") or {}).get("Q08") or {}
-                raw_ans = str(q08.get("user_answer") or "").strip()
-                if raw_ans and raw_ans.lower() not in {"no_upload", "none", "local"}:
-                    # Handle formats like "muon_review:unlisted" or "muon_review (unlisted)"
-                    alias = raw_ans.split(":")[0].split("(")[0].strip()
+                answer = q08.get("user_answer")
+                if isinstance(answer, dict):
+                    if answer.get("no_upload") is not True:
+                        alias = str(answer.get("account") or "").strip()
+                elif isinstance(answer, str):
+                    raw_answer = answer.strip()
+                    if raw_answer.lower() not in {"no_upload", "none", "local"}:
+                        alias = raw_answer.split(":")[0].split("(")[0].strip()
             except Exception:
                 alias = ""
 

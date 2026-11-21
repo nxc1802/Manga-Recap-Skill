@@ -142,3 +142,20 @@ def test_cloud_sync_publishes_only_nonempty_outputs(unit_project, tmp_path):
     result = service.sync_results("unit", "1", output, job_type="render")
     assert Path(result["video_path"]).stat().st_size == len(original)
     assert read_json(chapter / "chapter.json")["overall_status"] == "needs_review"
+
+
+def test_watermark_uses_account_from_structured_setup(unit_project):
+    from PIL import Image
+
+    from src.core.storage import read_json
+    from src.render.watermark import resolve_channel_watermark
+
+    project, _ = unit_project
+    setup_file = project / "series_setup_answers.json"
+    setup = read_json(setup_file)
+    setup["answers"]["Q08"]["user_answer"] = {"account": "muon_review", "privacy": "unlisted"}
+    atomic_write_json(setup_file, setup)
+    logo = project.parent.parent / "watermarks" / "muon_review.jpg"
+    logo.parent.mkdir()
+    Image.new("RGB", (40, 20)).save(logo)
+    assert resolve_channel_watermark(project_dir=project) == logo.resolve()
