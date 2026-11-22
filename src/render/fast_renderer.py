@@ -34,6 +34,27 @@ _CAPABILITY_CACHE_LOCK = threading.Lock()
 _FFMPEG_CAPS_CACHE: Optional[Dict[str, bool]] = None
 
 
+def _fast_blurred_background(
+    image: Image.Image,
+    size: Tuple[int, int],
+    *,
+    fit: bool = False,
+    radius: int = 20,
+    downscale: int = 4,
+) -> Image.Image:
+    """Builds a smooth Gaussian-blurred backdrop by blurring at 1/4 resolution then upscaling."""
+    target_w, target_h = int(size[0]), int(size[1])
+    scale = max(1, int(downscale))
+    small_w = max(1, target_w // scale)
+    small_h = max(1, target_h // scale)
+    if fit:
+        small = ImageOps.fit(image, (small_w, small_h), Image.Resampling.BILINEAR)
+    else:
+        small = image.resize((small_w, small_h), Image.Resampling.BILINEAR)
+    blurred = small.filter(ImageFilter.GaussianBlur(radius=max(1.0, float(radius) / scale)))
+    return blurred.resize((target_w, target_h), Image.Resampling.BILINEAR)
+
+
 def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> Image.Image:
     if not 0 <= elapsed <= shot.duration_sec:
         raise ValueError("Frame time outside shot")
@@ -49,10 +70,12 @@ def render_frame(image: Image.Image, shot, plan: VisualPlan, elapsed: float) -> 
         bottom = top + visible_height
     crop = image.crop((round(left), round(top), max(round(left)+1, round(right)), max(round(top)+1, round(bottom))))
     size = (plan.target_width, plan.target_height)
-    if shot.motion_type == ProductionMotion.SLOW_PAN_DOWN:
-        canvas = crop.resize(size, Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(radius=20))
-    else:
-        canvas = ImageOps.fit(crop, size).filter(ImageFilter.GaussianBlur(radius=20))
+    canvas = _fast_blurred_background(
+        crop,
+        size,
+        fit=(shot.motion_type != ProductionMotion.SLOW_PAN_DOWN),
+        radius=20,
+    )
     subject = ImageOps.contain(crop, size, Image.Resampling.LANCZOS)
     canvas.paste(subject, ((size[0] - subject.width) // 2, (size[1] - subject.height) // 2))
     return canvas
@@ -172,26 +195,33 @@ def _get_or_create_static_canvas_png(
     canvas_key: str,
     canvas_dir: Path,
     canvas_cache: Optional[Dict[str, Any]] = None,
+    watermark_png: Optional[Path] = None,
+    watermark_xy: Tuple[int, int] = (0, 0),
 ) -> Path:
+    effective_key = (
+        f"{canvas_key}_wm_{int(watermark_xy[0])}_{int(watermark_xy[1])}"
+        if watermark_png is not None
+        else canvas_key
+    )
     with _CANVAS_LOCK:
-        if canvas_cache is not None and canvas_key in canvas_cache:
-            cached = Path(canvas_cache[canvas_key])
+        if canvas_cache is not None and effective_key in canvas_cache:
+            cached = Path(canvas_cache[effective_key])
             if cached.is_file():
                 return cached
-        key_lock = _CANVAS_KEY_LOCKS.setdefault(canvas_key, threading.Lock())
+        key_lock = _CANVAS_KEY_LOCKS.setdefault(effective_key, threading.Lock())
         if len(_CANVAS_KEY_LOCKS) > MAX_CANVAS_CACHE_ENTRIES * 2:
             # Prune only unlocked/old entries when dictionary grows large.
             _CANVAS_KEY_LOCKS.clear()
-            _CANVAS_KEY_LOCKS[canvas_key] = key_lock
+            _CANVAS_KEY_LOCKS[effective_key] = key_lock
 
     with key_lock:
         canvas_dir.mkdir(parents=True, exist_ok=True)
-        png_path = canvas_dir / f"canvas_{canvas_key}.png"
+        png_path = canvas_dir / f"canvas_{effective_key}.png"
 
         with _CANVAS_LOCK:
             if png_path.is_file() and png_path.stat().st_size > 0:
                 if canvas_cache is not None:
-                    _remember_canvas(canvas_cache, canvas_key, png_path)
+                    _remember_canvas(canvas_cache, effective_key, png_path)
                 return png_path
 
         shot_proxy = Shot(
@@ -212,7 +242,12 @@ def _get_or_create_static_canvas_png(
         )
         with Image.open(panel_path) as image:
             rendered = render_frame(image, shot_proxy, plan_proxy, 0.0)
-            tmp_png = canvas_dir / f".canvas_{canvas_key}.{os.getpid()}.{threading.get_ident()}.tmp.png"
+            if watermark_png is not None and watermark_png.is_file():
+                with Image.open(watermark_png) as w_im:
+                    c_rgba = rendered.convert("RGBA")
+                    c_rgba.alpha_composite(w_im.convert("RGBA"), dest=(int(watermark_xy[0]), int(watermark_xy[1])))
+                    rendered = c_rgba.convert("RGB")
+            tmp_png = canvas_dir / f".canvas_{effective_key}.{os.getpid()}.{threading.get_ident()}.tmp.png"
             try:
                 rendered.save(tmp_png, format="PNG", compress_level=1)
                 with _CANVAS_LOCK:
@@ -221,7 +256,7 @@ def _get_or_create_static_canvas_png(
                     else:
                         tmp_png.unlink(missing_ok=True)
                     if canvas_cache is not None:
-                        _remember_canvas(canvas_cache, canvas_key, png_path)
+                        _remember_canvas(canvas_cache, effective_key, png_path)
             finally:
                 tmp_png.unlink(missing_ok=True)
 
@@ -281,10 +316,7 @@ def _get_or_create_pan_strip_png(
             cropped = rgb.crop(crop_box)
             subject = cropped.resize((subject_w, scaled_h), Image.Resampling.LANCZOS)
             if subject_w < scaled_w:
-                from PIL import ImageFilter
-                bg = cropped.resize((scaled_w, scaled_h), Image.Resampling.BILINEAR).filter(
-                    ImageFilter.GaussianBlur(radius=20)
-                )
+                bg = _fast_blurred_background(cropped, (scaled_w, scaled_h), fit=False, radius=20)
                 bg.paste(subject, ((scaled_w - subject_w) // 2, 0))
                 final_strip = bg
             else:
@@ -707,6 +739,10 @@ def render_shot_clip(
 
     loop_f = f"loop=loop={frame_count - 1}:size=1:start=0" if frame_count > 1 else ""
     canvas_png: Optional[Path] = None
+    wm_png = Path(task["watermark_png_path"]).resolve() if task.get("watermark_png_path") else None
+    wm_xy = task.get("watermark_xy") or (0, 0)
+    if wm_png is not None and not wm_png.is_file():
+        wm_png = None
 
     if pan_geom["is_animated"]:
         strip_png, scaled_max_travel, scaled_rate = _get_or_create_pan_strip_png(
@@ -737,6 +773,8 @@ def render_shot_clip(
             canvas_key=canvas_key,
             canvas_dir=work_dir / "canvases",
             canvas_cache=canvas_cache,
+            watermark_png=wm_png,
+            watermark_xy=(int(wm_xy[0]), int(wm_xy[1])),
         )
         input_args = ["-framerate", str(fps), "-i", str(canvas_png)]
         static_parts = ["setsar=1", "format=yuv420p"]
@@ -756,22 +794,6 @@ def render_shot_clip(
         gpu_index=gpu_index,
         profile="high",
     )
-    wm_png = Path(task["watermark_png_path"]).resolve() if task.get("watermark_png_path") else None
-    wm_xy = task.get("watermark_xy") or (0, 0)
-    if wm_png is not None and not wm_png.is_file():
-        wm_png = None
-
-    if not pan_geom["is_animated"] and wm_png is not None and canvas_png is not None:
-        wm_canvas = work_dir / f"canvas_wm_{canvas_key}.png"
-        if not wm_canvas.is_file():
-            with Image.open(canvas_png) as c_im, Image.open(wm_png) as w_im:
-                c_rgba = c_im.convert("RGBA")
-                c_rgba.alpha_composite(w_im.convert("RGBA"), dest=(int(wm_xy[0]), int(wm_xy[1])))
-                tmp_wm = work_dir / f".tmp_wm_{os.getpid()}_{threading.get_ident()}_{canvas_key}.png"
-                c_rgba.convert("RGB").save(tmp_wm, format="PNG")
-                tmp_wm.replace(wm_canvas)
-        canvas_png = wm_canvas
-        input_args = ["-loop", "1", "-t", f"{quantized_dur:.6f}", "-i", str(canvas_png)]
 
     timescale = fps * 1000
     shot_sub_dir = work_dir / "shot_subs" / f"shot_{int(task.get('shot_index', 0)):05d}"
