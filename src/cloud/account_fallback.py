@@ -1,7 +1,14 @@
-"""Try each configured token once; stop on exhaustion, never fake success."""
+"""Try each configured token cleanly on pre-execution quota/queue rejection; never replay post-submit ambiguity."""
 from functools import wraps
-from src.core.errors import DomainValidationError, StorageError
+from src.cloud.lifecycle import NON_RETRYABLE_FALLBACK_CATEGORIES
+from src.core.errors import (
+    DomainValidationError,
+    ProviderError,
+    ProviderIntegrityError,
+    StorageError,
+)
 from src.core.logger import logger
+from src.providers.kaggle import KaggleClientPollTimeoutError, KaggleSubmitAmbiguousError
 
 
 def with_account_fallback(operation):
@@ -24,9 +31,21 @@ def with_account_fallback(operation):
                     isinstance(result, dict) and (result.get("status") in {"error", "failed"} or result.get("success") is False)
                 ):
                     return result
-            except (DomainValidationError, ValueError, StorageError):
-                # Input/approval/artifact errors must still fail closed immediately.
+            except (
+                DomainValidationError,
+                ValueError,
+                StorageError,
+                ProviderIntegrityError,
+                KaggleSubmitAmbiguousError,
+                KaggleClientPollTimeoutError,
+            ):
+                # Input/approval/integrity/post-submit-ambiguous errors must fail closed immediately.
                 raise
+            except ProviderError as exc:
+                if getattr(exc, "category", None) in NON_RETRYABLE_FALLBACK_CATEGORIES:
+                    raise
+                logger.warning("Kaggle account '%s' failed (%s); trying the next token", self.account_name, type(exc).__name__)
+                continue
             except Exception as exc:
                 logger.warning("Kaggle account '%s' failed (%s); trying the next token", self.account_name, type(exc).__name__)
                 continue

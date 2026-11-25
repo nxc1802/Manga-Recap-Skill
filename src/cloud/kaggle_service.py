@@ -19,23 +19,35 @@ from typing import Any, Dict, List, Optional
 from src.cloud.account_fallback import with_account_fallback
 from src.cloud.bootstrap import render_worker_stub, safe_extract_tar
 from src.cloud.jobs import load_cloud_job_state, write_cloud_job_state
+from src.cloud.lifecycle import (
+    LifecycleState,
+    check_no_duplicate_active_job,
+    estimate_workload_budgets,
+    normalize_remote_status,
+    persist_submit_intent,
+    reconcile_submit_unknown,
+)
 from src.core.logger import logger
 from src.core.project import get_chapter_dir, get_project_dir
 from src.core.storage import atomic_write_json, read_json
 from src.providers.kaggle import (
     KaggleClient,
+    KaggleClientPollTimeoutError,
     KaggleExecutionError,
     KaggleQueueTimeoutError,
     KaggleQuotaExhaustedError,
+    KaggleSubmitAmbiguousError,
     authenticate_kaggle_token,
     parse_kaggle_duration_seconds as _parse_kaggle_duration_seconds,
 )
 
 __all__ = [
     "KaggleCloudService",
+    "KaggleClientPollTimeoutError",
     "KaggleQueueTimeoutError",
     "KaggleQuotaExhaustedError",
     "KaggleExecutionError",
+    "KaggleSubmitAmbiguousError",
     "safe_extract_tar",
     "_parse_kaggle_duration_seconds",
 ]
@@ -226,8 +238,10 @@ class KaggleCloudService:
         gpu: bool = True,
         wait: bool = True,
         poll_interval: int = 6,
-        timeout_seconds: int = 1800,
-        queue_timeout_seconds: Optional[float] = 300.0,
+        timeout_seconds: Optional[int] = None,
+        queue_timeout_seconds: Optional[float] = None,
+        queue_notice_seconds: float = 300.0,
+        dataset_timeout_seconds: float = 600.0,
         job_type: str = "produce",
         render_workers: int = 4,
         encoder_preference: str = "auto",
@@ -248,7 +262,11 @@ class KaggleCloudService:
 
         series = series_chapters is not None
         chapters = list(series_chapters) if series else [str(chapter_number)]
+        project = get_project_dir(project_slug)
         chapter = get_chapter_dir(project_slug, chapter_number)
+        job_state_path = (project if series else chapter) / "cloud_job.json"
+        check_no_duplicate_active_job(job_state_path, client=client)
+
         if gpu:
             quota = self.get_gpu_quota_status()
             if quota and quota.get("exhausted"):
@@ -257,6 +275,20 @@ class KaggleCloudService:
                     f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
                     f"refreshes {quota.get('quota_refresh_time') or 'next cycle'})."
                 )
+
+        resolved_queue_timeout: Optional[float] = 900.0 if queue_timeout_seconds is None else (
+            None if float(queue_timeout_seconds) <= 0 else float(queue_timeout_seconds)
+        )
+        budget = estimate_workload_budgets(
+            project,
+            chapters,
+            job_type,
+            gpu=gpu,
+            queue_notice_sec=queue_notice_seconds,
+            queue_timeout_sec=resolved_queue_timeout,
+            dataset_transfer_timeout_sec=dataset_timeout_seconds,
+        )
+        effective_timeout = int(timeout_seconds) if timeout_seconds is not None else budget.client_poll_timeout_sec
 
         kernel_slug = (
             kernel_slug
@@ -305,11 +337,16 @@ class KaggleCloudService:
         client.create_private_dataset(ds_staging)
         host_timing["dataset_create_sec"] = round(time.monotonic() - t_ds_create, 4)
         t_ds_ready = time.monotonic()
-        self._wait_for_dataset_ready(ds_ref, expected_file="payload.tar.gz", timeout_sec=300.0)
+        self._wait_for_dataset_ready(
+            ds_ref,
+            expected_file="payload.tar.gz",
+            timeout_sec=budget.dataset_transfer_timeout_sec,
+        )
         host_timing["dataset_ready_sec"] = round(time.monotonic() - t_ds_ready, 4)
 
+        expected_kernel_ref = f"{self._username}/{kernel_slug}"
         metadata = {
-            "id": f"{self._username}/{kernel_slug}",
+            "id": expected_kernel_ref,
             "title": kernel_slug,
             "code_file": "worker.py",
             "language": "python",
@@ -326,20 +363,11 @@ class KaggleCloudService:
         }
         (staging_dir / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
-        logger.info(
-            f"KaggleCloudService: Pushing kernel '{self._username}/{kernel_slug}' (GPU: {gpu}, Job: {job_type})..."
-        )
-        t_push = time.monotonic()
-        target_kernel_ref = client.push_kernel(staging_dir, f"{self._username}/{kernel_slug}")
-        host_timing["kernel_push_sec"] = round(time.monotonic() - t_push, 4)
-
-        project = get_project_dir(project_slug)
-        job_state_path = (project if series else chapter) / "cloud_job.json"
         job_meta = {
             "project_slug": project_slug,
             "chapter_number": str(chapter_number),
             "job_type": job_type,
-            "kernel_ref": target_kernel_ref,
+            "kernel_ref": expected_kernel_ref,
             "dataset_ref": ds_ref,
             "account_name": getattr(self, "account_name", "unknown"),
             "username": self.get_username(),
@@ -349,13 +377,58 @@ class KaggleCloudService:
             "payload_manifest_sha256": self._payload_manifest_hash,
             "input_hashes": self._dispatch_input_hashes,
             "host_timing": host_timing,
+            "budget": budget.as_dict(),
         }
+        persist_submit_intent(job_state_path, job_meta)
+
+        logger.info(
+            f"KaggleCloudService: Pushing kernel '{expected_kernel_ref}' (GPU: {gpu}, Job: {job_type})..."
+        )
+        t_push = time.monotonic()
+        target_kernel_ref = expected_kernel_ref
+        reconciled_state: Optional[Dict[str, Any]] = None
+        try:
+            target_kernel_ref = client.push_kernel(staging_dir, expected_kernel_ref)
+        except KaggleExecutionError as exc:
+            self._write_cloud_job_state(
+                job_state_path,
+                {
+                    **job_meta,
+                    "status": LifecycleState.FAILED,
+                    "error": str(exc),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            raise
+        except Exception as exc:
+            ambiguous = {
+                **job_meta,
+                "status": LifecycleState.SUBMIT_UNKNOWN,
+                "error": f"Push terminated before confirmation: {exc}",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._write_cloud_job_state(job_state_path, ambiguous)
+            reconciled_state = reconcile_submit_unknown(client, job_state_path, ambiguous)
+            target_kernel_ref = str(reconciled_state.get("kernel_ref") or expected_kernel_ref)
+            if reconciled_state["status"] == LifecycleState.FAILED:
+                raise KaggleExecutionError(
+                    f"Kaggle {job_type} job failed after ambiguous push: {reconciled_state.get('error')}",
+                    category="remote_failed",
+                    provider="kaggle",
+                )
+        host_timing["kernel_push_sec"] = round(time.monotonic() - t_push, 4)
+        job_meta["kernel_ref"] = target_kernel_ref
+
         if not wait:
             self._write_cloud_job_state(
                 job_state_path,
                 {
                     **job_meta,
-                    "status": "dispatched",
+                    "status": (
+                        reconciled_state["status"]
+                        if reconciled_state is not None
+                        else LifecycleState.DISPATCHED
+                    ),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -364,18 +437,28 @@ class KaggleCloudService:
                 "kernel_ref": target_kernel_ref,
                 "staging_dir": str(staging_dir),
                 "job_type": job_type,
+                "budget": budget.as_dict(),
             }
 
         logger.info(f"KaggleCloudService: Waiting for cloud execution of '{target_kernel_ref}'...")
         self._poll_kernel_until_complete(
             target_kernel_ref,
-            timeout_seconds=timeout_seconds,
-            queue_timeout_seconds=queue_timeout_seconds if gpu else None,
+            timeout_seconds=effective_timeout,
+            queue_timeout_seconds=budget.queue_timeout_sec,
+            queue_notice_seconds=budget.queue_notice_sec,
             poll_interval=poll_interval,
             label=f"Chapter-{chapter_number} {job_type}",
             error_download_dir=staging_dir / "error_out",
             job_state_path=job_state_path,
             job_metadata=job_meta,
+        )
+        self._write_cloud_job_state(
+            job_state_path,
+            {
+                **job_meta,
+                "status": LifecycleState.REMOTE_COMPLETE,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
 
         with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
@@ -485,16 +568,50 @@ class KaggleCloudService:
         self._dispatch_input_hashes = state.input_hashes
         job_dict = state.model_dump(mode="json")
 
+        if str(state.status or "").upper() == LifecycleState.SUBMIT_UNKNOWN:
+            job_dict = reconcile_submit_unknown(self._client(), state_path, job_dict)
+            if job_dict["status"] == LifecycleState.FAILED:
+                raise KaggleExecutionError(
+                    f"Kaggle job '{state.kernel_ref}' failed: {job_dict.get('error')}",
+                    category="remote_failed",
+                    provider="kaggle",
+                )
+
+        saved_budget = job_dict.get("budget") or {}
+        if saved_budget.get("client_poll_timeout_sec"):
+            poll_timeout = int(saved_budget["client_poll_timeout_sec"])
+            queue_notice = float(saved_budget.get("queue_notice_sec", 300.0))
+            queue_timeout = saved_budget.get("queue_timeout_sec")
+        else:
+            budget = estimate_workload_budgets(
+                get_project_dir(project_slug),
+                state.chapters or [state.chapter_number or "1"],
+                state.job_type,
+                gpu=state.gpu,
+            )
+            poll_timeout = budget.client_poll_timeout_sec
+            queue_notice = budget.queue_notice_sec
+            queue_timeout = budget.queue_timeout_sec
+
         self._poll_kernel_until_complete(
-            state.kernel_ref,
-            timeout_seconds=1800,
-            queue_timeout_seconds=300,
+            str(job_dict.get("kernel_ref") or state.kernel_ref),
+            timeout_seconds=poll_timeout,
+            queue_timeout_seconds=queue_timeout,
+            queue_notice_seconds=queue_notice,
             poll_interval=6,
             job_state_path=state_path,
             job_metadata=job_dict,
         )
+        self._write_cloud_job_state(
+            state_path,
+            {
+                **job_dict,
+                "status": LifecycleState.REMOTE_COMPLETE,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
-            self._client().download_kernel_output(state.kernel_ref, Path(download))
+            self._client().download_kernel_output(str(job_dict.get("kernel_ref") or state.kernel_ref), Path(download))
             if state.series:
                 result = self.sync_series_results(project_slug, state.chapters, Path(download))
             else:
@@ -562,6 +679,7 @@ class KaggleCloudService:
         *,
         timeout_seconds: int = 3600,
         queue_timeout_seconds: Optional[float] = 300.0,
+        queue_notice_seconds: Optional[float] = 300.0,
         poll_interval: int = 6,
         heartbeat_interval_sec: float = 30.0,
         label: str = "Series",
@@ -574,8 +692,10 @@ class KaggleCloudService:
         queued_since_iso = datetime.now(timezone.utc).isoformat()
         started_running_iso: Optional[str] = None
         last_status: Optional[str] = None
+        last_norm: str = "QUEUED"
         last_heartbeat = t0
         left_queue_at: Optional[float] = None
+        queue_notice_emitted = False
         completed_cleanly = False
         base_meta = dict(job_metadata or {})
 
@@ -606,6 +726,7 @@ class KaggleCloudService:
 
             now = time.monotonic()
             elapsed = now - t0
+            last_norm = normalize_remote_status(norm or current_status)
 
             if current_status != last_status:
                 logger.info(f"Kaggle {label} Status [{int(elapsed)}s]: {current_status}")
@@ -653,11 +774,35 @@ class KaggleCloudService:
 
             if (
                 norm == "QUEUED"
+                and queue_notice_seconds is not None
+                and float(queue_notice_seconds) > 0
+                and elapsed >= float(queue_notice_seconds)
+                and not queue_notice_emitted
+            ):
+                queue_notice_emitted = True
+                logger.warning(
+                    f"Kaggle {label} queue stall notice [{int(elapsed)}s]: '{target_kernel_ref}' still QUEUED "
+                    f"(account={getattr(self, 'account_name', 'unknown')})"
+                )
+                _persist("QUEUED", {"queue_notice_emitted": True})
+
+            if (
+                norm == "QUEUED"
                 and queue_timeout_seconds is not None
                 and float(queue_timeout_seconds) > 0
                 and elapsed >= float(queue_timeout_seconds)
             ):
-                _persist("QUEUE_TIMEOUT", {"queue_timeout_seconds": float(queue_timeout_seconds)})
+                try:
+                    client.cancel_kernel(target_kernel_ref)
+                except Exception as cancel_err:
+                    logger.warning("Best-effort queue cancel failed for %s: %s", target_kernel_ref, cancel_err)
+                _persist(
+                    LifecycleState.QUEUE_TIMEOUT,
+                    {
+                        "queue_timeout_seconds": float(queue_timeout_seconds),
+                        "queue_notice_emitted": queue_notice_emitted,
+                    },
+                )
                 raise KaggleQueueTimeoutError(
                     f"Kaggle Cloud job '{target_kernel_ref}' (account '{getattr(self, 'account_name', 'unknown')}') "
                     f"remained QUEUED for {int(elapsed)}s (limit={int(queue_timeout_seconds)}s). "
@@ -665,10 +810,18 @@ class KaggleCloudService:
                 )
 
         if not completed_cleanly:
-            _persist("TIMEOUT", {"error": f"Timed out after {timeout_seconds}s with status '{last_status}'"})
-            raise TimeoutError(
-                f"Kaggle Cloud job '{target_kernel_ref}' timed out after {timeout_seconds}s "
-                f"with status '{last_status}'. Output download aborted."
+            _persist(
+                LifecycleState.CLIENT_TIMEOUT,
+                {
+                    "error": f"Client poll timed out after {timeout_seconds}s with status '{last_status}'",
+                    "last_remote_status": last_norm,
+                },
+            )
+            raise KaggleClientPollTimeoutError(
+                f"Kaggle Cloud job '{target_kernel_ref}' client poll timed out after {timeout_seconds}s "
+                f"while remote status was '{last_status}'. Use 'cloud pull' or 'reconcile' to resume.",
+                category="client_poll_timeout",
+                provider="kaggle",
             )
 
         t_done = time.monotonic()

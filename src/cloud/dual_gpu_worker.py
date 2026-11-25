@@ -6,11 +6,14 @@ import os
 import queue
 import shutil
 import tempfile
+import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
+from src.cloud.lifecycle import check_disk_low_water
 from src.cloud.payload import verify_payload_manifest
 from src.cloud.telemetry import (
     ResourceSampler,
@@ -216,8 +219,83 @@ def _prepare_chapter(project, number, work, job, quality, settings, encoder, wor
     events.put(("ready", number, len(shots), render))
 
 
+class _InProcessQueue:
+    """Lock-free single-process FIFO queue avoiding OS pipe deadlocks on single GPU."""
+
+    def __init__(self):
+        self._buf = deque()
+
+    def put(self, item):
+        self._buf.append(item)
+
+    def get(self):
+        return self._buf.popleft()
+
+    def qsize(self):
+        return len(self._buf)
+
+    def empty(self):
+        return not self._buf
+
+    def close(self):
+        self._buf.clear()
+
+
+class _HeartbeatEmitter:
+    """Daemon heartbeat emitter that never blocks full event queues."""
+
+    def __init__(self, events, worker_label, interval_sec=10.0):
+        self._events = events
+        self._worker_label = worker_label
+        self._interval_sec = float(interval_sec)
+        self._stop = threading.Event()
+        self._thread = None
+
+    def start(self):
+        self._emit()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _emit(self):
+        payload = ("heartbeat", self._worker_label, time.monotonic(), 0)
+        put_nowait = getattr(self._events, "put_nowait", None)
+        try:
+            if callable(put_nowait):
+                put_nowait(payload)
+            else:
+                self._events.put(payload)
+        except Exception:
+            pass
+
+    def _run(self):
+        while not self._stop.wait(self._interval_sec):
+            self._emit()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+
+def _terminate_process_tree(child):
+    """Best-effort child termination escalating terminate -> wait -> kill."""
+    if not child.is_alive():
+        child.join(timeout=0.5)
+        return
+    try:
+        child.terminate()
+        child.join(timeout=3.0)
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=2.0)
+    except Exception:
+        pass
+
+
 def _encode_queue(jobs, events, gpu_id, workers):
     canvas_cache = {}
+    hb = _HeartbeatEmitter(events, f"gpu:{gpu_id}")
+    hb.start()
 
     def encode():
         while (item := jobs.get()) is not None:
@@ -246,40 +324,51 @@ def _encode_queue(jobs, events, gpu_id, workers):
         except Exception as exc:
             local_errors.put(exc)
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(guarded_encode) for _ in range(workers)]
-        while not all(future.done() for future in futures):
-            try:
-                error = local_errors.get(timeout=0.25)
-            except queue.Empty:
-                continue
-            events.put(("error", str(error)))
-            break
-        else:
-            if not local_errors.empty():
-                raise local_errors.get()
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(guarded_encode) for _ in range(workers)]
+            while not all(future.done() for future in futures):
+                try:
+                    error = local_errors.get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                events.put(("error", str(error)))
+                break
+            else:
+                if not local_errors.empty():
+                    raise local_errors.get()
+    finally:
+        hb.stop()
 
 
 def _audio_then_encode(project, chapters, work, job, single_preview, config, encoder, gpu_id,
                        process_count, workers, jobs, events, batch_size):
     from src.tts.cuda_worker import VieNeuCUDAWorker
 
-    approval = require_voice_approval(project)
-    model = VieNeuCUDAWorker(gpu_id=gpu_id) if job != "render" else None
+    local_jobs = _InProcessQueue() if jobs is None else jobs
+    hb = _HeartbeatEmitter(events, f"gpu:{gpu_id}")
+    hb.start()
     try:
-        for number in chapters:
-            quality = "preview" if single_preview and number == "1" else "final"
-            _prepare_chapter(project, number, work / number, job, quality, config["render_settings"],
-                             encoder, model, approval, jobs, events, batch_size)
-    finally:
-        if model is not None:
-            model.unload()
+        approval = require_voice_approval(project)
+        model = VieNeuCUDAWorker(gpu_id=gpu_id) if job != "render" else None
+        try:
+            for number in chapters:
+                quality = "preview" if single_preview and number == "1" else "final"
+                _prepare_chapter(project, number, work / number, job, quality, config["render_settings"],
+                                 encoder, model, approval, local_jobs, events, batch_size)
+        finally:
+            if model is not None:
+                model.unload()
 
-    if job == "tts":
-        return
-    for _ in range(process_count * workers):
-        jobs.put(None)
-    _encode_queue(jobs, events, gpu_id, workers)
+        if job == "tts":
+            return
+        for _ in range(process_count * workers):
+            local_jobs.put(None)
+        _encode_queue(local_jobs, events, gpu_id, workers)
+    finally:
+        hb.stop()
+        if jobs is None:
+            local_jobs.close()
 
 
 def _finish_chapter(project, number, work, clips, config, quality):
@@ -298,8 +387,9 @@ def _finish_chapter(project, number, work, clips, config, quality):
 
 
 def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=2,
-                 batch_size=12, single_preview=True, telemetry=None):
-    """Use the same shot queue on one device. Encoding then starts after TTS unload."""
+                 batch_size=12, single_preview=True, telemetry=None,
+                 worker_heartbeat_timeout_sec=1800.0, min_free_disk_mb=256):
+    """Use an in-process queue on one device and bounded IPC queues across two GPUs."""
     project = Path(project).resolve()
     config = read_json(project / "project.json")
     workers = max(1, min(4, int(render_workers)))
@@ -315,17 +405,19 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
 
     with tempfile.TemporaryDirectory(prefix="manga-shots-") as directory:
         work = Path(directory)
+        check_disk_low_water(work, min_free_mb=min_free_disk_mb)
+        ctx = mp.get_context("spawn")
+        # Only bind a cross-process job queue when a GPU 1 consumer process runs concurrently.
+        jobs = ctx.Queue(maxsize=max(32, workers * 16)) if len(devices) == 2 else None
+        events = ctx.Queue(maxsize=512)
         sampler = ResourceSampler(
             work_root=work,
             interval_sec=1.5,
             queue_depth_fn=lambda: {
-                "jobs_qsize": jobs.qsize() if hasattr(jobs, "qsize") else -1,
+                "jobs_qsize": jobs.qsize() if (jobs is not None and hasattr(jobs, "qsize")) else -1,
                 "events_qsize": events.qsize() if hasattr(events, "qsize") else -1,
             },
         )
-        ctx = mp.get_context("spawn")
-        jobs = ctx.Queue()
-        events = ctx.Queue()
         sampler.start()
         children = [ctx.Process(target=_audio_then_encode, args=(
             project, chapters, work, job, single_preview, config, encoder, devices[0], len(devices),
@@ -338,6 +430,8 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
         clips = {number: {} for number in chapters}
         completed = set()
         started = []
+        last_activity = time.monotonic()
+        heartbeats = {}
         try:
             for child in children:
                 child.start()
@@ -350,8 +444,21 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
                         raise RuntimeError("Audio or visual process failed. See worker traceback.")
                     if all(child.exitcode is not None for child in started):
                         raise RuntimeError("Worker exited before reporting all chapters")
+                    if (
+                        worker_heartbeat_timeout_sec is not None
+                        and float(worker_heartbeat_timeout_sec) > 0
+                        and (time.monotonic() - last_activity) > float(worker_heartbeat_timeout_sec)
+                    ):
+                        raise RuntimeError(
+                            f"Worker heartbeat stalled for >{int(worker_heartbeat_timeout_sec)}s"
+                        )
                     continue
+                last_activity = time.monotonic()
                 kind, *rest = event
+                if kind == "heartbeat":
+                    worker_label, ts, _ = rest
+                    heartbeats[worker_label] = ts
+                    continue
                 if kind == "error":
                     raise RuntimeError(f"Shot encoding failed: {rest[0]}")
                 if kind == "span":
@@ -383,6 +490,7 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
                                 config,
                                 quality,
                             )
+                        check_disk_low_water(work, min_free_mb=min_free_disk_mb)
                     completed.add(number)
             for child in started:
                 child.join(timeout=30)
@@ -392,10 +500,9 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
             sampler.stop()
             recorder.set_sampler_summary(sampler.summarize())
             for child in started:
-                if child.is_alive():
-                    child.terminate()
-                child.join()
-            jobs.close()
+                _terminate_process_tree(child)
+            if jobs is not None:
+                jobs.close()
             events.close()
 
 

@@ -36,8 +36,16 @@ class KaggleQueueTimeoutError(ProviderTimeoutError, TimeoutError):
     """Raised when a Kaggle kernel stays QUEUED past queue_timeout_seconds."""
 
 
+class KaggleClientPollTimeoutError(ProviderTimeoutError, TimeoutError):
+    """Raised when local polling times out while a remote Kaggle kernel may still be running."""
+
+
 class KaggleExecutionError(ProviderExecutionError, RuntimeError):
     """Raised when Kaggle rejects submission or fails remotely."""
+
+
+class KaggleSubmitAmbiguousError(ProviderExecutionError, RuntimeError):
+    """Raised when kernel submission outcome is transport-ambiguous (SUBMIT_UNKNOWN)."""
 
 
 def parse_kaggle_duration_seconds(raw: Any) -> float:
