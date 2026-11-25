@@ -974,7 +974,7 @@ def decide_chapter_panels(
 ) -> Dict[str, Any]:
     if not project_slug or chapter_num is None:
         raise DomainValidationError("Both --project and --chapter are required.")
-    from src.core.decision_engine import run_decision_pipeline
+    from src.ingest.decision import run_decision_pipeline
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     return run_decision_pipeline(chap_dir, max_workers=workers, reclassify_all=reclassify_all)
 
