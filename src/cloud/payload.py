@@ -145,8 +145,8 @@ def export_results(project, manifest, manifest_hash, output, *, compile_feature=
             shutil.copy2(path, dest)
     feature = {}
     if compile_feature:
-        from src.cli.compile_cmd import handle_compile
-        result = handle_compile(argparse.Namespace(project=manifest["project_slug"], chapters=",".join(chapters), output=None))
+        from src.core.workflow import compile_project_chapters
+        result = compile_project_chapters(manifest["project_slug"], chapters=",".join(chapters), output=None)
         prefix = get_output_dir(manifest["project_slug"])
         for key, value in result.items():
             if isinstance(value, str):

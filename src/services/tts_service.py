@@ -238,12 +238,16 @@ class TTSService:
 
     async def process_chapter_audio(self, chapter_id, chapter_num, speed=None,
                                     voice_name=None, progress_callback=None):
-        import argparse
         from src.core.execution_policy import resolve_legacy_chapter
-        from src.cli.tts_cmd import handle_tts
+        from src.core.workflow import synthesize_chapter_tts
         project = resolve_legacy_chapter(chapter_id, chapter_num)
-        handle_tts(argparse.Namespace(project=project.name, chapter=str(chapter_num),
-            speed=speed, voice=voice_name, engine="neural"))
+        synthesize_chapter_tts(
+            project.name,
+            str(chapter_num),
+            speed=speed,
+            voice=voice_name,
+            engine="neural",
+        )
         return True
 
 

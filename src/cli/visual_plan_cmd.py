@@ -1,24 +1,24 @@
-"""Generate or explicitly regenerate a canonical plan after source/audio edits."""
+"""Visual-plan CLI command handler delegating to core workflow."""
+
+import argparse
+from typing import Any, Dict
+
+from src.cli.exit_codes import CliValidationError
 from src.core.execution_policy import enforce_execution_policy
-from src.core.storage import get_project_dir, load_manifest, load_recap_script, read_json
-from src.render.visual_policy import generate_visual_plan, resolve_visual_plan
-from src.core.storage import calculate_sha256
+from src.core.workflow import generate_chapter_visual_plan
 
 
-def handle_visual_plan(args):
+def handle_visual_plan(args: argparse.Namespace) -> Dict[str, Any]:
+    """Handle ``manga-recap visual-plan`` by delegating to visual plan generation."""
     enforce_execution_policy("visual-plan", args)
-    root = get_project_dir(args.project)
-    chapter = root / "chapters" / str(args.chapter)
-    settings = read_json(root / "project.json")["render_settings"]
-    kwargs = dict(target_width=settings["target_width"], target_height=settings["target_height"], fps=settings["fps"],
-                  motion_enabled=settings["render_pan_mode"] == "animation")
-    manifest, script = load_manifest(chapter), load_recap_script(chapter)
-    path = chapter / "visual_plan.json"
-    if args.regenerate:
-        plan = generate_visual_plan(chapter, manifest, script, **kwargs)
-        if path.exists():
-            path.replace(chapter / f"visual_plan.stale.{calculate_sha256(path)[:16]}.json")
-    else:
-        plan = resolve_visual_plan(chapter, manifest, script, **kwargs)
-    plan.save(path)
-    return dict(path=str(path), input_fingerprint=plan.input_fingerprint, shots=len(plan.shots), duration=plan.total_duration_sec)
+
+    project_slug = getattr(args, "project", "")
+    chapter_num = getattr(args, "chapter", None)
+    if not project_slug or chapter_num is None:
+        raise CliValidationError("Both --project and --chapter are required for visual-plan.")
+
+    return generate_chapter_visual_plan(
+        project_slug,
+        str(chapter_num),
+        regenerate=bool(getattr(args, "regenerate", False)),
+    )

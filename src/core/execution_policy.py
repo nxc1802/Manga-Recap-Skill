@@ -6,8 +6,9 @@ from src.core.storage import read_json
 
 COMMAND_REQUIREMENTS = {
     name: ("series_setup",) for name in (
-        "crawl", "segment", "repack", "panel-inspect", "decide", "tts", "render", "compile", "batch",
-        "cloud", "youtube", "archive", "clean", "review-approve", "visual-plan",
+        "crawl", "segment", "repack", "panel-inspect", "decide", "prepare",
+        "tts", "render", "preview", "compile", "batch", "produce",
+        "cloud", "youtube", "publish", "archive", "clean", "review-approve", "approve", "visual-plan",
     )
 }
 
@@ -31,7 +32,8 @@ def enforce_execution_policy(command, args):
     if not slug:
         raise DomainValidationError(f"{command}: a project and eight confirmed setup answers are required")
     require_series_setup(slug)
-    production = command in {"batch", "compile"}
+    production = command in {"batch", "compile", "produce"}
+    production |= command == "publish" and getattr(args, "publish_action", "upload") == "upload"
     production |= command == "tts" and str(getattr(args, "chapter", "1")) != "1"
     production |= command == "render" and (getattr(args, "quality", "final") == "final" or str(getattr(args, "chapter", "1")) != "1")
     production |= command == "cloud" and getattr(args, "cloud_action", "run") in {"produce-series", "produce_series"}

@@ -320,7 +320,173 @@ def build_parser() -> JsonAwareArgumentParser:
     p_stp.add_argument("--answers-json", "--answers", dest="answers_json", default=None, help="Path to answers JSON file or inline JSON string")
     p_stp.add_argument("--reviewer", default="user", help="Reviewer identifier (default: user)")
 
+    # Canonical V6 stage commands (alongside full compatibility command set)
+    # 19. prepare (crawl -> segment -> decide)
+    p_prep = subparsers.add_parser("prepare", help="Prepare chapter assets (crawl, segment, decision routing)", parents=[common_parent])
+    p_prep.add_argument("-p", "--project", required=True, help="Project slug")
+    p_prep.add_argument("-c", "--chapter", required=True, help="Chapter number")
+    p_prep.add_argument("-u", "--url", default=None, help="Source URL to scrape")
+    p_prep.add_argument("--import-dir", default=None, help="Local directory to import raw images from")
+    p_prep.add_argument("--max-panels", type=int, default=None, help="Max images limit")
+    p_prep.add_argument("--verify", action="store_true", help="Perform strict image integrity and continuity verification")
+    p_prep.add_argument("--target-width", type=int, default=1080, help="Target panel width")
+    p_prep.add_argument("--force", action="store_true", help="Force re-segmentation")
+    p_prep.add_argument("--skip-decide", action="store_true", help="Skip Decision API pass after segmentation")
+    p_prep.add_argument("--workers", type=int, default=2, help="Concurrent Decision API requests (default: 2)")
+
+    # 20. preview (validate script -> TTS -> preview render -> review pack)
+    p_prv = subparsers.add_parser("preview", help="Produce Chapter 1 preview video and static review pack", parents=[common_parent])
+    p_prv.add_argument("-p", "--project", required=True, help="Project slug")
+    p_prv.add_argument("-c", "--chapter", default="1", help="Chapter number (must be '1')")
+    p_prv.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
+    p_prv.add_argument("--render-workers", type=int, default=None, help="Render concurrent worker count")
+    p_prv.add_argument("--tts-workers", type=int, default=None, help="TTS concurrent worker count")
+    p_prv.add_argument("--kaggle", action="store_true", help="Offload preview TTS/render to Kaggle Cloud GPU")
+    p_prv.add_argument("--force", action="store_true", help="Re-synthesize TTS even if cached")
+
+    # 21. approve (record human Chapter 1 preview approval bound to hashes)
+    p_app = subparsers.add_parser("approve", help="Approve Chapter 1 preview with bound config and artifact hashes", parents=[common_parent])
+    p_app.add_argument("-p", "--project", required=True, help="Project slug")
+    p_app.add_argument("--reviewer", required=True, help="Reviewer identifier")
+    p_app.add_argument("--config-fingerprint", required=True, help="Config fingerprint from review pack")
+    p_app.add_argument("--artifact-hash", required=True, help="SHA-256 hash of preview.mp4 from review pack")
+
+    # 22. produce (TTS + final render / Kaggle routed from setup compute choice)
+    p_prod = subparsers.add_parser("produce", help="Produce approved chapter(s) via configured compute backend", parents=[common_parent])
+    p_prod.add_argument("-p", "--project", required=True, help="Project slug")
+    p_prod.add_argument("-c", "--chapters", default=None, help="Comma-separated or range list of chapters")
+    p_prod.add_argument("--retry-chapter", default=None, help="Specific chapter number to retry")
+    p_prod.add_argument("--compile", action="store_true", help="Auto-compile completed chapters into master recap video")
+    p_prod.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
+    p_prod.add_argument("--kaggle", action=argparse.BooleanOptionalAction, default=None, help="Override compute setting from setup")
+    p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
+    p_prod.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
+    p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
+    p_prod.add_argument("--force", action="store_true", help="Force re-processing of completed chapters")
+
+    # 23. publish (metadata, upload, and post-upload verification)
+    p_pub = subparsers.add_parser("publish", help="Publish chapter or feature video to YouTube and verify live status", parents=[common_parent])
+    p_pub.add_argument("-p", "--project", required=True, help="Project slug")
+    p_pub.add_argument("-c", "--chapter", default="1", help="Chapter number (or 'feature')")
+    p_pub.add_argument("--action", dest="publish_action", choices=["metadata", "prepare", "upload", "verify"], default="upload", help="Publish step (default: upload)")
+    p_pub.add_argument("--account", default=None, help="Target YouTube account/channel name")
+    p_pub.add_argument("-i", "--interactive", action="store_true", help="Interactively select target YouTube channel")
+    p_pub.add_argument("--secrets", default=None, help="Path to client_secrets.json")
+    p_pub.add_argument("--force", action="store_true", help="Force re-authentication")
+    p_pub.add_argument("--video", default=None, help="Custom video file path override")
+    p_pub.add_argument("--subtitles", default=None, help="Custom subtitles SRT file path override")
+    p_pub.add_argument("--title", default=None, help="Video title override")
+    p_pub.add_argument("--description", default=None, help="Video description override")
+    p_pub.add_argument("--tags", default=None, help="Comma-separated tags")
+    p_pub.add_argument("--privacy", choices=["public", "private", "unlisted"], default=None, help="Override confirmed YouTube visibility")
+    p_pub.add_argument("--thumbnail", default=None, help="Custom thumbnail image path")
+    p_pub.add_argument("--no-captions", action="store_true", help="Skip uploading Vietnamese closed captions")
+    p_pub.add_argument("--video-id", default=None, help="Target YouTube video ID for verification")
+
     return parser
+
+
+def _handle_prepare(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.workflow import prepare_chapter
+    return prepare_chapter(
+        args.project,
+        str(args.chapter),
+        url=getattr(args, "url", None),
+        import_dir=getattr(args, "import_dir", None),
+        max_panels=getattr(args, "max_panels", None),
+        verify=bool(getattr(args, "verify", False)),
+        target_width=getattr(args, "target_width", 1080),
+        force=bool(getattr(args, "force", False)),
+        skip_decide=bool(getattr(args, "skip_decide", False)),
+        workers=getattr(args, "workers", 2),
+    )
+
+
+def _handle_preview(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.workflow import preview_chapter
+    return preview_chapter(
+        args.project,
+        str(getattr(args, "chapter", "1")),
+        encoder=getattr(args, "encoder", None),
+        render_workers=getattr(args, "render_workers", None),
+        tts_workers=getattr(args, "tts_workers", None),
+        kaggle=bool(getattr(args, "kaggle", False)),
+        force=bool(getattr(args, "force", False)),
+    )
+
+
+def _handle_approve(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.workflow import approve_chapter_preview
+    return approve_chapter_preview(
+        args.project,
+        reviewer=args.reviewer,
+        config_fingerprint=args.config_fingerprint,
+        artifact_hash=args.artifact_hash,
+    )
+
+
+def _handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.workflow import produce_chapters
+    return produce_chapters(
+        args.project,
+        chapters=getattr(args, "chapters", None),
+        retry_chapter=getattr(args, "retry_chapter", None),
+        compile_after=bool(getattr(args, "compile", False)),
+        cleanup=bool(getattr(args, "cleanup", False)),
+        kaggle=getattr(args, "kaggle", None),
+        encoder=getattr(args, "encoder", None),
+        render_workers=getattr(args, "render_workers", 2),
+        tts_workers=getattr(args, "tts_workers", 2),
+        force=bool(getattr(args, "force", False)),
+    )
+
+
+def _handle_publish(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.cli.youtube_cmd import handle_youtube
+    args.youtube_action = getattr(args, "publish_action", "upload")
+    return handle_youtube(args)
+
+
+def _handle_review_approve(args: argparse.Namespace) -> Dict[str, Any]:
+    from src.core.human_review import approve_preview
+    from src.core.project import get_project_dir
+    return approve_preview(
+        get_project_dir(args.project),
+        args.reviewer,
+        args.config_fingerprint,
+        args.artifact_hash,
+    ).model_dump(mode="json")
+
+
+COMMAND_REGISTRY: Dict[str, Any] = {
+    "prepare": _handle_prepare,
+    "preview": _handle_preview,
+    "approve": _handle_approve,
+    "produce": _handle_produce,
+    "publish": _handle_publish,
+    "visual-plan": "src.cli.visual_plan_cmd:handle_visual_plan",
+    "review-approve": _handle_review_approve,
+    "inspect": "src.cli.inspect_cmd:handle_inspect",
+    "validate": "src.cli.validate_cmd:handle_validate",
+    "status": "src.cli.status_cmd:handle_status",
+    "crawl": "src.cli.crawl_cmd:handle_crawl",
+    "segment": "src.cli.segment_cmd:handle_segment",
+    "repack": "src.cli.segment_cmd:handle_repack",
+    "panel-inspect": "src.cli.segment_cmd:handle_panel_inspect",
+    "decide": "src.cli.segment_cmd:handle_decide",
+    "tts": "src.cli.tts_cmd:handle_tts",
+    "tts_benchmark": "src.cli.tts_benchmark_cmd:handle_tts_benchmark",
+    "render": "src.cli.render_cmd:handle_render",
+    "compile": "src.cli.compile_cmd:handle_compile",
+    "batch": "src.cli.batch_cmd:handle_batch",
+    "youtube": "src.cli.youtube_cmd:handle_youtube",
+    "clean": "src.cli.clean_cmd:handle_clean",
+    "cloud": "src.cli.cloud_cmd:handle_cloud",
+    "review-pack": "src.cli.review_pack:handle_review_pack",
+    "review_pack": "src.cli.review_pack:handle_review_pack",
+    "archive": "src.cli.archive_cmd:handle_archive",
+    "setup": "src.cli.setup_cmd:handle_setup",
+}
 
 
 def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, Any]:
@@ -341,73 +507,16 @@ def execute_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, A
 
 
 def _dispatch_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str, Any]:
-    """Dispatches parsed arguments to command implementations."""
-    if subcommand == "visual-plan":
-        from src.cli.visual_plan_cmd import handle_visual_plan
-        return handle_visual_plan(args)
-    if subcommand == "review-approve":
-        from src.core.human_review import approve_preview
-        from src.core.storage import get_project_dir
-        return approve_preview(get_project_dir(args.project), args.reviewer, args.config_fingerprint, args.artifact_hash).model_dump(mode="json")
-    if subcommand == "inspect":
-        from src.cli.inspect_cmd import handle_inspect
-        return handle_inspect(args)
-    elif subcommand == "validate":
-        from src.cli.validate_cmd import handle_validate
-        return handle_validate(args)
-    elif subcommand == "status":
-        from src.cli.status_cmd import handle_status
-        return handle_status(args)
-    elif subcommand == "crawl":
-        from src.cli.crawl_cmd import handle_crawl
-        return handle_crawl(args)
-    elif subcommand == "segment":
-        from src.cli.segment_cmd import handle_segment
-        return handle_segment(args)
-    elif subcommand == "repack":
-        from src.cli.segment_cmd import handle_repack
-        return handle_repack(args)
-    elif subcommand == "panel-inspect":
-        from src.cli.segment_cmd import handle_panel_inspect
-        return handle_panel_inspect(args)
-    elif subcommand == "decide":
-        from src.cli.segment_cmd import handle_decide
-        return handle_decide(args)
-    elif subcommand == "tts":
-        from src.cli.tts_cmd import handle_tts
-        return handle_tts(args)
-    elif subcommand == "tts_benchmark":
-        from src.cli.tts_benchmark_cmd import handle_tts_benchmark
-        return handle_tts_benchmark(args)
-    elif subcommand == "render":
-        from src.cli.render_cmd import handle_render
-        return handle_render(args)
-    elif subcommand == "compile":
-        from src.cli.compile_cmd import handle_compile
-        return handle_compile(args)
-    elif subcommand == "batch":
-        from src.cli.batch_cmd import handle_batch
-        return handle_batch(args)
-    elif subcommand == "youtube":
-        from src.cli.youtube_cmd import handle_youtube
-        return handle_youtube(args)
-    elif subcommand == "clean":
-        from src.cli.clean_cmd import handle_clean
-        return handle_clean(args)
-    elif subcommand == "cloud":
-        from src.cli.cloud_cmd import handle_cloud
-        return handle_cloud(args)
-    elif subcommand in {"review-pack", "review_pack"}:
-        from src.cli.review_pack import handle_review_pack
-        return handle_review_pack(args)
-    elif subcommand == "archive":
-        from src.cli.archive_cmd import handle_archive
-        return handle_archive(args)
-    elif subcommand == "setup":
-        from src.cli.setup_cmd import handle_setup
-        return handle_setup(args)
-    else:
+    """Dispatches parsed arguments to registered command handlers."""
+    target = COMMAND_REGISTRY.get(subcommand)
+    if target is None:
         raise ValueError(f"Unknown subcommand: {subcommand}")
+    if callable(target):
+        return target(args)
+    import importlib
+    module_name, attr_name = target.split(":", 1)
+    handler = getattr(importlib.import_module(module_name), attr_name)
+    return handler(args)
 
 
 
@@ -425,9 +534,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Detect subcommand early for error reporting
     detected_subcommand = "manga-recap"
     for arg in raw_args:
-        if not arg.startswith("-") and arg in {
-            "crawl", "segment", "repack", "panel-inspect", "decide", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status", "batch", "youtube", "clean", "cloud", "review-pack", "review_pack", "review-approve", "visual-plan", "archive", "setup"
-        }:
+        if not arg.startswith("-") and arg in COMMAND_REGISTRY:
             detected_subcommand = arg
             break
 
