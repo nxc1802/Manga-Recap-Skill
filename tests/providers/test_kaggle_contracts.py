@@ -55,7 +55,7 @@ def synthetic_workspace(tmp_path, monkeypatch):
     synthetic fixture (tests/fixtures/synthetic/).
     Monkeypatches storage directory resolvers to point into this temporary directory.
     """
-    src_fixture = Path(__file__).resolve().parent.parent.parent / "fixtures" / "synthetic"
+    src_fixture = Path(__file__).resolve().parent.parent / "fixtures" / "synthetic"
     assert src_fixture.exists(), f"Synthetic fixture missing at {src_fixture}"
 
     proj_dir = tmp_path / "synthetic_fixture"

@@ -14,7 +14,7 @@ from src.core.errors import DomainValidationError, ProviderIntegrityError
 from src.core.storage import read_json
 from src.providers.huggingface import HuggingFaceClient
 from src.youtube.account_manager import YouTubeAccountInfo
-from tests.unit.test_youtube_integration import _build_ready_youtube_project
+from tests.providers.test_youtube_integration import _build_ready_youtube_project
 
 
 def test_partial_youtube_upload_persists_video_id_and_resumes_without_duplicate_insert(

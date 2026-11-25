@@ -21,7 +21,7 @@ from src.cloud.kaggle_service import (
 )
 from src.core.storage import atomic_write_json, read_json
 from src.providers.kaggle import KaggleClient, authenticate_kaggle_token
-from tests.unit.test_canonical_workflow import unit_project  # noqa: F401
+from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401
 
 
 def _install_fake_kaggle_module(monkeypatch, *, token_seen: list, fail_token: bool = False, username: str = "u_fake"):

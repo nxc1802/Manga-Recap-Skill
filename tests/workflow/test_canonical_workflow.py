@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
-from tests.unit.test_series_setup import _make_valid_answers_dict
+from tests.core.test_series_setup import _make_valid_answers_dict
 from src.core.series_setup import record_series_setup
 from src.core.storage import (init_project_layout, init_chapter_layout, atomic_write_json,
                               read_json, calculate_sha256, load_chapter_metadata)

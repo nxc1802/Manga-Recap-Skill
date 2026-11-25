@@ -6,7 +6,7 @@ from src.cloud import dual_gpu_worker as worker
 from src.core.storage import atomic_write_json, load_recap_script
 from src.core.visual_contract import VisualPlan
 from src.render.fast_renderer import frame_schedule
-from tests.unit.test_canonical_workflow import unit_project  # noqa: F401 — pytest fixture
+from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401 — pytest fixture
 
 
 def test_sound_and_visual_overlap_before_model_unloads(unit_project, monkeypatch, tmp_path):

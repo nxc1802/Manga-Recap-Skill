@@ -6,7 +6,7 @@ Unit tests for YouTube metadata generation, packaging, timestamps, and upload co
 from __future__ import annotations
 
 from tests.v4_fixtures import init_confirmed_project
-from tests.unit.test_series_setup import _make_valid_answers_dict
+from tests.core.test_series_setup import _make_valid_answers_dict
 
 import argparse
 import shutil

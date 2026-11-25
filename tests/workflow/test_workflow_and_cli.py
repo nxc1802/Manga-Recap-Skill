@@ -21,7 +21,7 @@ from src.core.workflow import (
     preview_chapter,
     produce_chapters,
 )
-from tests.unit.test_series_setup import _make_valid_answers_dict
+from tests.core.test_series_setup import _make_valid_answers_dict
 
 
 def _create_test_project(tmp_path: Path, slug: str = "wf-series", compute: str = "local") -> Path:

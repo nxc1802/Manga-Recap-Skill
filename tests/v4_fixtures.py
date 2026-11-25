@@ -5,7 +5,7 @@ choices below are test inputs; they are not evidence of a human interaction.
 """
 from src.core.storage import init_project_layout as _init_project_layout
 from src.core.series_setup import record_series_setup
-from tests.unit.test_series_setup import _make_valid_answers_dict
+from tests.core.test_series_setup import _make_valid_answers_dict
 
 
 def init_confirmed_project(slug, *args, **kwargs):
