@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import fnmatch
-import os
-import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -13,13 +11,21 @@ from huggingface_hub import HfApi, hf_hub_download
 from src.core.errors import DomainValidationError
 from src.core.project import get_output_dir, get_project_dir
 from src.core.schemas import ArchiveReceipt, utc_iso_now
-from src.core.settings import resolve_hf_token as _resolve_hf_token_setting
-from src.core.storage import atomic_write_json, calculate_sha256 as compute_file_sha256, read_json
+from src.core.storage import (
+    atomic_write_json,
+    calculate_sha256 as compute_file_sha256,
+    read_json,
+)
+from src.providers.huggingface import (
+    DEFAULT_HF_REPO_ID,
+    FALLBACK_HF_TOKEN,
+    HuggingFaceClient,
+    get_hf_api,
+    require_revision_sha as _require_revision,
+    resolve_hf_token,
+)
 
-DEFAULT_HF_REPO_ID = "Cuong2004/manga-recap-archive"
-FALLBACK_HF_TOKEN = ""
 ARCHIVE_SCHEMA_VERSION = "4.0.0"
-_GIT_SHA40_RE = re.compile(r"^[a-f0-9]{40}$")
 
 _IMAGE = {".jpg", ".jpeg", ".png", ".webp"}
 _AUDIO = {".wav", ".m4a", ".mp3", ".ogg", ".flac", ".aac"}
@@ -50,20 +56,9 @@ _SECRET_PATTERNS = (".*", "*.env", "*.pem", "*.key", "*.pickle", "*.pkl", "*.tmp
 _SECRET_WORDS = ("token", "secret", "credential", "passwd", "password")
 
 
-def resolve_hf_token(token=None):
-    return (token or _resolve_hf_token_setting() or FALLBACK_HF_TOKEN).strip()
-
-
-def get_hf_api(token=None):
-    return HfApi(token=resolve_hf_token(token) or None)
-
-
 def ensure_archive_repo(api, repo_id=DEFAULT_HF_REPO_ID):
-    api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
-    info = api.repo_info(repo_id=repo_id, repo_type="dataset")
-    if getattr(info, "private", None) is not True:
-        raise DomainValidationError(f"Archive repository {repo_id} must be private")
-    return repo_id
+    """Validates or creates a private dataset repository using provided SDK handle."""
+    return HuggingFaceClient(api_client=api).ensure_private_repo(repo_id=repo_id)
 
 
 def _has_symlink_component(root, relative):
@@ -77,102 +72,104 @@ def _has_symlink_component(root, relative):
 
 
 def _output_role(parts, suffix):
-    name = parts[-1]
-    if len(parts) != 1 and not (len(parts) == 2 and parts[0] == "export_bundle"):
+    if len(parts) > 2 or (len(parts) == 2 and parts[0] != "export_bundle"):
         return None
-    for extensions, role in ((_VIDEO, "output_video"), (_AUDIO, "output_audio"),
-                             (_SUBTITLE, "output_subtitles"), (_IMAGE, "output_thumbnail")):
-        if suffix in extensions:
-            return role
-    if name.endswith(".youtube_receipt.json"):
-        return "youtube_receipt"
-    if name.endswith((".youtube.json", ".youtube_metadata.json")):
-        return "youtube_metadata"
-    if name.endswith("_timeline.json") or name in {"feature_timeline.json", "production_job.json"}:
-        return "metadata"
+    name = parts[-1]
+    if suffix == ".json":
+        if name.endswith(".youtube_receipt.json"):
+            return "youtube_receipt"
+        if name.endswith(".youtube_metadata.json"):
+            return "youtube_metadata"
+        if name in {"archive_manifest.json", "feature_timeline.json", "feature.youtube.json"} or name.endswith("_timeline.json"):
+            return "manifest"
+    elif suffix in _VIDEO or suffix in _SUBTITLE:
+        return "output_video" if suffix in _VIDEO else "output_subtitles"
+    elif suffix in _IMAGE:
+        return "thumbnail"
     return None
 
 
 def _archive_role(parts, suffix):
+    if not parts:
+        return None
+    if parts[0] == "output" and len(parts) >= 2:
+        return _output_role(parts[1:], suffix)
     if len(parts) == 1:
         return _ROOT_ROLES.get(parts[0])
-    if parts[0] == "output":
-        return _output_role(parts[1:], suffix)
-    if parts[0] in {"assets", "audio"} and len(parts) == 2 and suffix in _AUDIO:
-        return "audio"
-    if parts[0] != "chapters" or not parts[1].isdigit():
-        return None
-    if len(parts) == 3:
-        if parts[2].startswith("chapter_") and parts[2].endswith("_thumbnail.jpg"):
-            return "thumbnail"
-        return _CHAPTER_ROLES.get(parts[2])
-    if len(parts) == 4 and parts[2] in _CHAPTER_MEDIA:
-        extensions, role = _CHAPTER_MEDIA[parts[2]]
-        return role if suffix in extensions else None
-    if len(parts) == 5 and parts[3] == "clips":
-        if parts[2] == "audio" and suffix == ".wav":
-            return "audio_clip"
-        if parts[2] == "video" and suffix == ".mp4":
-            return "video_clip"
+    if len(parts) >= 3 and parts[0] == "chapters":
+        if len(parts) == 3:
+            return _CHAPTER_ROLES.get(parts[2])
+        if parts[2] in _CHAPTER_MEDIA:
+            exts, role = _CHAPTER_MEDIA[parts[2]]
+            if parts[2] == "audio" and len(parts) == 4 and parts[3].startswith("clips") and suffix in _AUDIO:
+                return "audio_clip"
+            if suffix in exts:
+                return "audio_clip" if parts[2] == "audio" and len(parts) > 4 and parts[3] == "clips" else role
     return None
 
 
 def is_whitelisted_archive_path(rel_path, project_root, output_root=None):
-    """Classify a portable project asset and reject symlinks and credentials."""
-    parts = rel_path.parts
-    if not parts or rel_path.is_absolute() or ".." in parts:
-        return False, f"Unsafe archive path: {rel_path}"
-    role = _archive_role(parts, rel_path.suffix.lower())
-    if role is None:
-        return False, f"Unknown archive asset: {rel_path}"
-    for part in (value.casefold() for value in parts):
-        if any(word in part for word in _SECRET_WORDS) or any(fnmatch.fnmatch(part, pat) for pat in _SECRET_PATTERNS):
-            return False, f"Excluded archive asset: {rel_path}"
-    if parts[0] == "output" and output_root is not None:
-        root, relative = output_root, Path(*parts[1:])
-    else:
-        root, relative = project_root, rel_path
-    if _has_symlink_component(root, relative):
-        return False, f"Symlink in archive path: {rel_path}"
-    return True, role
+    """Allowlists only non-secret, symlink-free project and output media files."""
+    relative = Path(rel_path)
+    parts = relative.parts
+    if not parts or relative.is_absolute() or ".." in parts:
+        return False, "Path escapes project boundary"
+    if any(fnmatch.fnmatch(part.lower(), pat) or any(word in part.lower() for word in _SECRET_WORDS)
+           for part in parts for pat in _SECRET_PATTERNS):
+        return False, f"Forbidden secret or temp pattern: {relative}"
+    is_output = parts[0] == "output" and output_root is not None
+    base = Path(output_root if is_output else project_root)
+    rel = Path(*parts[1:]) if is_output else relative
+    target = base / rel
+    if _has_symlink_component(base, rel) or not target.resolve().is_relative_to(base.resolve()):
+        return False, f"Symlink escape or unsafe resolution: {relative}"
+    role = _archive_role(parts, relative.suffix.lower())
+    return (True, role) if role else (False, f"Not in archive whitelist: {relative}")
 
 
 def generate_archive_manifest(project_slug, repo_id=DEFAULT_HF_REPO_ID, project_dir=None, output_dir=None):
-    project, output = Path(project_dir or get_project_dir(project_slug)), Path(output_dir or get_output_dir(project_slug))
-    if not project.is_dir() or project.is_symlink() or output.is_symlink():
-        raise DomainValidationError("An existing, regular project directory is required")
-    entries, excluded = [], 0
-    for root, prefix in ((project, Path()), (output, Path("output"))):
+    """Generates SHA-256 inventory of archive-eligible project and output artifacts."""
+    project = Path(project_dir or get_project_dir(project_slug))
+    output = Path(output_dir or get_output_dir(project_slug))
+    files, total = [], 0
+    for root, prefix in [(project, Path()), *([(output, Path("output"))] if output.exists() else [])]:
         for path in sorted(root.rglob("*")):
-            if not path.is_file():
+            if not path.is_file() or path.is_symlink():
                 continue
-            relative = prefix / path.relative_to(root)
-            if relative.name in {"archive_manifest.json", "archive_receipt.json"}:
+            rel = prefix / path.relative_to(root)
+            if rel.as_posix() in {"archive_manifest.json", "archive_receipt.json"}:
                 continue
-            allowed, role = is_whitelisted_archive_path(relative, project, output)
-            if not allowed:
-                excluded += 1
+            ok, role = is_whitelisted_archive_path(rel, project, output)
+            if not ok:
                 continue
-            entries.append(dict(relative_path=relative.as_posix(), role=role, size_bytes=path.stat().st_size,
-                                sha256=compute_file_sha256(path), repo_path=f"series/{project_slug}/{relative.as_posix()}"))
-    result = dict(schema_version=ARCHIVE_SCHEMA_VERSION, project_slug=project_slug, repo_id=repo_id,
-                  created_at=utc_iso_now(), files=entries, total_files=len(entries),
-                  total_bytes=sum(entry["size_bytes"] for entry in entries), excluded_files_count=excluded)
-    atomic_write_json(project / "archive_manifest.json", result)
-    return result
-
-
-def _require_revision(revision):
-    if not _GIT_SHA40_RE.fullmatch(revision or ""):
-        raise DomainValidationError("Provide the 40-character commit SHA from the archive receipt")
-    return revision
+            size = path.stat().st_size
+            total += size
+            files.append({
+                "relative_path": rel.as_posix(),
+                "repo_path": f"series/{project_slug}/{rel.as_posix()}",
+                "role": role,
+                "size_bytes": size,
+                "sha256": compute_file_sha256(path),
+            })
+    manifest = {
+        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "project_slug": project_slug,
+        "repo_id": repo_id,
+        "created_at": utc_iso_now(),
+        "total_files": len(files),
+        "total_bytes": total,
+        "files": files,
+    }
+    atomic_write_json(project / "archive_manifest.json", manifest)
+    return manifest
 
 
 def archive_push(project_slug, repo_id=None, token=None, project_dir=None, output_dir=None, api_client=None):
+    """Stages verified whitelist artifacts and commits them to the private HF dataset."""
     project, output = Path(project_dir or get_project_dir(project_slug)), Path(output_dir or get_output_dir(project_slug))
     repo = repo_id or DEFAULT_HF_REPO_ID
-    api = api_client or get_hf_api(token)
-    ensure_archive_repo(api, repo)
+    client = HuggingFaceClient(token=token, api_client=api_client, download_fn=hf_hub_download)
+    client.ensure_private_repo(repo)
     manifest = generate_archive_manifest(project_slug, repo, project, output)
     manifest_path = project / "archive_manifest.json"
     with tempfile.TemporaryDirectory(prefix="manga-archive-") as directory:
@@ -186,23 +183,41 @@ def archive_push(project_slug, repo_id=None, token=None, project_dir=None, outpu
             shutil.copy2(source, dest)
             if compute_file_sha256(dest) != entry["sha256"]:
                 raise DomainValidationError(f"Changed during archive preparation: {relative}")
-        commit = api.upload_folder(folder_path=str(stage), path_in_repo=f"series/{project_slug}",
-                                   repo_id=repo, repo_type="dataset", commit_message=f"Archive {project_slug}")
-    revision = _require_revision(getattr(commit, "oid", None))
-    receipt = ArchiveReceipt(project_slug=project_slug, repo_id=repo, commit_sha=revision,
+        revision = client.upload_folder(
+            folder_path=stage,
+            path_in_repo=f"series/{project_slug}",
+            repo_id=repo,
+            commit_message=f"Archive {project_slug}",
+        )
+    receipt = ArchiveReceipt(
+        project_slug=project_slug,
+        repo_id=repo,
+        commit_sha=revision,
         remote_url=f"https://huggingface.co/datasets/{repo}/tree/{revision}/series/{project_slug}",
-        created_at=utc_iso_now(), verified_file_count=0, total_bytes=manifest["total_bytes"],
-        manifest_sha256=compute_file_sha256(manifest_path), status="uploaded")
+        created_at=utc_iso_now(),
+        verified_file_count=0,
+        total_bytes=manifest["total_bytes"],
+        manifest_sha256=compute_file_sha256(manifest_path),
+        status="uploaded",
+    )
     path = project / "archive_receipt.json"
     atomic_write_json(path, receipt)
-    return dict(status="success", project_slug=project_slug, repo_id=repo, commit_sha=revision,
-                remote_url=receipt.remote_url, files_uploaded=manifest["total_files"],
-                total_bytes=manifest["total_bytes"], receipt_path=str(path))
+    return dict(
+        status="success",
+        project_slug=project_slug,
+        repo_id=repo,
+        commit_sha=revision,
+        remote_url=receipt.remote_url,
+        files_uploaded=manifest["total_files"],
+        total_bytes=manifest["total_bytes"],
+        receipt_path=str(path),
+    )
 
 
 def _remote_file(repo, revision, filename, token):
-    return Path(hf_hub_download(repo_id=repo, revision=revision, filename=filename, repo_type="dataset",
-                                token=resolve_hf_token(token) or None))
+    return HuggingFaceClient(token=token, download_fn=hf_hub_download).download_file(
+        repo_id=repo, revision=revision, filename=filename
+    )
 
 
 def _manifest_files(manifest, project_slug, repo):
@@ -226,6 +241,7 @@ def _checked_download(repo, revision, entry, token):
 
 
 def archive_verify(project_slug, repo_id=None, token=None, revision=None, project_dir=None, api_client=None):
+    """Downloads every archived artifact at pinned commit SHA and verifies size & SHA-256."""
     project = Path(project_dir or get_project_dir(project_slug))
     path = project / "archive_receipt.json"
     receipt = ArchiveReceipt.model_validate(read_json(path))
@@ -242,12 +258,27 @@ def archive_verify(project_slug, repo_id=None, token=None, revision=None, projec
     receipt.status, receipt.verified_file_count = "verified", len(files)
     receipt.verification_revision, receipt.last_verified_at = revision, utc_iso_now()
     atomic_write_json(path, receipt)
-    return dict(status="success", verified=True, project_slug=project_slug, repo_id=repo,
-                commit_sha=revision, verified_file_count=len(files), receipt_path=str(path))
+    return dict(
+        status="success",
+        verified=True,
+        project_slug=project_slug,
+        repo_id=repo,
+        commit_sha=revision,
+        verified_file_count=len(files),
+        receipt_path=str(path),
+    )
 
 
-def archive_restore(project_slug, revision=None, repo_id=None, token=None, target_dir=None,
-                    project_dir=None, allow_non_empty=False):
+def archive_restore(
+    project_slug,
+    revision=None,
+    repo_id=None,
+    token=None,
+    target_dir=None,
+    project_dir=None,
+    allow_non_empty=False,
+):
+    """Restores verified archived artifacts to ``target_dir`` without leaving partial corrupted files."""
     project = Path(project_dir or get_project_dir(project_slug))
     receipt_path = project / "archive_receipt.json"
     receipt = ArchiveReceipt.model_validate(read_json(receipt_path)) if receipt_path.is_file() else None
@@ -288,5 +319,11 @@ def archive_restore(project_slug, revision=None, repo_id=None, token=None, targe
                     dest = target / file.relative_to(stage)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     file.replace(dest)
-    return dict(status="success", restored=True, project_slug=project_slug, repo_id=repo,
-                revision=revision, target_dir=str(target), files_validated=restored)
+    return dict(
+        status="success",
+        project_slug=project_slug,
+        repo_id=repo,
+        revision=revision,
+        target_dir=str(target),
+        restored_files=restored,
+    )
