@@ -160,6 +160,7 @@ def export_results(project, manifest, manifest_hash, output, *, compile_feature=
         "project_slug": manifest["project_slug"], "chapters": chapters,
         "job_type": manifest["job_type"], "series": manifest["series"],
         "payload_manifest_sha256": manifest_hash, "feature": feature,
+        "has_telemetry": (output / "cloud_telemetry.json").is_file(),
     })
 
 
@@ -307,8 +308,16 @@ def sync_results(project, chapters, downloaded, job, manifest_hash, expected_inp
         feature[key] = str(dest)
         if key == "feature_timeline":
             copy_artifact(source, project / "feature_timeline.json")
-    if not series:
-        return results[0]
-    return dict(status="success", job_type="produce_series", project_slug=slug, chapters=chapters,
-                published={item["chapter_number"]: item for item in results}, feature=feature,
-                compiled_video=feature.get("compiled_video") or feature.get("export_video_path"))
+    result_payload = (
+        dict(status="success", job_type="produce_series", project_slug=slug, chapters=chapters,
+             published={item["chapter_number"]: item for item in results}, feature=feature,
+             compiled_video=feature.get("compiled_video") or feature.get("export_video_path"))
+        if series
+        else results[0]
+    )
+    telemetry_src = downloaded / "cloud_telemetry.json"
+    if telemetry_src.is_file():
+        telemetry_dest = (project if series else (project / "chapters" / str(chapters[0]))) / "cloud_telemetry.json"
+        copy_artifact(telemetry_src, telemetry_dest)
+        result_payload["telemetry_path"] = str(telemetry_dest)
+    return result_payload

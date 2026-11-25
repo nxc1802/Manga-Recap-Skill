@@ -264,6 +264,9 @@ class KaggleCloudService:
         )[:45].rstrip("-")
         staging_dir = Path(tempfile.mkdtemp(prefix="manga-kaggle-"))
         payload_tar = staging_dir / "payload.tar.gz"
+        host_timing: Dict[str, float] = {}
+
+        t_pack = time.monotonic()
         self.package_chapter_payload(
             project_slug,
             chapters if series else chapter_number,
@@ -271,6 +274,7 @@ class KaggleCloudService:
             job_type=job_type,
             series=series,
         )
+        host_timing["package_sec"] = round(time.monotonic() - t_pack, 4)
 
         worker_py = staging_dir / "worker.py"
         worker_code = self.generate_worker_script(
@@ -297,8 +301,12 @@ class KaggleCloudService:
             ds_staging / "dataset-metadata.json",
             {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
         )
+        t_ds_create = time.monotonic()
         client.create_private_dataset(ds_staging)
+        host_timing["dataset_create_sec"] = round(time.monotonic() - t_ds_create, 4)
+        t_ds_ready = time.monotonic()
         self._wait_for_dataset_ready(ds_ref, expected_file="payload.tar.gz", timeout_sec=300.0)
+        host_timing["dataset_ready_sec"] = round(time.monotonic() - t_ds_ready, 4)
 
         metadata = {
             "id": f"{self._username}/{kernel_slug}",
@@ -321,7 +329,9 @@ class KaggleCloudService:
         logger.info(
             f"KaggleCloudService: Pushing kernel '{self._username}/{kernel_slug}' (GPU: {gpu}, Job: {job_type})..."
         )
+        t_push = time.monotonic()
         target_kernel_ref = client.push_kernel(staging_dir, f"{self._username}/{kernel_slug}")
+        host_timing["kernel_push_sec"] = round(time.monotonic() - t_push, 4)
 
         project = get_project_dir(project_slug)
         job_state_path = (project if series else chapter) / "cloud_job.json"
@@ -338,6 +348,7 @@ class KaggleCloudService:
             "chapters": chapters,
             "payload_manifest_sha256": self._payload_manifest_hash,
             "input_hashes": self._dispatch_input_hashes,
+            "host_timing": host_timing,
         }
         if not wait:
             self._write_cloud_job_state(

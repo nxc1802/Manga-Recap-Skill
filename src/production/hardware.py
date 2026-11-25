@@ -101,7 +101,7 @@ def probe_ffmpeg_capabilities(ffmpeg_bin: str = "ffmpeg") -> Dict[str, bool]:
     return caps
 
 
-def smoke_test_encoder(encoder: str) -> bool:
+def smoke_test_encoder(encoder: str, gpu_index: Optional[int] = None) -> bool:
     """
     Executes a 0.1s null-muxer test to verify encoder functionality on current hardware/driver.
     Uses 256x256 lavfi synthetic black frame for NVENC minimum-dimension safety without touching disk.
@@ -120,10 +120,10 @@ def smoke_test_encoder(encoder: str) -> bool:
         "yuv420p",
         "-c:v",
         encoder,
-        "-f",
-        "null",
-        "-",
     ]
+    if gpu_index is not None and encoder.strip().lower() in ("h264_nvenc", "nvenc"):
+        cmd.extend(["-gpu", str(int(gpu_index))])
+    cmd.extend(["-f", "null", "-"])
     try:
         res = subprocess.run(cmd, capture_output=True, timeout=5, check=False)
         return res.returncode == 0

@@ -6,11 +6,18 @@ import os
 import queue
 import shutil
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 from src.cloud.payload import verify_payload_manifest
+from src.cloud.telemetry import (
+    ResourceSampler,
+    TelemetryRecorder,
+    probe_worker_hardware,
+    save_telemetry_report,
+)
 from src.core.human_review import require_preview_approval, require_voice_approval
 from src.core.schemas import CheckpointStatus, StageType
 from src.core.storage import (
@@ -116,7 +123,17 @@ def _prepare_chapter(project, number, work, job, quality, settings, encoder, wor
     for start in range(0, len(script.segments), batch_size):
         segments = script.segments[start:start + batch_size]
         if produce:
+            t_tts = time.monotonic()
             _synthesize_batch(worker, chapter, segments, voice, approval.speed, batch_size)
+            events.put((
+                "span",
+                "tts",
+                t_tts,
+                time.monotonic(),
+                number,
+                f"gpu:{getattr(worker, 'gpu_id', 0)}",
+                {"segments": len(segments)},
+            ))
             if start + batch_size >= len(script.segments):
                 script.total_duration_seconds = round(sum(s.duration for s in script.segments), 3)
             atomic_write_json(chapter / "script.json", script)
@@ -126,6 +143,7 @@ def _prepare_chapter(project, number, work, job, quality, settings, encoder, wor
                 if segment.duration is None or abs(segment.duration - duration) > 0.001:
                     raise ValueError(f"Audio duration changed for {segment.seq_id}")
         if render and not authored:
+            t_prep = time.monotonic()
             batch = [shot for _ in segments for shot in next(groups)]
             cues = subtitle.build_cues_from_segments(segments, start_offset=cue_time)
             for cue in cues:
@@ -164,6 +182,7 @@ def _prepare_chapter(project, number, work, job, quality, settings, encoder, wor
             for shot in batch:
                 elapsed += shot.duration_sec
             shots.extend(batch)
+            events.put(("span", "shot_prep", t_prep, time.monotonic(), number, "cpu", {"shots": len(batch)}))
 
     if pending_shot is not None:
         jobs.put((number, pending_shot[0]))
@@ -203,9 +222,20 @@ def _encode_queue(jobs, events, gpu_id, workers):
     def encode():
         while (item := jobs.get()) is not None:
             number, task = item
+            t_enc = time.monotonic()
             clip = render_shot_clip(task, canvas_cache=canvas_cache, gpu_index=gpu_id)
             assert_file_nonempty(clip)
+            t_end = time.monotonic()
             events.put(("shot", number, task["shot_index"], str(clip)))
+            events.put((
+                "span",
+                "encode",
+                t_enc,
+                t_end,
+                number,
+                f"gpu:{gpu_id}",
+                {"shot_index": task["shot_index"], "frame_count": task.get("frame_count")},
+            ))
 
     # A failed encoder must fail the process even if its peer is blocked on the queue.
     local_errors = queue.Queue()
@@ -268,7 +298,7 @@ def _finish_chapter(project, number, work, clips, config, quality):
 
 
 def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=2,
-                 batch_size=12, single_preview=True):
+                 batch_size=12, single_preview=True, telemetry=None):
     """Use the same shot queue on one device. Encoding then starts after TTS unload."""
     project = Path(project).resolve()
     config = read_json(project / "project.json")
@@ -281,11 +311,22 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
     if job == "tts" or encoder != "h264_nvenc":
         devices = devices[:1]
 
+    recorder = telemetry or TelemetryRecorder(project_slug=project.name, chapters=list(chapters))
+
     with tempfile.TemporaryDirectory(prefix="manga-shots-") as directory:
         work = Path(directory)
+        sampler = ResourceSampler(
+            work_root=work,
+            interval_sec=1.5,
+            queue_depth_fn=lambda: {
+                "jobs_qsize": jobs.qsize() if hasattr(jobs, "qsize") else -1,
+                "events_qsize": events.qsize() if hasattr(events, "qsize") else -1,
+            },
+        )
         ctx = mp.get_context("spawn")
         jobs = ctx.Queue()
         events = ctx.Queue()
+        sampler.start()
         children = [ctx.Process(target=_audio_then_encode, args=(
             project, chapters, work, job, single_preview, config, encoder, devices[0], len(devices),
             workers, jobs, events, batch_size,
@@ -310,25 +351,46 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
                     if all(child.exitcode is not None for child in started):
                         raise RuntimeError("Worker exited before reporting all chapters")
                     continue
-                kind, number, *data = event
+                kind, *rest = event
                 if kind == "error":
-                    raise RuntimeError(f"Shot encoding failed: {number}")
+                    raise RuntimeError(f"Shot encoding failed: {rest[0]}")
+                if kind == "span":
+                    stage, s_t0, s_t1, ch_num, dev_id, meta = rest
+                    recorder.record_stage(
+                        stage,
+                        s_t0,
+                        s_t1,
+                        chapter_id=str(ch_num),
+                        device_id=str(dev_id),
+                        metadata=meta,
+                    )
+                    continue
+                number = rest[0]
                 if kind == "ready":
-                    expected[number] = tuple(data)
+                    expected[number] = tuple(rest[1:])
                 else:
-                    index, path = data
+                    index, path = rest[1:]
                     clips[number][index] = Path(path)
                 if number in expected and len(clips[number]) == expected[number][0]:
                     if expected[number][1]:
                         quality = "preview" if single_preview and number == "1" else "final"
-                        _finish_chapter(project, number, work / number,
-                                        [clips[number][i] for i in range(len(clips[number]))], config, quality)
+                        with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
+                            _finish_chapter(
+                                project,
+                                number,
+                                work / number,
+                                [clips[number][i] for i in range(len(clips[number]))],
+                                config,
+                                quality,
+                            )
                     completed.add(number)
             for child in started:
                 child.join(timeout=30)
                 if child.exitcode != 0:
                     raise RuntimeError(f"Worker failed to exit cleanly: {child.exitcode}")
         finally:
+            sampler.stop()
+            recorder.set_sampler_summary(sampler.summarize())
             for child in started:
                 if child.is_alive():
                     child.terminate()
@@ -339,26 +401,41 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
 
 def run(root, manifest_hash, output_dir, encoder="h264_nvenc", render_workers=2, compile_feature=False):
     """Kaggle entry point. The bootstrap calls this exclusively from __main__."""
-    manifest = verify_payload_manifest(root, manifest_hash)
-    runtime_data = root / "data"
-    project = runtime_data / "projects" / manifest["project_slug"]
-    shutil.copytree(root / "project", project)
-    os.environ["MANGA_RECAP_DATA_DIR"] = str(runtime_data)
-    os.environ["MANGA_RECAP_OUTPUT_DIR"] = str(root / "exports")
+    recorder = TelemetryRecorder(job_id=f"kaggle-{manifest_hash[:12]}")
+    with recorder.span("bootstrap_verify"):
+        manifest = verify_payload_manifest(root, manifest_hash)
+        recorder.project_slug = manifest["project_slug"]
+        recorder.chapters = list(manifest["chapters"])
+        runtime_data = root / "data"
+        project = runtime_data / "projects" / manifest["project_slug"]
+        shutil.copytree(root / "project", project)
+        os.environ["MANGA_RECAP_DATA_DIR"] = str(runtime_data)
+        os.environ["MANGA_RECAP_OUTPUT_DIR"] = str(root / "exports")
 
     from src.cloud.payload import export_results
     from src.production.hardware import smoke_test_encoder
 
-    try:
-        import torch
-        devices = list(range(min(2, torch.cuda.device_count())))
-    except ImportError:
-        devices = []
-    if encoder == "h264_nvenc" and (not devices or not smoke_test_encoder("h264_nvenc")):
+    hardware = probe_worker_hardware(root, probe_nvenc_devices=True)
+    recorder.set_hardware(hardware)
+
+    devices = [int(d["index"]) for d in hardware.get("devices") or []][:2]
+    usable_nvenc = set(hardware.get("usable_nvenc_devices") or [])
+    if encoder == "h264_nvenc" and (not devices or not usable_nvenc and not smoke_test_encoder("h264_nvenc")):
         encoder = "libx264"
 
     chapters = manifest["chapters"]
     single_preview = not manifest.get("series")
-    run_pipeline(project, chapters, manifest["job_type"], encoder=encoder, gpu_ids=devices,
-                 render_workers=render_workers, single_preview=single_preview)
-    export_results(project, manifest, manifest_hash, output_dir, compile_feature=compile_feature)
+    run_pipeline(
+        project,
+        chapters,
+        manifest["job_type"],
+        encoder=encoder,
+        gpu_ids=devices,
+        render_workers=render_workers,
+        single_preview=single_preview,
+        telemetry=recorder,
+    )
+    out_path = Path(output_dir)
+    with recorder.span("export_and_compile"):
+        export_results(project, manifest, manifest_hash, out_path, compile_feature=compile_feature)
+    save_telemetry_report(out_path / "cloud_telemetry.json", recorder.build_report())
