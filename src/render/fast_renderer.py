@@ -18,6 +18,7 @@ from src.core.logger import logger
 from src.core.schemas import PanelManifest
 from src.core.utils import DependencyNotFoundError, assert_file_nonempty
 from src.core.visual_contract import ProductionMotion, Region, Shot, VisualPlan
+from src.media.ffmpeg import run_ffmpeg
 from src.production.hardware import (
     get_encoder_codec_args,
     get_hardware_encoder_lock,
@@ -591,18 +592,8 @@ def _write_local_srt(cues: Sequence[Dict[str, Any]], srt_path: Path) -> Path:
 
 
 def _run_ffmpeg_checked(cmd: List[str], *, cwd: Optional[Path] = None, encoder: str = "libx264", timeout: int = 600) -> None:
-    try:
-        if encoder == "h264_videotoolbox":
-            with get_hardware_encoder_lock():
-                res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
-        else:
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, timeout=timeout)
-    except FileNotFoundError as exc:
-        if shutil.which(cmd[0]) is None:
-            raise DependencyNotFoundError("Install FFmpeg and add it to PATH") from exc
-        raise
-    if res.returncode:
-        raise RuntimeError(f"FFmpeg fast renderer failed ({res.returncode}): {res.stderr.decode(errors='replace')[-2000:]}")
+    lock = get_hardware_encoder_lock() if encoder == "h264_videotoolbox" else None
+    run_ffmpeg(cmd, description="FFmpeg fast renderer", cwd=cwd, timeout=timeout, lock=lock)
 
 
 def build_shot_render_tasks(

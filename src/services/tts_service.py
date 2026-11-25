@@ -215,7 +215,8 @@ class TTSService:
 
     def concatenate_audio_files(self, audio_paths: list[str], output_path: str):
         """Losslessly concatenates multiple WAV files using FFmpeg demuxer."""
-        import subprocess
+        from src.media.ffmpeg import run_ffmpeg
+
         list_file_path = Path(output_path).parent / "concat_list.txt"
         with open(list_file_path, "w", encoding="utf-8") as f:
             for p in audio_paths:
@@ -229,12 +230,11 @@ class TTSService:
             "-c", "copy",
             str(output_path)
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            logger.error(f"Audio concat failed: {res.stderr}")
-            raise RuntimeError(f"FFmpeg concat failed: {res.stderr}")
-        if list_file_path.exists():
-            list_file_path.unlink()
+        try:
+            run_ffmpeg(cmd, description="Audio concat")
+        finally:
+            if list_file_path.exists():
+                list_file_path.unlink()
 
     async def process_chapter_audio(self, chapter_id, chapter_num, speed=None,
                                     voice_name=None, progress_callback=None):

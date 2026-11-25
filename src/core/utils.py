@@ -1,28 +1,19 @@
 import os
 import re
 import unicodedata
-import wave
 from pathlib import Path
+from typing import Union, Optional, List
 from src.core.errors import DependencyNotFoundError, FFmpegExecutionError
 from src.core.storage import (
     read_json,
     atomic_write_json,
 )
+from src.media.ffmpeg import get_wav_duration, run_ffmpeg
 
 def assert_file_nonempty(path: Path) -> None:
     path = Path(path)
     if not path.is_file() or path.stat().st_size <= 0:
         raise FileNotFoundError(f"Missing or empty file: {path}")
-
-
-def get_wav_duration(path: Path) -> float:
-    try:
-        with wave.open(str(path), "rb") as wav:
-            if wav.getnframes() > 0 and wav.getframerate() > 0:
-                return wav.getnframes() / wav.getframerate()
-    except (wave.Error, EOFError) as exc:
-        raise ValueError(f"Invalid WAV header: {path}") from exc
-    raise ValueError(f"WAV contains no frames: {path}")
 
 
 def slugify_project_title(project_title: str) -> str:
@@ -113,24 +104,7 @@ def format_sequence_id(seq_id: str) -> str:
     if parts[0].isdigit():
         parts[0] = f"{int(parts[0]):03d}"
         return "_".join(parts)
-import csv
-import shutil
-import subprocess
-from typing import Union, Optional, List
-
-
-def run_ffmpeg(cmd: List[str], description: str = "FFmpeg process") -> subprocess.CompletedProcess:
-    """
-    Executes an FFmpeg command with binary existence check and non-zero exit code enforcement.
-    """
-    binary = cmd[0] if cmd else "ffmpeg"
-    if not shutil.which(binary):
-        raise DependencyNotFoundError(f"Binary '{binary}' not found on system PATH. Please install FFmpeg.")
-    
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
-        raise FFmpegExecutionError(f"{description} failed", result.returncode, result.stderr)
-    return result
+    return seq_id
 
 
 def get_next_character_image_path(project_dir: Path, character_name: str = "unknown") -> Path:

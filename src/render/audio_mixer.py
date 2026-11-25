@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.core.logger import logger
 from src.core.schemas import ScriptSegment
-from src.core.utils import run_ffmpeg
+from src.media.ffmpeg import run_ffmpeg
 from src.tts.engine import get_wav_duration_seconds
 
 
@@ -375,7 +375,7 @@ class AudioMixer:
             "-filter_complex", "[0:a]volumedetect",
             "-f", "null", "-",
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = run_ffmpeg(cmd, description="Audio peak level check", check=False)
         max_vol = 0.0
         for line in res.stderr.splitlines():
             if "max_volume:" in line:

@@ -82,7 +82,8 @@ from src.core.storage import (
     verify_checksum,
 )
 from src.core.streaming_segmenter import StreamingSegmenter
-from src.core.utils import assert_file_nonempty, get_wav_duration, run_ffmpeg
+from src.core.utils import assert_file_nonempty
+from src.media.ffmpeg import get_wav_duration, probe_media_duration, run_ffmpeg
 from src.crawler.errors import CrawlerError
 from src.crawler.verifier import ImageVerifier
 from src.render.chapter_renderer import render_chapter, validate_existing_chapter
@@ -1572,27 +1573,12 @@ def compile_project_chapters(
             with contextlib.suppress(Exception):
                 shutil.copy2(final_audio_path, default_staged_audio)
 
-    def _probe_duration(vid_path: Path) -> float:
-        if shutil.which("ffprobe"):
-            with contextlib.suppress(Exception):
-                probe_data = json.loads(subprocess.check_output(
-                    ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(vid_path)],
-                    timeout=15,
-                ))
-                fmt_dur = probe_data.get("format", {}).get("duration")
-                if fmt_dur is not None and float(fmt_dur) > 0:
-                    return float(fmt_dur)
-                for s in probe_data.get("streams", []):
-                    if s.get("codec_type") == "video" and "duration" in s and float(s["duration"]) > 0:
-                        return float(s["duration"])
-        return 0.0
-
     current_offset = 0.0
     timeline_items: List[ChapterTimelineItem] = []
     youtube_markers: List[ChapterMarker] = []
     for c_num in sorted_chaps:
         vid_p = chapter_videos[c_num]
-        dur = _probe_duration(vid_p)
+        dur = probe_media_duration(vid_p)
         c_chap_dir = chapters_dir / str(c_num) if chapters_dir.exists() else None
         c_title = f"Tập {c_num}"
         sub_markers: List[ChapterMarker] = []

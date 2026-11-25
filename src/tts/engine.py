@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.core.storage import calculate_sha256
-from src.core.utils import get_wav_duration
 from src.core.logger import logger
+from src.media.ffmpeg import get_wav_duration, run_ffmpeg
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 
 
@@ -333,11 +333,7 @@ def _normalize_native_wav_file(
         if abs(target_speed - 1.0) > 1e-8:
             cmd += ["-af", f"atempo={target_speed}"]
         cmd += ["-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(tmp_out)]
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
-        if result.returncode:
-            raise RuntimeError(
-                f"Native TTS audio normalization failed: {result.stderr.decode(errors='replace')[-2000:]}"
-            )
+        run_ffmpeg(cmd, description="Native TTS audio normalization", timeout=120)
         report = audio_file_metrics(tmp_out)
         os.replace(tmp_out, output_path)
         _cache_audio_metrics(output_path, report["duration"], report["sha256"])
@@ -469,7 +465,6 @@ class NeuralTTSBackend(BaseTTSBackend):
 
     def _apply_speed(self, wav_path: Path, speed: float) -> None:
         """Applies pitch-preserving time stretching via ffmpeg atempo filter."""
-        import subprocess
         tmp_out = wav_path.with_name(f".{wav_path.name}.speed.tmp.wav")
         cmd = [
             "ffmpeg", "-y", "-i", str(wav_path),
@@ -478,7 +473,7 @@ class NeuralTTSBackend(BaseTTSBackend):
             str(tmp_out)
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
+            run_ffmpeg(cmd, description="TTS atempo time stretch")
             tmp_out.replace(wav_path)
         except Exception as e:
             logger.warning(f"Failed to apply atempo speed filter via ffmpeg: {e}")
