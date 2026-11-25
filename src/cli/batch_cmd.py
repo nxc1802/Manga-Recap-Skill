@@ -15,24 +15,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.cli.exit_codes import CliValidationError
+from src.core.checkpoints import load_chapter_metadata, update_checkpoint
 from src.core.logger import logger
+from src.core.project import (
+    format_chapter_filename,
+    get_output_dir,
+    resolve_existing_chapter_dir,
+    resolve_existing_project_dir,
+    stage_chapter_export,
+)
 from src.core.schemas import (
     CheckpointStatus,
     StageType,
     VoiceSelectionApproval,
 )
-from src.core.storage import (
-    StorageFileNotFoundError,
-    format_chapter_filename,
-    get_chapter_dir,
-    get_output_dir,
-    get_project_dir,
-    load_chapter_metadata,
-    read_json,
-    stage_chapter_export,
-    update_checkpoint,
-)
-from src.core.utils import get_project_data_dir
+from src.core.storage import StorageFileNotFoundError, read_json
 
 
 def parse_chapter_list(chapters_arg: Optional[str]) -> List[str]:
@@ -109,9 +106,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required for batch processing.")
 
-    project_dir = get_project_dir(project_slug)
-    fallback_dir = get_project_data_dir(project_slug)
-    eff_dir = project_dir if project_dir.exists() else (fallback_dir if fallback_dir.exists() else project_dir)
+    eff_dir = resolve_existing_project_dir(project_slug, require_exists=False)
 
     # Strict Form Gate
     from src.core.series_setup import require_series_setup
@@ -181,11 +176,7 @@ def handle_batch(args: argparse.Namespace) -> Dict[str, Any]:
 
     for chap_num in target_chapters:
         t0 = time.monotonic()
-        chap_dir = get_chapter_dir(project_slug, chap_num)
-        if not chap_dir.exists():
-            fallback_chap = project_dir / "chapters" / str(chap_num)
-            if fallback_chap.exists():
-                chap_dir = fallback_chap
+        chap_dir = resolve_existing_chapter_dir(project_slug, chap_num, project_dir=project_dir, require_exists=False)
 
         # 1. Caching check: if chapter is already completed, skip unless force or retry
         if not force and (retry_chapter is None or str(chap_num) != str(retry_chapter)):

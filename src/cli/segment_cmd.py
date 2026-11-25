@@ -12,7 +12,14 @@ from pathlib import Path
 from typing import Any, Dict
 
 from src.cli.exit_codes import CliValidationError
+from src.core.checkpoints import reset_stage_checkpoint, update_checkpoint
 from src.core.contact_sheet import ContactSheetGenerator
+from src.core.project import (
+    get_chapter_dir,
+    init_chapter_layout,
+    init_project_layout,
+    resolve_existing_project_dir,
+)
 from src.core.schemas import (
     CheckpointStatus,
     PanelManifest,
@@ -20,20 +27,8 @@ from src.core.schemas import (
     StageType,
     utc_iso_now,
 )
-from src.core.storage import (
-    StorageFileNotFoundError,
-    atomic_write_json,
-    calculate_sha256,
-    get_chapter_dir,
-    get_project_dir,
-    init_chapter_layout,
-    init_project_layout,
-    read_json,
-    reset_stage_checkpoint,
-    update_checkpoint,
-)
+from src.core.storage import calculate_sha256, atomic_write_json, read_json
 from src.core.streaming_segmenter import StreamingSegmenter
-from src.core.utils import get_project_data_dir
 
 
 def handle_segment(args: argparse.Namespace) -> Dict[str, Any]:
@@ -55,14 +50,9 @@ def handle_segment(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Chapter number (--chapter) is required.")
 
     # 1. Resolve project and chapter directories
-    project_dir = get_project_dir(project_slug)
+    project_dir = resolve_existing_project_dir(project_slug, require_exists=False)
     if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            init_project_layout(project_slug, title=project_slug)
-            project_dir = get_project_dir(project_slug)
+        project_dir = init_project_layout(project_slug, title=project_slug)
 
     chap_dir = get_chapter_dir(project_slug, chapter_num)
     if not chap_dir.exists() or not (chap_dir / "chapter.json").exists():

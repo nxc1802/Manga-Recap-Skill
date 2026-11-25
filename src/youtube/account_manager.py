@@ -15,16 +15,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DependencyNotFoundError, DomainValidationError, StorageFileNotFoundError
 from src.core.logger import logger
+from src.core.project import get_youtube_accounts_dir
 from src.core.schemas import YouTubeAccountInfo, YouTubeAccountsRegistry, utc_iso_now
-from src.core.storage import (
-    StorageFileNotFoundError,
-    atomic_write_json,
-    get_youtube_accounts_dir,
-    read_json,
-)
-from src.core.utils import DependencyNotFoundError
+from src.core.storage import atomic_write_json, read_json
 
 YOUTUBE_SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
@@ -151,7 +146,7 @@ class YouTubeAccountManager:
                     token_file=str(legacy_token),
                     client_secrets_file=os.getenv("YOUTUBE_CLIENT_SECRETS_FILE", "client_secrets.json"),
                 )
-            raise CliValidationError(
+            raise DomainValidationError(
                 "No YouTube accounts registered.\n"
                 "Please run 'manga-recap youtube accounts add --account <name>' or "
                 "'python scripts/youtube_auth.py --account <name>' to authenticate a channel."
@@ -169,7 +164,7 @@ class YouTubeAccountManager:
                 if acc.channel_title and acc.channel_title.strip().lower() == target.lower():
                     return acc
             available = list(reg.accounts.keys())
-            raise CliValidationError(
+            raise DomainValidationError(
                 f"YouTube account '{target}' not found. Available accounts: {available}.\n"
                 f"Run 'manga-recap youtube accounts add --account {target}' to add it."
             )
@@ -194,7 +189,7 @@ class YouTubeAccountManager:
                     break
         if not matched_key:
             available = list(reg.accounts.keys())
-            raise CliValidationError(f"Cannot set default: account '{target}' not found. Available: {available}")
+            raise DomainValidationError(f"Cannot set default: account '{target}' not found. Available: {available}")
         reg.default_account = matched_key
         self.save_registry(reg)
         logger.info(f"Set '{matched_key}' as default YouTube upload account.")
@@ -205,7 +200,7 @@ class YouTubeAccountManager:
         reg = self.load_registry()
         target = account_name.strip()
         if target not in reg.accounts:
-            raise CliValidationError(f"Account '{target}' not found in registry.")
+            raise DomainValidationError(f"Account '{target}' not found in registry.")
 
         acc = reg.accounts.pop(target)
         if delete_token:
@@ -379,7 +374,7 @@ class YouTubeAccountManager:
         """
         clean_name = account_name.strip()
         if not clean_name or clean_name in {".", ".."} or any(char in clean_name for char in "/\\"):
-            raise CliValidationError("Account name must be a single nonempty name")
+            raise DomainValidationError("Account name must be a single nonempty name")
 
         sec_file = str(Path(client_secrets_file).resolve()) if client_secrets_file else "client_secrets.json"
         target_token_file = self.tokens_dir / f"{clean_name}.json"

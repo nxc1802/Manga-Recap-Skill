@@ -7,9 +7,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError
+from src.core.project import get_project_dir
 from src.core.schemas import ProjectConfig, utc_iso_now
-from src.core.storage import FileLock, atomic_write_json_pair, get_project_dir, read_json
+from src.core.storage import FileLock, atomic_write_json_pair, read_json
+from src.core.version import SETUP_SCHEMA_VERSION
 from src.tts.catalog import is_valid_voice_id, resolve_voice_id
 
 QUESTION_METADATA = {
@@ -38,7 +40,7 @@ class SetupAnswerItem(BaseModel):
 class SeriesSetupAnswers(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: str = "5.0.0"
+    schema_version: str = SETUP_SCHEMA_VERSION
     project_slug: str
     setup_revision: int = Field(default=1, ge=1)
     created_at: str
@@ -171,14 +173,14 @@ def _apply_answers(config, setup):
 def _check_setup(setup):
     valid, errors = validate_complete_setup(setup)
     if not valid:
-        raise CliValidationError("Series setup needs eight explicit answers", details=errors)
+        raise DomainValidationError("Series setup needs eight explicit answers", details=errors)
 
 
 def require_series_setup(project_slug, project_dir=None):
     root = Path(project_dir or get_project_dir(project_slug))
     path = root / "series_setup_answers.json"
     if not path.is_file():
-        raise CliValidationError("Strict Form Gate failed: record eight user-confirmed answers with manga-recap setup record")
+        raise DomainValidationError("Strict Form Gate failed: record eight user-confirmed answers with manga-recap setup record")
     with FileLock(path):
         try:
             setup = SeriesSetupAnswers.model_validate(read_json(path))
@@ -191,21 +193,21 @@ def require_series_setup(project_slug, project_dir=None):
             if _apply_answers(config, setup) != config:
                 raise ValueError("Project settings diverge from confirmed answers")
             return setup
-        except CliValidationError:
+        except DomainValidationError:
             raise
         except Exception as exc:
-            raise CliValidationError(f"Cannot use series setup for {project_slug}: {exc}") from exc
+            raise DomainValidationError(f"Cannot use series setup for {project_slug}: {exc}") from exc
 
 
 def record_series_setup(project_slug, answers_data, reviewer="user", project_dir=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", project_slug):
-        raise CliValidationError("Use letters, numbers, hyphens, or underscores in the project slug")
+        raise DomainValidationError("Use letters, numbers, hyphens, or underscores in the project slug")
     root = Path(project_dir or get_project_dir(project_slug))
     if not reviewer.strip():
-        raise CliValidationError("Setup requires a reviewer")
+        raise DomainValidationError("Setup requires a reviewer")
     raw = answers_data.get("answers", answers_data) if isinstance(answers_data, dict) else answers_data.answers
     if not isinstance(raw, dict) or set(raw) != set(ALL_QUESTION_IDS):
-        raise CliValidationError("Provide exactly Q01–Q05 and Q08–Q10")
+        raise DomainValidationError("Provide exactly Q01–Q05 and Q08–Q10")
     now = utc_iso_now()
     answers = {}
     for qid in ALL_QUESTION_IDS:
@@ -213,7 +215,7 @@ def record_series_setup(project_slug, answers_data, reviewer="user", project_dir
         if isinstance(data, SetupAnswerItem):
             data = data.model_dump()
         if not isinstance(data, dict) or data.get("answer_source") != "user":
-            raise CliValidationError(f"{qid} requires explicit answer_source='user'")
+            raise DomainValidationError(f"{qid} requires explicit answer_source='user'")
         answers[qid] = SetupAnswerItem.model_validate({
             "question_id": qid, "question_title": QUESTION_METADATA[qid]["title"], "confirmed_at": now, **data,
         })

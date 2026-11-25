@@ -1,8 +1,7 @@
 """Try each configured token once; stop on exhaustion, never fake success."""
 from functools import wraps
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError, StorageError
 from src.core.logger import logger
-from src.core.storage import StorageError
 
 
 def with_account_fallback(operation):
@@ -25,7 +24,7 @@ def with_account_fallback(operation):
                     isinstance(result, dict) and (result.get("status") in {"error", "failed"} or result.get("success") is False)
                 ):
                     return result
-            except (CliValidationError, ValueError, StorageError):
+            except (DomainValidationError, ValueError, StorageError):
                 # Input/approval/artifact errors must still fail closed immediately.
                 raise
             except Exception as exc:

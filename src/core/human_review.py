@@ -5,9 +5,9 @@ import datetime
 import json
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
-from src.cli.exit_codes import CliValidationError
-from src.core.storage import atomic_write_json, read_json
-from src.core.storage import calculate_sha256
+from src.core.checkpoints import mark_chapter_human_approved
+from src.core.errors import DomainValidationError
+from src.core.storage import atomic_write_json, calculate_sha256, read_json
 from src.core.utils import assert_file_nonempty
 
 
@@ -40,11 +40,11 @@ def require_voice_approval(project_dir):
     setup = require_series_setup(slug, project_dir=root)
     approval = VoiceSelectionApproval.model_validate(read_json(root / "voice_selection.json"))
     if not approval.is_approved() or approval.project_slug != slug or approval.voice_strategy != "single_narrator":
-        raise CliValidationError("Voice strategy requires explicit series-level human approval")
+        raise DomainValidationError("Voice strategy requires explicit series-level human approval")
     voice = resolve_voice_id(str(setup.answers["Q03"].user_answer))
     speed = float(str(setup.answers["Q04"].user_answer).lower().rstrip("x"))
     if resolve_voice_id(approval.primary_voice) != voice or abs(approval.speed - speed) > 1e-6:
-        raise CliValidationError("Voice approval differs from confirmed setup")
+        raise DomainValidationError("Voice approval differs from confirmed setup")
     return approval
 
 
@@ -78,7 +78,7 @@ def review_fingerprint(project_dir, *, legacy=False):
     records = [(str(path.relative_to(root)), project_hash if path == root / "project.json" else calculate_sha256(path))
                for path in required if path.is_file()]
     if any(not path.is_file() for path in required):
-        raise CliValidationError("Human approval requires all source/config/review inputs")
+        raise DomainValidationError("Human approval requires all source/config/review inputs")
     return hashlib.sha256(json.dumps(records + external, sort_keys=True).encode()).hexdigest()
 
 
@@ -97,32 +97,21 @@ def require_preview_approval(project_dir):
         validate_preview_package(root)
         return approval
     except Exception as exc:
-        raise CliValidationError(f"Human preview Gate G6 rejected: {exc}") from exc
+        raise DomainValidationError(f"Human preview Gate G6 rejected: {exc}") from exc
 
 
 def approve_preview(project_dir, reviewer, expected_config, expected_artifact):
     # Explicit command records the human's decision; flags on render never do.
-    from src.core.schemas import CheckpointStatus, HumanReviewStatus, utc_iso_now
-    from src.core.storage import acquire_lock, load_chapter_metadata
+    from src.core.schemas import utc_iso_now
 
     root = Path(project_dir)
     config = review_fingerprint(root)
     artifact = root / "chapters" / "1" / "video" / "preview.mp4"
     if config != expected_config or calculate_sha256(artifact) != expected_artifact:
-        raise CliValidationError("Review inputs changed since review pack was generated")
+        raise DomainValidationError("Review inputs changed since review pack was generated")
     validate_preview_package(root)
     approval = HumanApproval(human_review_status="approved", project_slug=read_json(root / "project.json")["slug"],
         approved_at=utc_iso_now(), reviewer=reviewer.strip(), config_fingerprint=config, artifact_hash=expected_artifact)
     atomic_write_json(root / "preview_approval.json", approval)
-
-    chap_json = root / "chapters" / "1" / "chapter.json"
-    if chap_json.is_file():
-        with acquire_lock(chap_json):
-            meta = load_chapter_metadata(chap_json)
-            meta.human_review_status = HumanReviewStatus.APPROVED
-            if meta.technical_status == CheckpointStatus.COMPLETED:
-                meta.overall_status = CheckpointStatus.COMPLETED
-            meta.updated_at = utc_iso_now()
-            atomic_write_json(chap_json, meta)
-
+    mark_chapter_human_approved(root / "chapters" / "1")
     return approval

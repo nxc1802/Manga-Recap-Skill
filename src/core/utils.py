@@ -3,11 +3,10 @@ import re
 import unicodedata
 import wave
 from pathlib import Path
+from src.core.errors import DependencyNotFoundError, FFmpegExecutionError
 from src.core.storage import (
     read_json,
     atomic_write_json,
-    cleanup_intermediate_files,
-    StorageManager,
 )
 
 def assert_file_nonempty(path: Path) -> None:
@@ -118,19 +117,6 @@ import csv
 import shutil
 import subprocess
 from typing import Union, Optional, List
-
-
-class DependencyNotFoundError(Exception):
-    """Raised when external tool (ffmpeg, ffprobe) is not installed on PATH."""
-    pass
-
-
-class FFmpegExecutionError(Exception):
-    """Raised when FFmpeg subprocess returns non-zero exit code."""
-    def __init__(self, message: str, returncode: int, stderr: str = ""):
-        super().__init__(f"{message} (exit code {returncode}): {stderr.strip()[-500:] if stderr else ''}")
-        self.returncode = returncode
-        self.stderr = stderr
 
 
 def run_ffmpeg(cmd: List[str], description: str = "FFmpeg process") -> subprocess.CompletedProcess:

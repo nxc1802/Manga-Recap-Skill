@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import re
 
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError
 from src.core.storage import FileLock, atomic_write_json, read_json
 
 
@@ -21,9 +21,9 @@ class KaggleAccountManager:
         data = read_json(self.registry_file)
         accounts = data.get("accounts")
         if not isinstance(accounts, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.startswith("KGAT_") for k, v in accounts.items()):
-            raise CliValidationError("Invalid Kaggle account registry")
+            raise DomainValidationError("Invalid Kaggle account registry")
         if data.get("default_account") not in (None, *accounts):
-            raise CliValidationError("Unknown default Kaggle account")
+            raise DomainValidationError("Unknown default Kaggle account")
         return data
 
     def _save(self, data):
@@ -32,9 +32,9 @@ class KaggleAccountManager:
 
     def add(self, name, token):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name or "") or name.startswith("KGAT_"):
-            raise CliValidationError("Use a simple account name, not a token")
+            raise DomainValidationError("Use a simple account name, not a token")
         if not re.fullmatch(r"KGAT_[A-Za-z0-9_-]+", (token or "").strip()):
-            raise CliValidationError("A Kaggle access token (KGAT_) is required")
+            raise DomainValidationError("A Kaggle access token (KGAT_) is required")
         token = token.strip()
         with FileLock(self.registry_file):
             data = self._load()
@@ -48,7 +48,7 @@ class KaggleAccountManager:
                         self._save(data)
                     return existing
             if name in data["accounts"]:
-                raise CliValidationError("Account name already exists; remove it first")
+                raise DomainValidationError("Account name already exists; remove it first")
             data["accounts"][name] = token
             if not data["default_account"]:
                 data["default_account"] = name
@@ -59,7 +59,7 @@ class KaggleAccountManager:
         with FileLock(self.registry_file):
             data = self._load()
             if name not in data["accounts"]:
-                raise CliValidationError("Unknown Kaggle account")
+                raise DomainValidationError("Unknown Kaggle account")
             del data["accounts"][name]
             if data["default_account"] == name:
                 data["default_account"] = next(iter(data["accounts"]), None)
@@ -69,7 +69,7 @@ class KaggleAccountManager:
         with FileLock(self.registry_file):
             data = self._load()
             if name not in data["accounts"]:
-                raise CliValidationError("Unknown Kaggle account")
+                raise DomainValidationError("Unknown Kaggle account")
             data["default_account"] = name
             self._save(data)
 

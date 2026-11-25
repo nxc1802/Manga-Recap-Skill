@@ -5,7 +5,7 @@ Error codes and exception definitions for Universal / Agentic Manga Crawler.
 
 from enum import Enum
 from typing import Any, Dict, Optional
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError
 
 
 class CrawlerErrorCode(str, Enum):
@@ -18,7 +18,7 @@ class CrawlerErrorCode(str, Enum):
     NETWORK_TIMEOUT = "network_timeout"
 
 
-class CrawlerError(CliValidationError):
+class CrawlerError(DomainValidationError):
     """Structured exception for crawler operations with error code and context."""
 
     def __init__(

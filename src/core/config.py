@@ -45,13 +45,6 @@ class AppConfig(BaseModel):
     general_story_context: str = ""
     initial_scripts: dict[str, dict[int, str]] = Field(default_factory=dict)
 
-def get_output_dir(project_slug: str) -> Path:
-    """Returns standardized export path resolution helper: output/<project_slug>."""
-    env_output = os.getenv("MANGA_RECAP_OUTPUT_DIR")
-    if env_output:
-        return Path(env_output) / project_slug
-    return Path("output") / project_slug
-
 def load_config(config_path: str = "config.yaml") -> AppConfig:
     path = Path(config_path)
     if not path.exists():

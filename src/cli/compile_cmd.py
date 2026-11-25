@@ -16,21 +16,17 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.cli.exit_codes import CliValidationError
+from src.core.errors import DependencyNotFoundError
 from src.core.human_review import require_preview_approval, require_voice_approval
+from src.core.project import get_output_dir, resolve_existing_project_dir
 from src.core.schemas import (
     ChapterMarker,
     ChapterTimelineItem,
     CheckpointStatus,
     FeatureTimeline,
 )
-from src.core.storage import (
-    StorageFileNotFoundError,
-    atomic_write_json,
-    get_output_dir,
-    get_project_dir,
-    read_json,
-)
-from src.core.utils import DependencyNotFoundError, get_project_data_dir, run_ffmpeg
+from src.core.storage import StorageFileNotFoundError, atomic_write_json, read_json
+from src.core.utils import run_ffmpeg
 from src.youtube.metadata import format_seconds_to_timestamp
 
 
@@ -46,15 +42,7 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
     if not project_slug:
         raise CliValidationError("Project slug (--project) is required.")
 
-    project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
+    project_dir = resolve_existing_project_dir(project_slug)
 
     chapters_arg = getattr(args, "chapters", None)
     output_arg = getattr(args, "output", None)

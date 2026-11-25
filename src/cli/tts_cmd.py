@@ -12,20 +12,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from src.cli.exit_codes import CliValidationError
+from src.core.checkpoints import reset_stage_checkpoint, update_checkpoint
 from src.core.logger import logger
+from src.core.project import resolve_existing_chapter_dir, resolve_existing_project_dir
 from src.core.schemas import CheckpointStatus, RecapScript, ScriptSegment, StageType
 from src.core.storage import (
     StorageFileNotFoundError,
     atomic_write_json,
     calculate_sha256,
     calculate_utterance_fingerprint,
-    get_chapter_dir,
-    get_project_dir,
     read_json,
-    reset_stage_checkpoint,
-    update_checkpoint,
 )
-from src.core.utils import get_project_data_dir
 from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
 
@@ -81,25 +78,8 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     if chapter_num is None:
         raise CliValidationError("Chapter number (--chapter) is required.")
 
-    project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
-
-    chap_dir = get_chapter_dir(project_slug, chapter_num)
-    if not chap_dir.exists():
-        fallback_chap = project_dir / "chapters" / str(chapter_num)
-        if fallback_chap.exists():
-            chap_dir = fallback_chap
-        else:
-            raise StorageFileNotFoundError(
-                f"Chapter '{chapter_num}' directory not found at {chap_dir}"
-            )
+    project_dir = resolve_existing_project_dir(project_slug)
+    chap_dir = resolve_existing_chapter_dir(project_slug, chapter_num, project_dir=project_dir)
 
     script_path = chap_dir / "script.json"
     if not script_path.exists():

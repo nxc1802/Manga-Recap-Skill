@@ -6,13 +6,11 @@ import re
 import shutil
 from typing import Any, Dict, List, Optional
 
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError, StorageFileNotFoundError
 from src.core.logger import logger
+from src.core.project import format_chapter_filename, get_chapter_dir, get_output_dir, get_project_dir
 from src.core.schemas import ChapterMarker, FeatureTimeline, YouTubeMetadata
-from src.core.storage import (
-    StorageFileNotFoundError, atomic_write_json, format_chapter_filename,
-    get_chapter_dir, get_output_dir, get_project_dir, read_json,
-)
+from src.core.storage import atomic_write_json, read_json
 
 
 def format_seconds_to_timestamp(seconds: float) -> str:
@@ -202,9 +200,9 @@ def handle_youtube_metadata(args: argparse.Namespace) -> Dict[str, Any]:
     chapter_num = getattr(args, "chapter", None)
 
     if not project_slug:
-        raise CliValidationError("Project slug (--project) is required.")
+        raise DomainValidationError("Project slug (--project) is required.")
     if chapter_num is None:
-        raise CliValidationError("Chapter number (--chapter) is required.")
+        raise DomainValidationError("Chapter number (--chapter) is required.")
 
     proj_dir = get_project_dir(project_slug)
     out_dir = get_output_dir(project_slug)

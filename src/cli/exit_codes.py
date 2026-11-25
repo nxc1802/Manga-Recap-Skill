@@ -1,9 +1,8 @@
-"""
-src/cli/exit_codes.py
-Standard POSIX-aligned exit codes for Manga Recap Deterministic CLI Suite.
-"""
+"""Standard POSIX-aligned exit codes for Manga Recap CLI."""
 
 from enum import IntEnum
+
+from src.core.errors import DomainValidationError
 
 
 class ExitCode(IntEnum):
@@ -14,10 +13,5 @@ class ExitCode(IntEnum):
     DEPENDENCY_ERROR = 4    # Missing binary dependencies (ffmpeg, ffprobe, espeak, vieneu models)
 
 
-class CliValidationError(Exception):
-    """Raised when data or argument validation fails."""
-    def __init__(self, message: str, details=None, data=None):
-        super().__init__(message)
-        self.details = details
-        self.data = data
-
+# Compatibility alias so CLI and tests treat domain validation errors identically.
+CliValidationError = DomainValidationError

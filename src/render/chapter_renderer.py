@@ -2,10 +2,11 @@
 from pathlib import Path
 import shutil
 import tempfile
-from src.cli.exit_codes import CliValidationError
-from src.core.schemas import CheckpointStatus, HumanReviewStatus, StageType
-from src.core.storage import (load_recap_script, load_manifest, read_json, atomic_write_json,
-                              acquire_lock, load_chapter_metadata, update_checkpoint)
+from src.core.checkpoints import record_chapter_render_result, update_checkpoint
+from src.core.errors import DomainValidationError
+from src.core.project import load_chapter_metadata, load_manifest, load_recap_script
+from src.core.schemas import CheckpointStatus, StageType
+from src.core.storage import read_json
 from src.core.series_setup import require_series_setup
 from src.core.human_review import require_preview_approval, require_voice_approval
 from src.core.utils import assert_file_nonempty, get_wav_duration
@@ -17,10 +18,10 @@ from src.render.subtitle import SubtitleGenerator
 
 def resolve_audio(chapter, segment):
     if not segment.audio_path:
-        raise CliValidationError(f"Missing audio path: {segment.seq_id}")
+        raise DomainValidationError(f"Missing audio path: {segment.seq_id}")
     path = (chapter / segment.audio_path).resolve()
     if not path.is_relative_to(chapter.resolve()):
-        raise CliValidationError("Audio must reside inside chapter payload")
+        raise DomainValidationError("Audio must reside inside chapter payload")
     return path
 
 
@@ -30,21 +31,21 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
     require_series_setup(slug, project_dir=root)
     require_voice_approval(root)
     if quality not in {"preview", "final"}:
-        raise CliValidationError("Unknown render quality")
+        raise DomainValidationError("Unknown render quality")
     if options.get("allow_placeholders"):
-        raise CliValidationError("Placeholder artifacts are never production inputs")
+        raise DomainValidationError("Placeholder artifacts are never production inputs")
     if quality == "final" or str(chapter_num) != "1":
         require_preview_approval(root)
     chapter = root / "chapters" / str(chapter_num)
     script = load_recap_script(chapter)
     manifest = load_manifest(chapter)
     if script is None or manifest is None:
-        raise CliValidationError("Canonical script and manifest are required before rendering")
+        raise DomainValidationError("Canonical script and manifest are required before rendering")
     metadata = load_chapter_metadata(chapter)
     if script.project_slug != slug or manifest.project_slug != slug or metadata.project_slug != slug:
-        raise CliValidationError("Chapter source/project identity mismatch")
+        raise DomainValidationError("Chapter source/project identity mismatch")
     if script.chapter_number != str(chapter_num) or manifest.chapter_number != str(chapter_num) or metadata.chapter_number != str(chapter_num):
-        raise CliValidationError("Chapter number mismatch")
+        raise DomainValidationError("Chapter number mismatch")
     config = read_json(root / "project.json")
     settings = config["render_settings"]
     if encoder == "auto":
@@ -53,22 +54,22 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
     else:
         encoder = encoder or "libx264"
     if settings["video_mode"] not in {"auto", "landscape_fit"}:
-        raise CliValidationError("Canonical production currently supports auto/landscape_fit framing")
+        raise DomainValidationError("Canonical production currently supports auto/landscape_fit framing")
     if options.get("video_mode") is not None and options["video_mode"] != settings["video_mode"]:
-        raise CliValidationError("Video mode override conflicts with confirmed project config")
+        raise DomainValidationError("Video mode override conflicts with confirmed project config")
     sub_settings = settings["subtitle"]
     for key, config_key in (("subtitle_lines", "max_lines"), ("subtitle_font_size", "font_size"), ("subtitle_chunking", "chunking")):
         if options.get(key) is not None and options[key] != sub_settings[config_key]:
-            raise CliValidationError(f"{key} override conflicts with project config")
+            raise DomainValidationError(f"{key} override conflicts with project config")
     audio_settings = config["audio_settings"]
     # Runtime overrides cannot change explicitly confirmed settings.
     overrides = {"burn_subtitles": settings["burn_subtitles"],
                  "allow_animation": settings["render_pan_mode"] == "animation"}
     for key, expected in overrides.items():
         if options.get(key) is not None and options[key] != expected:
-            raise CliValidationError(f"{key} conflicts with confirmed setup")
+            raise DomainValidationError(f"{key} conflicts with confirmed setup")
     if options.get("bgm_path") is not None and options["bgm_path"] != audio_settings.get("bgm_path"):
-        raise CliValidationError("BGM override conflicts with confirmed setup")
+        raise DomainValidationError("BGM override conflicts with confirmed setup")
     promote = quality == "final" and str(chapter_num) == "1"
     plan_path = chapter / "visual_plan.json"
     video_dir = chapter / "video"
@@ -85,7 +86,7 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
         for segment in script.segments:
             duration = get_wav_duration(resolve_audio(chapter, segment))
             if segment.duration is None or abs(segment.duration - duration) > 0.001:
-                raise CliValidationError(f"Audio duration changed for {segment.seq_id}")
+                raise DomainValidationError(f"Audio duration changed for {segment.seq_id}")
         plan = resolve_visual_plan(chapter, manifest, script, target_width=settings["target_width"],
             target_height=settings["target_height"], fps=settings["fps"],
             motion_enabled=settings["render_pan_mode"] == "animation")
@@ -119,14 +120,13 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
                 final_artifact.replace(video_dir / "final.previous.mp4")
         update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.COMPLETED,
             artifacts=[str(output), str(subtitles.relative_to(chapter)), "visual_plan.json"])
-        with acquire_lock(chapter / "chapter.json"):
-            metadata = load_chapter_metadata(chapter)
-            metadata.technical_status = CheckpointStatus.COMPLETED
-            metadata.overall_status = CheckpointStatus.NEEDS_REVIEW if quality == "preview" else CheckpointStatus.COMPLETED
-            metadata.human_review_status = HumanReviewStatus.APPROVED if promote else HumanReviewStatus.UNREVIEWED
-            metadata.stats.video_path = str(output)
-            metadata.stats.final_video_duration_seconds = plan.total_duration_sec
-            atomic_write_json(chapter / "chapter.json", metadata)
+        record_chapter_render_result(
+            chapter,
+            quality=quality,
+            promote=promote,
+            video_path=output,
+            duration_seconds=plan.total_duration_sec,
+        )
     except Exception as exc:
         update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.FAILED, error=str(exc))
         raise

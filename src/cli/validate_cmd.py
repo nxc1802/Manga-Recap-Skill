@@ -24,18 +24,19 @@ from src.core.schemas import (
     RecapScript,
     StageType,
 )
+from src.core.project import (
+    format_chapter_filename,
+    get_output_dir,
+    resolve_existing_chapter_dir,
+    resolve_existing_project_dir,
+)
 from src.core.storage import (
     StorageCorruptError,
     StorageFileNotFoundError,
     calculate_sha256,
-    format_chapter_filename,
-    get_chapter_dir,
-    get_output_dir,
-    get_project_dir,
     read_json,
     verify_checksum,
 )
-from src.core.utils import get_project_data_dir
 from src.tts.engine import get_wav_duration_seconds
 
 
@@ -46,15 +47,7 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Project slug is required.")
 
     # 1. Resolve project directory
-    project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(
-                f"Project '{project_slug}' directory not found at {project_dir}"
-            )
+    project_dir = resolve_existing_project_dir(project_slug)
 
     strict = getattr(args, "strict", False)
     chapter_arg = getattr(args, "chapter", None)
@@ -122,14 +115,10 @@ def handle_validate(args: argparse.Namespace) -> Dict[str, Any]:
 
     # 6. Validate each chapter
     for chap_num in chapters_to_check:
-        chap_dir = get_chapter_dir(project_slug, chap_num)
+        chap_dir = resolve_existing_chapter_dir(project_slug, chap_num, project_dir=project_dir, require_exists=False)
         if not chap_dir.exists():
-            fallback_chap = project_dir / "chapters" / str(chap_num)
-            if fallback_chap.exists():
-                chap_dir = fallback_chap
-            else:
-                check(False, f"chapter_{chap_num}", f"Chapter directory does not exist: {chap_dir}")
-                continue
+            check(False, f"chapter_{chap_num}", f"Chapter directory does not exist: {chap_dir}")
+            continue
 
         # chapter.json
         chap_json_path = chap_dir / "chapter.json"

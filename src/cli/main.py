@@ -14,8 +14,9 @@ from pydantic import ValidationError
 
 from src.cli.exit_codes import CliValidationError, ExitCode
 from src.cli.response import print_response
-from src.core.logger import configure_logging
-from src.core.storage import (
+from src.core.errors import (
+    DependencyNotFoundError,
+    DomainValidationError,
     InvalidCheckpointTransitionError,
     StorageCorruptError,
     StorageError,
@@ -23,7 +24,8 @@ from src.core.storage import (
     StorageLockError,
     StorageWriteError,
 )
-from src.core.utils import DependencyNotFoundError
+from src.core.logger import configure_logging
+from src.core.version import APP_VERSION
 
 
 class JsonAwareArgumentParser(argparse.ArgumentParser):
@@ -68,7 +70,7 @@ def build_parser() -> JsonAwareArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         parents=[common_parent],
     )
-    parser.add_argument("--version", action="version", version="%(prog)s 5.0.0")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {APP_VERSION}")
 
     subparsers = parser.add_subparsers(dest="subcommand", title="subcommands", required=True)
 
@@ -468,7 +470,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         code = se.code if isinstance(se.code, int) else 0
         return code
 
-    except (CliValidationError, ValidationError, StorageCorruptError, InvalidCheckpointTransitionError) as e:
+    except (DomainValidationError, CliValidationError, ValidationError, StorageCorruptError, InvalidCheckpointTransitionError) as e:
         duration = round(time.monotonic() - start_time, 4)
         error_data = getattr(e, "data", None)
         error_details = getattr(e, "details", None)

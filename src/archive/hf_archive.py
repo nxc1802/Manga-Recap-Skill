@@ -10,9 +10,10 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
 
-from src.cli.exit_codes import CliValidationError
+from src.core.errors import DomainValidationError
+from src.core.project import get_output_dir, get_project_dir
 from src.core.schemas import ArchiveReceipt, utc_iso_now
-from src.core.storage import atomic_write_json, calculate_sha256 as compute_file_sha256, get_output_dir, get_project_dir, read_json
+from src.core.storage import atomic_write_json, calculate_sha256 as compute_file_sha256, read_json
 
 DEFAULT_HF_REPO_ID = "Cuong2004/manga-recap-archive"
 FALLBACK_HF_TOKEN = ""
@@ -60,7 +61,7 @@ def ensure_archive_repo(api, repo_id=DEFAULT_HF_REPO_ID):
     api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
     info = api.repo_info(repo_id=repo_id, repo_type="dataset")
     if getattr(info, "private", None) is not True:
-        raise CliValidationError(f"Archive repository {repo_id} must be private")
+        raise DomainValidationError(f"Archive repository {repo_id} must be private")
     return repo_id
 
 
@@ -138,7 +139,7 @@ def is_whitelisted_archive_path(rel_path, project_root, output_root=None):
 def generate_archive_manifest(project_slug, repo_id=DEFAULT_HF_REPO_ID, project_dir=None, output_dir=None):
     project, output = Path(project_dir or get_project_dir(project_slug)), Path(output_dir or get_output_dir(project_slug))
     if not project.is_dir() or project.is_symlink() or output.is_symlink():
-        raise CliValidationError("An existing, regular project directory is required")
+        raise DomainValidationError("An existing, regular project directory is required")
     entries, excluded = [], 0
     for root, prefix in ((project, Path()), (output, Path("output"))):
         for path in sorted(root.rglob("*")):
@@ -162,7 +163,7 @@ def generate_archive_manifest(project_slug, repo_id=DEFAULT_HF_REPO_ID, project_
 
 def _require_revision(revision):
     if not _GIT_SHA40_RE.fullmatch(revision or ""):
-        raise CliValidationError("Provide the 40-character commit SHA from the archive receipt")
+        raise DomainValidationError("Provide the 40-character commit SHA from the archive receipt")
     return revision
 
 
@@ -183,7 +184,7 @@ def archive_push(project_slug, repo_id=None, token=None, project_dir=None, outpu
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, dest)
             if compute_file_sha256(dest) != entry["sha256"]:
-                raise CliValidationError(f"Changed during archive preparation: {relative}")
+                raise DomainValidationError(f"Changed during archive preparation: {relative}")
         commit = api.upload_folder(folder_path=str(stage), path_in_repo=f"series/{project_slug}",
                                    repo_id=repo, repo_type="dataset", commit_message=f"Archive {project_slug}")
     revision = _require_revision(getattr(commit, "oid", None))
@@ -205,13 +206,13 @@ def _remote_file(repo, revision, filename, token):
 
 def _manifest_files(manifest, project_slug, repo):
     if manifest.get("project_slug") != project_slug or manifest.get("repo_id") != repo:
-        raise CliValidationError("Archive identity mismatch")
+        raise DomainValidationError("Archive identity mismatch")
     seen = set()
     for entry in manifest["files"]:
         relative = Path(entry["relative_path"])
         expected = f"series/{project_slug}/{relative.as_posix()}"
         if relative.is_absolute() or ".." in relative.parts or relative in seen or entry["repo_path"] != expected:
-            raise CliValidationError(f"Unsafe or duplicate archived path: {relative}")
+            raise DomainValidationError(f"Unsafe or duplicate archived path: {relative}")
         seen.add(relative)
         yield relative, entry
 
@@ -219,7 +220,7 @@ def _manifest_files(manifest, project_slug, repo):
 def _checked_download(repo, revision, entry, token):
     path = _remote_file(repo, revision, entry["repo_path"], token)
     if path.stat().st_size != entry["size_bytes"] or compute_file_sha256(path) != entry["sha256"]:
-        raise CliValidationError(f"Archived file integrity mismatch: {entry['relative_path']}")
+        raise DomainValidationError(f"Archived file integrity mismatch: {entry['relative_path']}")
     return path
 
 
@@ -229,11 +230,11 @@ def archive_verify(project_slug, repo_id=None, token=None, revision=None, projec
     receipt = ArchiveReceipt.model_validate(read_json(path))
     repo, revision = repo_id or receipt.repo_id, _require_revision(revision or receipt.commit_sha)
     if receipt.project_slug != project_slug or receipt.repo_id != repo or receipt.commit_sha != revision:
-        raise CliValidationError("Archive verification must match the upload receipt")
+        raise DomainValidationError("Archive verification must match the upload receipt")
     manifest_path = project / "archive_manifest.json"
     remote_manifest = _remote_file(repo, revision, f"series/{project_slug}/archive_manifest.json", token)
     if any(compute_file_sha256(p) != receipt.manifest_sha256 for p in (manifest_path, remote_manifest)):
-        raise CliValidationError("Archive manifest differs from upload receipt")
+        raise DomainValidationError("Archive manifest differs from upload receipt")
     files = list(_manifest_files(read_json(manifest_path), project_slug, repo))
     for _, entry in files:
         _checked_download(repo, revision, entry, token)
@@ -253,15 +254,15 @@ def archive_restore(project_slug, revision=None, repo_id=None, token=None, targe
     revision = _require_revision(revision or (receipt.commit_sha if receipt else None))
     target = Path(target_dir or project).absolute()
     if target.is_symlink() or (target.exists() and not target.is_dir()):
-        raise CliValidationError("Restore target must be a regular directory")
+        raise DomainValidationError("Restore target must be a regular directory")
     if target.exists() and any(target.iterdir()) and not allow_non_empty:
-        raise CliValidationError("Choose an empty --target-dir or explicitly allow a nonempty target")
+        raise DomainValidationError("Choose an empty --target-dir or explicitly allow a nonempty target")
     target.parent.mkdir(parents=True, exist_ok=True)
     remote_manifest = _remote_file(repo, revision, f"series/{project_slug}/archive_manifest.json", token)
     manifest = read_json(remote_manifest)
     if receipt and repo == receipt.repo_id and revision == receipt.commit_sha:
         if compute_file_sha256(remote_manifest) != receipt.manifest_sha256:
-            raise CliValidationError("Archive manifest differs from the local receipt")
+            raise DomainValidationError("Archive manifest differs from the local receipt")
     files = list(_manifest_files(manifest, project_slug, repo))
     restored = 0
     with tempfile.TemporaryDirectory(prefix=".manga-restore-", dir=target.parent) as directory:
@@ -280,7 +281,7 @@ def archive_restore(project_slug, revision=None, repo_id=None, token=None, targe
         else:
             for file in stage.rglob("*"):
                 if file.is_file() and _has_symlink_component(target, file.relative_to(stage)):
-                    raise CliValidationError(f"Symlink in restore destination: {file.relative_to(stage)}")
+                    raise DomainValidationError(f"Symlink in restore destination: {file.relative_to(stage)}")
             for file in stage.rglob("*"):
                 if file.is_file():
                     dest = target / file.relative_to(stage)

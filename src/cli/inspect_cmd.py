@@ -11,13 +11,8 @@ import wave
 from pathlib import Path
 from typing import Any, Dict, List
 
-from src.core.storage import (
-    StorageFileNotFoundError,
-    get_chapter_dir,
-    get_project_dir,
-    read_json,
-)
-from src.core.utils import get_project_data_dir
+from src.core.project import resolve_existing_chapter_dir, resolve_existing_project_dir
+from src.core.storage import StorageFileNotFoundError, read_json
 
 
 def handle_inspect(args: argparse.Namespace) -> Dict[str, Any]:
@@ -26,14 +21,7 @@ def handle_inspect(args: argparse.Namespace) -> Dict[str, Any]:
     if not project_slug:
         raise StorageFileNotFoundError("Project slug is required.")
 
-    # Resolve project directory (canonical or existing fallback)
-    project_dir = get_project_dir(project_slug)
-    if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
-        else:
-            raise StorageFileNotFoundError(f"Project '{project_slug}' directory not found at {project_dir}")
+    project_dir = resolve_existing_project_dir(project_slug)
 
     chapter_num = getattr(args, "chapter", None)
 
@@ -85,15 +73,7 @@ def handle_inspect(args: argparse.Namespace) -> Dict[str, Any]:
         }
 
     # 2. Chapter-level inspection
-    chap_dir = get_chapter_dir(project_slug, chapter_num)
-    if not chap_dir.exists():
-        fallback_chap = project_dir / "chapters" / str(chapter_num)
-        if fallback_chap.exists():
-            chap_dir = fallback_chap
-        else:
-            raise StorageFileNotFoundError(
-                f"Chapter '{chapter_num}' directory not found at {chap_dir}"
-            )
+    chap_dir = resolve_existing_chapter_dir(project_slug, chapter_num, project_dir=project_dir)
 
     chap_json_path = chap_dir / "chapter.json"
     chap_meta: Dict[str, Any] = {}

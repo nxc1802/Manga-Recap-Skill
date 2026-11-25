@@ -534,29 +534,20 @@ def handle_review_pack(args: argparse.Namespace) -> Dict[str, Any]:
         raise CliValidationError("Chapter number is required for generating a review pack.")
 
     # 1. Resolve Project Directory
-    project_dir = get_project_dir(project_slug)
+    from src.core.project import resolve_existing_chapter_dir, resolve_existing_project_dir
+    project_dir = resolve_existing_project_dir(project_slug, require_exists=False)
     if not project_dir.exists():
-        fallback_dir = get_project_data_dir(project_slug)
-        if fallback_dir.exists():
-            project_dir = fallback_dir
+        # Check tests/fixtures fallback (e.g. synthetic fixture)
+        fixture_fallback = Path("tests/fixtures") / project_slug
+        if fixture_fallback.exists():
+            project_dir = fixture_fallback
+        elif project_slug in ("synthetic", "synthetic_fixture") and Path("tests/fixtures/synthetic").exists():
+            project_dir = Path("tests/fixtures/synthetic")
         else:
-            # Check tests/fixtures fallback (e.g. synthetic fixture)
-            fixture_fallback = Path("tests/fixtures") / project_slug
-            if fixture_fallback.exists():
-                project_dir = fixture_fallback
-            elif project_slug in ("synthetic", "synthetic_fixture") and Path("tests/fixtures/synthetic").exists():
-                project_dir = Path("tests/fixtures/synthetic")
-            else:
-                raise StorageFileNotFoundError(f"Project '{project_slug}' directory not found at {project_dir}")
+            raise StorageFileNotFoundError(f"Project '{project_slug}' directory not found at {project_dir}")
 
     # 2. Resolve Chapter Directory
-    chap_dir = get_chapter_dir(project_slug, str(chapter_num))
-    if not chap_dir.exists():
-        fallback_chap = project_dir / "chapters" / str(chapter_num)
-        if fallback_chap.exists():
-            chap_dir = fallback_chap
-        else:
-            raise StorageFileNotFoundError(f"Chapter '{chapter_num}' directory not found at {chap_dir}")
+    chap_dir = resolve_existing_chapter_dir(project_slug, str(chapter_num), project_dir=project_dir)
 
     # 3. Determine output directory
     out_dir_arg = getattr(args, "out_dir", None)
