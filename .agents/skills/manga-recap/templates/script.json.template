@@ -1,21 +1,21 @@
 {
-  "schema_version": "3.0.0",
+  "schema_version": "4.1.0",
   "project_slug": "warrior_grandpa",
-  "chapter_number": "2",
-  "title": "Warrior Grandpa and His Supreme Granddaughter - Episode 2",
+  "chapter_number": "1",
+  "title": "Warrior Grandpa - Chapter 1",
   "voice_strategy": "single_narrator",
-  "default_voice": "Trúc Ly",
+  "default_voice": "Ngọc Huyền",
   "segments": [
     {
       "seq_id": "001",
-      "panel_ids": [
+      "evidence_panel_ids": [
         "panel_001.jpg"
       ],
       "narrator_text": "Màn đêm u tối bao trùm đỉnh núi Thiên Nhai, một luồng sát khí lạnh lẽo đột ngột giáng xuống làm rung chuyển cả sơn môn!",
       "character": null,
       "emotion": "dramatic",
       "emotion_cue": null,
-      "voice_id": "Trúc Ly",
+      "voice_id": "Ngọc Huyền",
       "camera_motion": "pan_down",
       "focus_box": {
         "x_min": 0.0,
@@ -30,15 +30,15 @@
     },
     {
       "seq_id": "002",
-      "panel_ids": [
+      "evidence_panel_ids": [
         "panel_002.jpg",
         "panel_003.jpg"
       ],
-      "narrator_text": "Lão gia chủ trầm ngâm nhìn về phía chân trời [thở dài] từng vết thương năm xưa như đang nhắc nhở về món nợ máu chưa trả.",
+      "narrator_text": "Lão gia chủ trầm ngâm nhìn về phía chân trời [thở dài] giọng khàn đặc: 'Món nợ máu năm xưa, rốt cuộc đã đến lúc phải đòi lại.'",
       "character": "Lão Gia Chủ",
       "emotion": "sad",
       "emotion_cue": "[thở dài]",
-      "voice_id": "Thiền Tâm Đức",
+      "voice_id": "Ngọc Huyền",
       "camera_motion": "zoom_in",
       "focus_box": {
         "x_min": 0.2,
@@ -52,33 +52,16 @@
       "status": "pending"
     },
     {
-      "seq_id": "003",
-      "panel_ids": [
+      "seq_id": "003_1",
+      "evidence_panel_ids": [
         "panel_004.jpg"
       ],
-      "narrator_text": "Đột nhiên, tiếng cười lạnh lẽo vang vọng phá tan không gian tĩnh mịch!",
+      "narrator_text": "Từ sau màn sương dày đặc, bóng người áo đen khẽ nhếch mép [cười] sát khí ngút trời không hề suy giảm.",
       "character": null,
       "emotion": "suspense",
-      "emotion_cue": null,
-      "voice_id": "Trúc Ly",
+      "emotion_cue": "[cười]",
+      "voice_id": "Ngọc Huyền",
       "camera_motion": "static",
-      "focus_box": null,
-      "duration": null,
-      "audio_path": null,
-      "checksum": null,
-      "status": "pending"
-    },
-    {
-      "seq_id": "004_1",
-      "panel_ids": [
-        "panel_001.jpg"
-      ],
-      "narrator_text": "Bóng người áo đen từ từ hiện rõ sau màn sương, sát khí ngút trời không hề thuyên giảm.",
-      "character": null,
-      "emotion": "suspense",
-      "emotion_cue": null,
-      "voice_id": "Trúc Ly",
-      "camera_motion": "zoom_in",
       "focus_box": null,
       "duration": null,
       "audio_path": null,
@@ -90,7 +73,6 @@
   "metadata": {
     "authored_by": "coding_agent",
     "batch_size": 5,
-    "overlap": 2,
-    "created_at": "2026-11-03T12:00:00Z"
+    "overlap": 2
   }
 }

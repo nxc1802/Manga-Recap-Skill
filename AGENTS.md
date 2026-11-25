@@ -1,13 +1,16 @@
-# Manga Recap V5 Slim
+# Manga Recap Agent Guide
 
-Read the manga-recap skill and rulebooks for chapter production. The coding agent owns OCR, story and character comprehension, Vietnamese narration, and framing. Python handles deterministic ingestion, VieNeu-TTS, and FFmpeg. Use atomic local JSON writes and chapter checkpoints. Gemini Decision is limited to closed-set panel routing. Creative cloud APIs, cloud speech APIs, and external databases are out of scope. [Manga Recap skill](.agents/skills/manga-recap/SKILL.md)
+Follow the consolidated skill specification in [Manga Recap skill](.agents/skills/manga-recap/SKILL.md) for all chapter production tasks.
 
-## Setup and review
+## Ownership & Scope
 
-Before starting a new series, use `ask_question` or the host's structured question tool to collect Q01–Q05 and Q08–Q10. Stop before starting jobs if an answer is missing or the form is unavailable. Persist all eight choices with `setup record`. New series use adaptive motion and agent-generated thumbnails.
+- **Coding agent owns:** Reading `contact_sheets/` and `panels/`, OCR and character tracking (`characters.json`, `story_summary.md`), writing faithful Vietnamese single-narrator `script.json`, selecting 2D framing cues, and creating 16:9 thumbnails.
+- **Python CLI owns:** Deterministic crawling, VCS panel segmentation, closed-set `gemini-decision-1` routing, VieNeu-TTS v3 Turbo synthesis, FFmpeg rendering, Kaggle orchestration, Hugging Face archival, and YouTube upload/verification.
+- **Out of scope:** Creative cloud LLMs/VLMs, cloud speech APIs, mock TTS in production, and external databases.
 
-Record the approved single narrator in `voice_selection.json`. Chapter 1 requires actual human preview approval before final promotion and later-chapter production. After the user watches the preview, use the fingerprints from `review-pack` with `review-approve`. Immediately before YouTube upload, list the channels and reconfirm the destination and privacy. Check Kaggle and YouTube jobs after five minutes and report queue or OAuth stalls.
+## Repository Conventions
 
-## Chapter pipeline
-
-Pass `--json` to CLI calls. Run crawl → segment → decide → inspect. Read the contact sheets and character registry before writing `script.json`. Use natural Vietnamese dialogue and retain essential story panels. Mark ambiguous content `needs_review` with `[CAN_XAC_MINH: <lý do>]`. Save each scripting batch, validate, synthesize, and render. Use `status` to resume.
+- Always invoke `manga-recap ... --json` so state, `next_action`, blockers, and errors stay structured.
+- Never fabricate user choices (`Q01–Q05, Q08–Q10`), `voice_selection.json`, or `approve` preview hashes.
+- Use atomic local JSON writes (`atomic_write_json`) and keep Chapter 1 preview review human-gated before final promotion or series production.
+- Verify changes with `.venv/bin/python -m compileall -q src tests` and `.venv/bin/python -m pytest -q`.
