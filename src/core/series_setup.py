@@ -15,16 +15,46 @@ from src.core.version import SETUP_SCHEMA_VERSION
 from src.tts.catalog import is_valid_voice_id, resolve_voice_id
 
 QUESTION_METADATA = {
-    "Q01": {"title": "Chương và nguồn truyện"},
-    "Q02": {"title": "Môi trường thực thi"},
-    "Q03": {"title": "Giọng đọc"},
-    "Q04": {"title": "Tốc độ giọng đọc"},
-    "Q05": {"title": "Gắn phụ đề"},
-    "Q08": {"title": "Kênh YouTube và quyền riêng tư"},
-    "Q09": {"title": "Chất lượng video"},
-    "Q10": {"title": "Nhạc nền"},
+    "Q01": {"title": "Chương và nguồn truyện", "name": "source"},
+    "Q02": {"title": "Môi trường thực thi", "name": "compute"},
+    "Q03": {"title": "Giọng đọc", "name": "voice"},
+    "Q04": {"title": "Tốc độ giọng đọc", "name": "speed"},
+    "Q05": {"title": "Gắn phụ đề", "name": "subtitles"},
+    "Q08": {"title": "Kênh YouTube và quyền riêng tư", "name": "publish"},
+    "Q09": {"title": "Chất lượng video", "name": "quality"},
+    "Q10": {"title": "Nhạc nền", "name": "audio"},
 }
 ALL_QUESTION_IDS = list(QUESTION_METADATA)
+NAMED_TO_QID = {meta["name"]: qid for qid, meta in QUESTION_METADATA.items()}
+QID_TO_NAMED = {qid: meta["name"] for qid, meta in QUESTION_METADATA.items()}
+
+
+def normalize_answers_payload(answers_data: Any) -> dict[str, Any]:
+    """
+    Accepts either Q01-Q05/Q08-Q10 keys or named setting keys
+    (source, compute, voice, speed, subtitles, publish, quality, audio).
+    Rejects conflicting duplicates rather than silently dropping user input.
+    """
+    raw = answers_data.get("answers", answers_data) if isinstance(answers_data, dict) else answers_data.answers
+    if not isinstance(raw, dict):
+        raise DomainValidationError("Provide exactly Q01–Q05 and Q08–Q10")
+
+    normalized: dict[str, Any] = {}
+    for key, val in raw.items():
+        canon_qid = NAMED_TO_QID.get(str(key).strip().lower(), key)
+        if canon_qid in normalized and normalized[canon_qid] != val:
+            raise DomainValidationError(f"Conflicting setup answers for '{key}' / '{canon_qid}'")
+        normalized[canon_qid] = val
+    return normalized
+
+
+def extract_named_settings(setup: "SeriesSetupAnswers") -> dict[str, Any]:
+    """Returns confirmed user answers keyed by semantic setting names."""
+    return {
+        QID_TO_NAMED[qid]: item.user_answer
+        for qid, item in setup.answers.items()
+        if qid in QID_TO_NAMED
+    }
 
 
 class SetupAnswerItem(BaseModel):
@@ -205,8 +235,8 @@ def record_series_setup(project_slug, answers_data, reviewer="user", project_dir
     root = Path(project_dir or get_project_dir(project_slug))
     if not reviewer.strip():
         raise DomainValidationError("Setup requires a reviewer")
-    raw = answers_data.get("answers", answers_data) if isinstance(answers_data, dict) else answers_data.answers
-    if not isinstance(raw, dict) or set(raw) != set(ALL_QUESTION_IDS):
+    raw = normalize_answers_payload(answers_data)
+    if set(raw) != set(ALL_QUESTION_IDS):
         raise DomainValidationError("Provide exactly Q01–Q05 and Q08–Q10")
     now = utc_iso_now()
     answers = {}

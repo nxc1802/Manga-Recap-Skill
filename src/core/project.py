@@ -15,15 +15,13 @@ from src.core.schemas import (
     ProjectConfig,
     RecapScript,
 )
+from src.core.settings import get_runtime_settings
 from src.core.storage import atomic_write_json, read_json
 
 
 def get_projects_root() -> Path:
     """Returns the base storage root directory: data/projects."""
-    env_root = os.getenv("MANGA_RECAP_DATA_DIR")
-    if env_root:
-        return Path(env_root) / "projects"
-    return Path("data") / "projects"
+    return get_runtime_settings().projects_dir
 
 
 def get_project_dir(project_slug: str) -> Path:
@@ -38,26 +36,17 @@ def get_chapter_dir(project_slug: str, chapter_num: Union[str, int]) -> Path:
 
 def get_output_dir(project_slug: str) -> Path:
     """Returns standardized export directory: output/<project_slug>."""
-    env_output = os.getenv("MANGA_RECAP_OUTPUT_DIR")
-    if env_output:
-        return Path(env_output) / project_slug
-    return Path("output") / project_slug
+    return get_runtime_settings().output_dir / project_slug
 
 
 def get_youtube_accounts_dir() -> Path:
     """Returns the base storage directory for YouTube accounts registry and tokens."""
-    env_dir = os.getenv("YOUTUBE_ACCOUNTS_DIR")
-    if env_dir:
-        return Path(env_dir)
-    data_dir = os.getenv("MANGA_RECAP_DATA_DIR")
-    if data_dir:
-        return Path(data_dir) / "youtube_accounts"
-    return Path("data") / "youtube_accounts"
+    return get_runtime_settings().youtube_accounts_dir
 
 
 def get_workspace_dir(project_slug: str, chapter_num: Optional[Union[str, int]] = None) -> Path:
     """Returns standardized workspace directory: workspace/<project_slug>[/chapter_NNN]."""
-    base = Path("workspace") / project_slug
+    base = get_runtime_settings().workspace_dir / project_slug
     if chapter_num is not None:
         try:
             c_int = int(str(chapter_num).strip())

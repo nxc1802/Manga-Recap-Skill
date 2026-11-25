@@ -13,6 +13,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from src.core.errors import DomainValidationError
 from src.core.project import get_output_dir, get_project_dir
 from src.core.schemas import ArchiveReceipt, utc_iso_now
+from src.core.settings import resolve_hf_token as _resolve_hf_token_setting
 from src.core.storage import atomic_write_json, calculate_sha256 as compute_file_sha256, read_json
 
 DEFAULT_HF_REPO_ID = "Cuong2004/manga-recap-archive"
@@ -50,7 +51,7 @@ _SECRET_WORDS = ("token", "secret", "credential", "passwd", "password")
 
 
 def resolve_hf_token(token=None):
-    return (token or os.getenv("HF_TOKEN") or FALLBACK_HF_TOKEN).strip()
+    return (token or _resolve_hf_token_setting() or FALLBACK_HF_TOKEN).strip()
 
 
 def get_hf_api(token=None):

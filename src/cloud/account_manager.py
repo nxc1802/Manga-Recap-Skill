@@ -6,14 +6,14 @@ from pathlib import Path
 import re
 
 from src.core.errors import DomainValidationError
+from src.core.settings import get_runtime_settings, resolve_kaggle_legacy_token
 from src.core.storage import FileLock, atomic_write_json, read_json
 
 
 class KaggleAccountManager:
     def __init__(self, registry_file=None):
-        data_root = os.getenv("MANGA_RECAP_DATA_DIR")
-        default = Path(data_root) / "credentials/kaggle_accounts.json" if data_root else Path("credentials/kaggle_accounts.json")
-        self.registry_file = Path(registry_file or os.getenv("KAGGLE_ACCOUNTS_FILE") or default).resolve()
+        default = get_runtime_settings().kaggle_accounts_file
+        self.registry_file = Path(registry_file or default).resolve()
 
     def _load(self):
         if not self.registry_file.exists():
@@ -94,9 +94,4 @@ class KaggleAccountManager:
 
     @staticmethod
     def _legacy_token():
-        legacy = os.getenv("KAGGLE_API_TOKEN")
-        if not legacy and not os.getenv("MANGA_RECAP_DATA_DIR"):
-            path = Path(os.getenv("KAGGLE_CONFIG_DIR", Path.home() / ".kaggle")) / "access_token"
-            if path.is_file():
-                legacy = path.read_text().strip()
-        return legacy
+        return resolve_kaggle_legacy_token()

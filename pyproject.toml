@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "manga-recap"
 version = "5.0.0"
-description = "Manga Recap V5 Slim with VieNeu-TTS and FFmpeg"
+description = "Manga Recap Skill with local VieNeu-TTS and FFmpeg"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,10 +18,19 @@ dependencies = [
     "numpy",
     "beautifulsoup4",
     "vieneu>=3.8.3",
-    "pytest",
     "huggingface_hub>=0.26.0",
     "kaggle",
     "six",
+]
+
+[project.optional-dependencies]
+youtube = [
+    "google-api-python-client",
+    "google-auth-oauthlib",
+    "google-auth-httplib2",
+]
+dev = [
+    "pytest",
 ]
 
 [project.scripts]

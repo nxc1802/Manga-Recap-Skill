@@ -16,11 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from dotenv import load_dotenv
 from PIL import Image
 
 from src.core.contact_sheet import ContactSheetGenerator
 from src.core.logger import logger
+from src.core.settings import resolve_gemini_api_key
 from src.core.panel_repack import (
     PanelPlan,
     PanelPlanItem,
@@ -50,13 +50,10 @@ CENTER_CROP_2D_PRESETS: Dict[str, Dict[str, float]] = {
 
 
 def _resolve_api_key(explicit_key: Optional[str] = None) -> str:
-    load_dotenv()
-    key = explicit_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not key:
-        raise RuntimeError(
-            "Missing GEMINI_API_KEY in environment or .env for gemini-decision-1."
-        )
-    return key.strip()
+    try:
+        return resolve_gemini_api_key(explicit_key)
+    except Exception as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _encode_image_b64(image_path: Path, max_height: int = 1024) -> str:

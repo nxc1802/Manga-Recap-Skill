@@ -1,8 +1,6 @@
-# ==============================================================================
-# Manga Recap Pipeline Orchestrator Requirements (Local JSON Storage Engine)
-# ==============================================================================
+# Generated from pyproject.toml [project.dependencies] via scripts/sync_requirements.py.
+# Do not edit manually; update pyproject.toml and re-run scripts/sync_requirements.py.
 
-# Core Application & Storage
 httpx
 requests
 pydantic
@@ -11,14 +9,7 @@ pyyaml
 python-dotenv
 numpy
 beautifulsoup4
-
-# Local TTS (Text-to-Speech via local VieNeu-TTS v3 Turbo engine in src/tts/)
-# Local offline ONNX inference / pure-Python mock backend
 vieneu>=3.8.3
-
-
-# Hugging Face private archive and verified restore
 huggingface_hub>=0.26.0
-
-# Testing & Quality Assurance
-pytest
+kaggle
+six

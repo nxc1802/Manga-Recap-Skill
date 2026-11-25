@@ -25,6 +25,7 @@ from src.core.errors import (
     StorageWriteError,
 )
 from src.core.logger import configure_logging
+from src.core.settings import load_runtime_dotenv
 from src.core.version import APP_VERSION
 
 
@@ -412,11 +413,7 @@ def _dispatch_subcommand(subcommand: str, args: argparse.Namespace) -> Dict[str,
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI execution entrypoint."""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-    except ImportError:
-        pass
+    load_runtime_dotenv()
     start_time = time.monotonic()
     raw_args = list(argv) if argv is not None else sys.argv[1:]
     json_mode = "--json" in raw_args
