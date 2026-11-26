@@ -513,6 +513,55 @@ def _finish_chapter(project, number, work, clips, config, quality):
                       artifacts=[f"video/{quality}.mp4", f"subtitles/{quality}.srt", "visual_plan.json"])
 
 
+class _AsyncChapterFinalizer:
+    """Bounded CPU finalizer overlapping SRT/audio/mux with GPU workers and pruning verified temps."""
+
+    def __init__(self, project, config, recorder, *, max_workers=1, min_free_disk_mb=256):
+        self.project = project
+        self.config = config
+        self.recorder = recorder
+        self.min_free_disk_mb = int(min_free_disk_mb)
+        self._pool = ThreadPoolExecutor(max_workers=max(1, int(max_workers)))
+        self._futures = {}
+        self._order = []
+        self._completed = set()
+
+    def submit(self, number, ch_work, clip_paths, quality):
+        num = str(number)
+        if num in self._futures:
+            return
+        self._order.append(num)
+        self._futures[num] = self._pool.submit(self._run_one, num, ch_work, list(clip_paths), quality)
+
+    def _run_one(self, number, ch_work, clip_paths, quality):
+        t0 = time.monotonic()
+        _finish_chapter(self.project, number, ch_work, clip_paths, self.config, quality)
+        self.recorder.record_stage("finalize", t0, time.monotonic(), chapter_id=str(number), device_id="cpu")
+        if ch_work is not None and Path(ch_work).exists():
+            shutil.rmtree(ch_work, ignore_errors=True)
+        check_disk_low_water(ch_work.parent if ch_work is not None else self.project, min_free_mb=self.min_free_disk_mb)
+        return number
+
+    def poll_completed(self):
+        for num, fut in list(self._futures.items()):
+            if fut.done() and num not in self._completed:
+                fut.result()
+                self._completed.add(num)
+        return self._completed
+
+    def wait_ordered(self, canonical_order=None):
+        order = [str(c) for c in canonical_order] if canonical_order else list(self._order)
+        for num in order:
+            fut = self._futures.get(num)
+            if fut is not None:
+                fut.result()
+                self._completed.add(num)
+        return self._completed
+
+    def close(self, *, cancel_pending=False):
+        self._pool.shutdown(wait=not cancel_pending, cancel_futures=cancel_pending)
+
+
 def _run_scheduled_pipeline(
     project,
     chapters,
@@ -662,9 +711,73 @@ def _run_scheduled_pipeline(
             return
 
         ctx = mp.get_context("spawn")
-        if plan.policy == ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE and job == "produce":
-            # Phase 1: Parallel TTS -> explicit model unload across both GPUs.
-            if not dispatcher.is_drained:
+        finalizer = (
+            _AsyncChapterFinalizer(project, config, recorder, max_workers=1, min_free_disk_mb=min_free_disk_mb)
+            if render
+            else None
+        )
+        finished_ok = False
+        try:
+            if plan.policy == ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE and job == "produce":
+                # Phase 1: Parallel TTS -> explicit model unload across both GPUs.
+                if not dispatcher.is_drained:
+                    _run_coordinator_stage(
+                        ctx=ctx,
+                        work=work,
+                        project=project,
+                        config=config,
+                        plan=plan,
+                        workers=workers,
+                        batch_size=batch_size,
+                        dispatcher=dispatcher,
+                        chapter_states=chapter_states,
+                        pending_encode=pending_encode,
+                        expected=expected,
+                        clips=clips,
+                        prep_done=prep_done,
+                        completed=completed,
+                        active_chapters=active_chapters,
+                        target_completed=set(),
+                        tts_devices=plan.tts_devices,
+                        encode_devices=(),
+                        shared_encode=False,
+                        produce=True,
+                        render=render,
+                        recorder=recorder,
+                        worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
+                        min_free_disk_mb=min_free_disk_mb,
+                        finalizer=finalizer,
+                    )
+                # Phase 2: Dedicated full-VRAM dual-GPU NVENC encode.
+                if len(completed) < len(chapters):
+                    _run_coordinator_stage(
+                        ctx=ctx,
+                        work=work,
+                        project=project,
+                        config=config,
+                        plan=plan,
+                        workers=workers,
+                        batch_size=batch_size,
+                        dispatcher=None,
+                        chapter_states=chapter_states,
+                        pending_encode=pending_encode,
+                        expected=expected,
+                        clips=clips,
+                        prep_done=prep_done,
+                        completed=completed,
+                        active_chapters=active_chapters,
+                        target_completed=set(str(c) for c in chapters),
+                        tts_devices=(),
+                        encode_devices=plan.encode_devices,
+                        shared_encode=False,
+                        produce=False,
+                        render=True,
+                        recorder=recorder,
+                        worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
+                        min_free_disk_mb=min_free_disk_mb,
+                        finalizer=finalizer,
+                    )
+            else:
                 _run_coordinator_stage(
                     ctx=ctx,
                     work=work,
@@ -673,35 +786,7 @@ def _run_scheduled_pipeline(
                     plan=plan,
                     workers=workers,
                     batch_size=batch_size,
-                    dispatcher=dispatcher,
-                    chapter_states=chapter_states,
-                    pending_encode=pending_encode,
-                    expected=expected,
-                    clips=clips,
-                    prep_done=prep_done,
-                    completed=completed,
-                    active_chapters=active_chapters,
-                    target_completed=set(),
-                    tts_devices=plan.tts_devices,
-                    encode_devices=(),
-                    shared_encode=False,
-                    produce=True,
-                    render=render,
-                    recorder=recorder,
-                    worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-                    min_free_disk_mb=min_free_disk_mb,
-                )
-            # Phase 2: Dedicated full-VRAM dual-GPU NVENC encode.
-            if len(completed) < len(chapters):
-                _run_coordinator_stage(
-                    ctx=ctx,
-                    work=work,
-                    project=project,
-                    config=config,
-                    plan=plan,
-                    workers=workers,
-                    batch_size=batch_size,
-                    dispatcher=None,
+                    dispatcher=dispatcher if (produce and not dispatcher.is_drained) else None,
                     chapter_states=chapter_states,
                     pending_encode=pending_encode,
                     expected=expected,
@@ -710,43 +795,22 @@ def _run_scheduled_pipeline(
                     completed=completed,
                     active_chapters=active_chapters,
                     target_completed=set(str(c) for c in chapters),
-                    tts_devices=(),
-                    encode_devices=plan.encode_devices,
-                    shared_encode=False,
-                    produce=False,
-                    render=True,
+                    tts_devices=plan.tts_devices if (produce and not dispatcher.is_drained) else (),
+                    encode_devices=plan.encode_devices if render else (),
+                    shared_encode=(plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE and job == "produce"),
+                    produce=produce,
+                    render=render,
                     recorder=recorder,
                     worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
                     min_free_disk_mb=min_free_disk_mb,
+                    finalizer=finalizer,
                 )
-            return
-
-        _run_coordinator_stage(
-            ctx=ctx,
-            work=work,
-            project=project,
-            config=config,
-            plan=plan,
-            workers=workers,
-            batch_size=batch_size,
-            dispatcher=dispatcher if (produce and not dispatcher.is_drained) else None,
-            chapter_states=chapter_states,
-            pending_encode=pending_encode,
-            expected=expected,
-            clips=clips,
-            prep_done=prep_done,
-            completed=completed,
-            active_chapters=active_chapters,
-            target_completed=set(str(c) for c in chapters),
-            tts_devices=plan.tts_devices if (produce and not dispatcher.is_drained) else (),
-            encode_devices=plan.encode_devices if render else (),
-            shared_encode=(plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE and job == "produce"),
-            produce=produce,
-            render=render,
-            recorder=recorder,
-            worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-            min_free_disk_mb=min_free_disk_mb,
-        )
+            if finalizer is not None:
+                finalizer.wait_ordered(canonical_order=active_chapters)
+            finished_ok = True
+        finally:
+            if finalizer is not None:
+                finalizer.close(cancel_pending=not finished_ok)
 
 
 def _advance_chapter_prefix(number, st, *, produce, render, pending_encode, expected, prep_done, completed, recorder):
@@ -832,6 +896,7 @@ def _run_coordinator_stage(
     recorder,
     worker_heartbeat_timeout_sec,
     min_free_disk_mb,
+    finalizer=None,
 ):
     tts_devs = tuple(tts_devices)
     enc_devs = tuple(encode_devices)
@@ -957,17 +1022,24 @@ def _run_coordinator_stage(
         for number in list(active_chapters):
             if number in expected and expected[number][0] == 0 and number not in completed:
                 if expected[number][1]:
-                    with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
-                        _finish_chapter(
-                            project, number, work / number, [], config, chapter_states[number]["quality"]
-                        )
+                    q = chapter_states[number]["quality"]
+                    if finalizer is not None:
+                        finalizer.submit(number, work / number, [], q)
+                    else:
+                        with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
+                            _finish_chapter(project, number, work / number, [], config, q)
+                        shutil.rmtree(work / number, ignore_errors=True)
                 completed.add(number)
         _pump_queues()
 
         while not _stage_done():
+            if finalizer is not None:
+                finalizer.poll_completed()
             try:
                 event = events.get(timeout=0.25)
             except queue.Empty:
+                if finalizer is not None:
+                    finalizer.poll_completed()
                 if any(child.exitcode not in (None, 0) for child in started):
                     raise RuntimeError("Worker process failed. See worker traceback.")
                 if all(child.exitcode is not None for child in started) and not _stage_done():
@@ -1034,16 +1106,15 @@ def _run_coordinator_stage(
                 clips[number][index] = Path(path)
                 if number in expected and len(clips[number]) == expected[number][0] and number not in completed:
                     if expected[number][1]:
-                        with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
-                            _finish_chapter(
-                                project,
-                                number,
-                                work / number,
-                                [clips[number][i] for i in range(len(clips[number]))],
-                                config,
-                                chapter_states[number]["quality"],
-                            )
-                        check_disk_low_water(work, min_free_mb=min_free_disk_mb)
+                        clip_list = [clips[number][i] for i in range(len(clips[number]))]
+                        q = chapter_states[number]["quality"]
+                        if finalizer is not None:
+                            finalizer.submit(number, work / number, clip_list, q)
+                        else:
+                            with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
+                                _finish_chapter(project, number, work / number, clip_list, config, q)
+                            shutil.rmtree(work / number, ignore_errors=True)
+                            check_disk_low_water(work, min_free_mb=min_free_disk_mb)
                     completed.add(number)
                 _pump_queues()
 
@@ -1142,14 +1213,18 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
         started = []
         last_activity = time.monotonic()
         heartbeats = {}
+        finalizer = _AsyncChapterFinalizer(project, config, recorder, max_workers=1, min_free_disk_mb=min_free_disk_mb)
+        finished_ok = False
         try:
             for child in children:
                 child.start()
                 started.append(child)
             while len(completed) < len(chapters):
+                finalizer.poll_completed()
                 try:
                     event = events.get(timeout=0.5)
                 except queue.Empty:
+                    finalizer.poll_completed()
                     if any(child.exitcode not in (None, 0) for child in started):
                         raise RuntimeError("Audio or visual process failed. See worker traceback.")
                     if all(child.exitcode is not None for child in started):
@@ -1191,22 +1266,21 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
                 if number in expected and len(clips[number]) == expected[number][0]:
                     if expected[number][1]:
                         quality = "preview" if single_preview and number == "1" else "final"
-                        with recorder.span("finalize", chapter_id=str(number), device_id="cpu"):
-                            _finish_chapter(
-                                project,
-                                number,
-                                work / number,
-                                [clips[number][i] for i in range(len(clips[number]))],
-                                config,
-                                quality,
-                            )
-                        check_disk_low_water(work, min_free_mb=min_free_disk_mb)
+                        finalizer.submit(
+                            number,
+                            work / number,
+                            [clips[number][i] for i in range(len(clips[number]))],
+                            quality,
+                        )
                     completed.add(number)
             for child in started:
                 child.join(timeout=30)
                 if child.exitcode != 0:
                     raise RuntimeError(f"Worker failed to exit cleanly: {child.exitcode}")
+            finalizer.wait_ordered(canonical_order=chapters)
+            finished_ok = True
         finally:
+            finalizer.close(cancel_pending=not finished_ok)
             sampler.stop()
             recorder.set_sampler_summary(sampler.summarize())
             for child in started:
