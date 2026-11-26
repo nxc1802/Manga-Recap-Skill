@@ -37,14 +37,14 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
             "--chapter",
             "1",
             "--cloud-policy",
-            "dual_tts_then_dual_encode",
+            "baseline_split",
             "--json",
         ])
         == 0
     )
     capsys.readouterr()
     assert calls[-1][0] == "run"
-    assert calls[-1][1]["cloud_policy"] == "dual_tts_then_dual_encode"
+    assert calls[-1][1]["cloud_policy"] == "baseline_split"
 
     # Set Q02="kaggle" BEFORE approving Chapter 1 preview so Gate G6 fingerprint stays valid across cloud & produce
     saved = read_json(project / "series_setup_answers.json")["answers"]
@@ -100,14 +100,14 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
             "--chapters",
             "1",
             "--cloud-policy",
-            "one_tts_dual_encode",
+            "baseline_split",
             "--json",
         ])
         == 0
     )
     capsys.readouterr()
     assert calls[-1][0] == "series"
-    assert calls[-1][1]["cloud_policy"] == "one_tts_dual_encode"
+    assert calls[-1][1]["cloud_policy"] == "baseline_split"
 
 
 def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_project, capsys):
@@ -120,7 +120,7 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
             "job_type": "produce",
             "kernel_ref": "u1/mr-unit-c1",
             "account_name": "acct_1",
-            "cloud_policy": "dual_tts_then_dual_encode",
+            "cloud_policy": "dual_tts_shared_encode",
             "status": "RUNNING",
             "total_elapsed_sec": 124.5,
         },
@@ -140,11 +140,11 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
     atomic_write_json(
         project / "cloud_telemetry.json",
         {
-            "policy": "dual_tts_then_dual_encode",
+            "policy": "dual_tts_shared_encode",
             "hardware": {
                 "devices": [{"index": 0, "name": "Tesla T4"}, {"index": 1, "name": "Tesla T4"}],
                 "usable_nvenc_devices": [0, 1],
-                "scheduler_policy": {"policy": "dual_tts_then_dual_encode", "tts_devices": [0, 1], "encode_devices": [0, 1]},
+                "scheduler_policy": {"policy": "dual_tts_shared_encode", "tts_devices": [0, 1], "encode_devices": [0, 1]},
             },
             "timing": {"wall_makespan_sec": 45.2, "stages": {}},
             "resources": {"sample_count": 5, "peak_load_1m": 2.4},
@@ -158,7 +158,7 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
     assert main(["status", "--project", "unit", "--json"]) == 0
     proj_payload = json.loads(capsys.readouterr().out)["data"]
     assert proj_payload["cloud"]["job"]["status"] == "RUNNING"
-    assert proj_payload["cloud"]["job"]["cloud_policy"] == "dual_tts_then_dual_encode"
+    assert proj_payload["cloud"]["job"]["cloud_policy"] == "dual_tts_shared_encode"
     assert proj_payload["cloud"]["series_plan"]["completed_chunks"] == 1
     assert proj_payload["cloud"]["series_plan"]["total_chunks"] == 2
     assert proj_payload["cloud"]["telemetry"]["usable_nvenc_devices"] == [0, 1]
@@ -166,4 +166,4 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
     assert main(["status", "--project", "unit", "--chapter", "1", "--json"]) == 0
     ch_payload = json.loads(capsys.readouterr().out)["data"]
     assert ch_payload["cloud"]["receipt"]["quality"] == "final"
-    assert ch_payload["cloud"]["telemetry"]["policy"] == "dual_tts_then_dual_encode"
+    assert ch_payload["cloud"]["telemetry"]["policy"] == "dual_tts_shared_encode"

@@ -272,7 +272,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_run.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
     p_cld_run.add_argument(
         "--cloud-policy",
-        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
         default="auto",
         help="Dual-GPU execution policy override (default: auto)",
     )
@@ -308,7 +308,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_series.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
     p_cld_series.add_argument(
         "--cloud-policy",
-        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
         default="auto",
         help="Dual-GPU execution policy override (default: auto)",
     )
@@ -386,7 +386,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
     p_prod.add_argument(
         "--cloud-policy",
-        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
         default="auto",
         help="Kaggle Dual-GPU execution policy override (default: auto)",
     )

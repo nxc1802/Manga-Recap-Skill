@@ -1,4 +1,4 @@
-"""Offline comparative benchmark harness for Dual-T4 execution policies A-D (mocked GPUs, overlap-aware telemetry)."""
+"""Offline comparative benchmark harness for Dual-T4 Policy B vs Policy A fallback."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from src.cloud.telemetry import TelemetryRecorder
 COMPARATIVE_POLICIES: Tuple[str, ...] = (
     ExecutionPolicy.BASELINE_SPLIT,
     ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-    ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-    ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
 )
 
 
@@ -132,32 +130,6 @@ def simulate_policy_timeline(
             cpu_finalize_t = t1
             rec.record_stage("finalize", t0, t1, chapter_id=ch_id, device_id="cpu")
 
-    elif policy == ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE:
-        # Policy C: Both GPUs run cost-aware TTS -> explicit unload barrier -> both GPUs encode cleanly
-        ch_last_shot = {}
-        for _, ch_id, _ in tts_units:
-            d = 0 if gpu_t[0] <= gpu_t[1] else 1
-            t0 = gpu_t[d]
-            t1 = t0 + profile.tts_sec_per_segment
-            gpu_t[d] = t1
-            rec.record_stage("tts", t0, t1, chapter_id=ch_id, device_id=f"gpu:{d}", metadata={"segments": 1})
-            for _ in range(profile.shots_per_segment):
-                shot_ready_times.append((ch_id, t1))
-        barrier_t = max(gpu_t) + profile.unload_sec
-        enc_t = [barrier_t, barrier_t]
-        for ch_id, ready_at in shot_ready_times:
-            d = 0 if enc_t[0] <= enc_t[1] else 1
-            t0 = max(enc_t[d], ready_at)
-            t1 = t0 + profile.encode_sec_per_shot
-            enc_t[d] = t1
-            rec.record_stage("encode", t0, t1, chapter_id=ch_id, device_id=f"gpu:{d}")
-            ch_last_shot[ch_id] = max(ch_last_shot.get(ch_id, 0.0), t1)
-        for ch_id in ch_names:
-            t0 = max(cpu_finalize_t, ch_last_shot.get(ch_id, 0.0))
-            t1 = t0 + profile.finalize_sec_per_chapter
-            cpu_finalize_t = t1
-            rec.record_stage("finalize", t0, t1, chapter_id=ch_id, device_id="cpu")
-
     elif policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE:
         # Policy B: Both GPUs run TTS + concurrent NVENC slots (slight contention factor) -> unload -> finish tail
         tts_end = [0.0, 0.0]
@@ -188,30 +160,6 @@ def simulate_policy_timeline(
             rec.record_stage("finalize", t0, t1, chapter_id=ch_id, device_id="cpu")
         if cpu_finalize_t < max_end:
             cpu_finalize_t = max_end
-
-    elif policy == ExecutionPolicy.ONE_TTS_DUAL_ENCODE:
-        # Policy D: GPU0 TTS only, GPU1 encodes immediately while GPU0 joins encode after unload
-        for _, ch_id, _ in tts_units:
-            t0 = gpu_t[0]
-            t1 = t0 + profile.tts_sec_per_segment
-            gpu_t[0] = t1
-            rec.record_stage("tts", t0, t1, chapter_id=ch_id, device_id="gpu:0", metadata={"segments": 1})
-            for _ in range(profile.shots_per_segment):
-                shot_ready_times.append((ch_id, t1))
-        enc_t = [gpu_t[0] + profile.unload_sec, 0.0]
-        ch_last_shot = {}
-        for ch_id, ready_at in shot_ready_times:
-            d = 0 if max(enc_t[0], ready_at) <= max(enc_t[1], ready_at) else 1
-            t0 = max(enc_t[d], ready_at)
-            t1 = t0 + profile.encode_sec_per_shot
-            enc_t[d] = t1
-            rec.record_stage("encode", t0, t1, chapter_id=ch_id, device_id=f"gpu:{d}")
-            ch_last_shot[ch_id] = max(ch_last_shot.get(ch_id, 0.0), t1)
-        for ch_id in ch_names:
-            t0 = max(cpu_finalize_t, ch_last_shot.get(ch_id, 0.0))
-            t1 = t0 + profile.finalize_sec_per_chapter
-            cpu_finalize_t = t1
-            rec.record_stage("finalize", t0, t1, chapter_id=ch_id, device_id="cpu")
     else:
         raise ValueError(f"Unknown policy for simulation: {policy}")
 

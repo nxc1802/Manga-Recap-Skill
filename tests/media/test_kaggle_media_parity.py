@@ -236,7 +236,7 @@ def test_multichapter_cloud_produce_media_parity_with_bgm_watermark_and_subtitle
         batch_size=4,
         single_preview=False,
         telemetry=telemetry,
-        policy=ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
+        policy=ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
     )
 
     # Verify Chapter 1 preview -> final byte preservation

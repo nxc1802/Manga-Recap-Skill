@@ -97,12 +97,12 @@ def test_minimal_payload_pruning_by_job_type_and_worker_import_preflight(unit_pr
 
     # 1. Produce series tarball skips raw/, contact_sheets/, orphan panels, cli/archive src, unrelated watermarks
     prod_tar, prod_hash = package_payload(
-        project, ["1", "2"], tmp_path / "prod.tar.gz", "produce", series=True, cloud_policy="dual_tts_then_dual_encode"
+        project, ["1", "2"], tmp_path / "prod.tar.gz", "produce", series=True, cloud_policy="dual_tts_shared_encode"
     )
     with tarfile.open(prod_tar) as archive:
         names = set(archive.getnames())
         manifest = json.load(archive.extractfile("payload_manifest.json"))
-        assert manifest["cloud_policy"] == "dual_tts_then_dual_encode"
+        assert manifest["cloud_policy"] == "dual_tts_shared_encode"
 
     assert not any("/raw/" in n for n in names)
     assert not any("/contact_sheets/" in n for n in names)

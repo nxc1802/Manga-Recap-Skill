@@ -10,21 +10,17 @@ from src.tts.cuda_worker import MAX_LONG_TEXT_BATCH_SIZE, get_length_bucket
 
 
 class ExecutionPolicy:
-    """Comparative Dual-T4 execution modes for Kaggle production."""
+    """Production Kaggle GPU execution modes: Policy B default and Policy A safe fallback."""
 
     AUTO = "auto"
     BASELINE_SPLIT = "baseline_split"
     DUAL_TTS_SHARED_ENCODE = "dual_tts_shared_encode"
-    DUAL_TTS_THEN_DUAL_ENCODE = "dual_tts_then_dual_encode"
-    ONE_TTS_DUAL_ENCODE = "one_tts_dual_encode"
 
 
 SUPPORTED_POLICIES = (
     ExecutionPolicy.AUTO,
     ExecutionPolicy.BASELINE_SPLIT,
     ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-    ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-    ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
 )
 
 POLICY_ALIASES: Dict[str, str] = {
@@ -36,12 +32,6 @@ POLICY_ALIASES: Dict[str, str] = {
     "b": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
     "policy_b": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
     "dual_tts_shared_encode": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-    "c": ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-    "policy_c": ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-    "dual_tts_then_dual_encode": ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-    "d": ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
-    "policy_d": ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
-    "one_tts_dual_encode": ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
 }
 
 MAX_CLOUD_TTS_BATCH_SIZE = 32
@@ -57,11 +47,11 @@ def default_cloud_batch_size(job: str = "produce") -> int:
 
 
 def normalize_policy(policy: Optional[str]) -> str:
-    """Normalizes comparative policy slug or alias (`A`–`D` / `auto`)."""
+    """Normalizes cloud policy slug or alias (`auto`, `A`/`baseline_split`, `B`/`dual_tts_shared_encode`)."""
     raw = str(policy or ExecutionPolicy.AUTO).strip().lower()
     if raw not in POLICY_ALIASES:
         raise ValueError(
-            f"Unsupported cloud execution policy '{policy}'. Expected one of {SUPPORTED_POLICIES} or A-D aliases."
+            f"Unsupported cloud execution policy '{policy}'. Expected one of {SUPPORTED_POLICIES} or A/B aliases."
         )
     return POLICY_ALIASES[raw]
 
@@ -127,13 +117,13 @@ def resolve_execution_policy(
         encode_pool = (cuda_list[0],)
 
     if job == "tts":
-        # TTS-only scales across all available CUDA GPUs.
+        # TTS-only scales across all available CUDA GPUs using Policy B dual-GPU TTS pool.
         chosen = (
-            ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE
+            ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
             if (canonical == ExecutionPolicy.AUTO and len(cuda_list) >= 2)
             else (ExecutionPolicy.BASELINE_SPLIT if canonical == ExecutionPolicy.AUTO else canonical)
         )
-        tts_devs = cuda_list[:2] if len(cuda_list) >= 2 and chosen != ExecutionPolicy.ONE_TTS_DUAL_ENCODE else cuda_list[:1]
+        tts_devs = cuda_list[:2] if (len(cuda_list) >= 2 and chosen == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE) else cuda_list[:1]
         return DeviceRolePlan(
             policy=chosen,
             job=job,
@@ -156,7 +146,7 @@ def resolve_execution_policy(
             selection_reason=f"render-only mapped across {len(enc_devs)} encode device(s) ({eff_encoder})",
         )
 
-    # Full `produce` mode: map policy onto available CUDA & NVENC device pools.
+    # Full `produce` mode: map Policy B default or Policy A conservative fallback.
     if len(cuda_list) < 2 and eff_encoder != "h264_nvenc":
         return DeviceRolePlan(
             policy=ExecutionPolicy.BASELINE_SPLIT,
@@ -193,34 +183,13 @@ def resolve_execution_policy(
             selection_reason="Policy A baseline: GPU0 TTS + shared NVENC encode",
         )
 
-    if chosen == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE:
-        return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=cuda_list[:2],
-            encode_devices=encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],),
-            selection_reason="Policy B: dual GPU TTS with concurrent shared encode",
-        )
-
-    if chosen == ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE:
-        return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=cuda_list[:2],
-            encode_devices=encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],),
-            selection_reason="Policy C: dual GPU TTS unload barrier then clean dual GPU encode",
-        )
-
-    # Policy D: ONE_TTS_DUAL_ENCODE
     return DeviceRolePlan(
-        policy=chosen,
+        policy=ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
         job=job,
         encoder=eff_encoder,
-        tts_devices=(cuda_list[0],),
+        tts_devices=cuda_list[:2],
         encode_devices=encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],),
-        selection_reason="Policy D: GPU0 TTS overlapped with GPU1 encode then dual encode",
+        selection_reason="Policy B: dual GPU TTS with concurrent shared encode",
     )
 
 

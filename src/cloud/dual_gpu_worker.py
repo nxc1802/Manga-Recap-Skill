@@ -482,12 +482,6 @@ def _tts_worker_loop(tts_jobs, events, gpu_id, batch_size):
         hb.stop()
 
 
-def _tts_then_encode_worker_loop(tts_jobs, encode_jobs, events, gpu_id, workers, batch_size, can_encode):
-    _tts_worker_loop(tts_jobs, events, gpu_id, batch_size)
-    if can_encode and encode_jobs is not None:
-        _encode_queue(encode_jobs, events, gpu_id, workers)
-
-
 def _dual_tts_shared_worker_loop(tts_jobs, encode_jobs, events, gpu_id, workers, batch_size, can_encode):
     enc_thread = None
     if can_encode and encode_jobs is not None:
@@ -724,93 +718,32 @@ def _run_scheduled_pipeline(
         )
         finished_ok = False
         try:
-            if plan.policy == ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE and job == "produce":
-                # Phase 1: Parallel TTS -> explicit model unload across both GPUs.
-                if not dispatcher.is_drained:
-                    _run_coordinator_stage(
-                        ctx=ctx,
-                        work=work,
-                        project=project,
-                        config=config,
-                        plan=plan,
-                        workers=workers,
-                        batch_size=batch_size,
-                        dispatcher=dispatcher,
-                        chapter_states=chapter_states,
-                        pending_encode=pending_encode,
-                        expected=expected,
-                        clips=clips,
-                        prep_done=prep_done,
-                        completed=completed,
-                        active_chapters=active_chapters,
-                        target_completed=set(),
-                        tts_devices=plan.tts_devices,
-                        encode_devices=(),
-                        shared_encode=False,
-                        produce=True,
-                        render=render,
-                        recorder=recorder,
-                        worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-                        min_free_disk_mb=min_free_disk_mb,
-                        finalizer=finalizer,
-                    )
-                # Phase 2: Dedicated full-VRAM dual-GPU NVENC encode.
-                if len(completed) < len(chapters):
-                    _run_coordinator_stage(
-                        ctx=ctx,
-                        work=work,
-                        project=project,
-                        config=config,
-                        plan=plan,
-                        workers=workers,
-                        batch_size=batch_size,
-                        dispatcher=None,
-                        chapter_states=chapter_states,
-                        pending_encode=pending_encode,
-                        expected=expected,
-                        clips=clips,
-                        prep_done=prep_done,
-                        completed=completed,
-                        active_chapters=active_chapters,
-                        target_completed=set(str(c) for c in chapters),
-                        tts_devices=(),
-                        encode_devices=plan.encode_devices,
-                        shared_encode=False,
-                        produce=False,
-                        render=True,
-                        recorder=recorder,
-                        worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-                        min_free_disk_mb=min_free_disk_mb,
-                        finalizer=finalizer,
-                    )
-            else:
-                _run_coordinator_stage(
-                    ctx=ctx,
-                    work=work,
-                    project=project,
-                    config=config,
-                    plan=plan,
-                    workers=workers,
-                    batch_size=batch_size,
-                    dispatcher=dispatcher if (produce and not dispatcher.is_drained) else None,
-                    chapter_states=chapter_states,
-                    pending_encode=pending_encode,
-                    expected=expected,
-                    clips=clips,
-                    prep_done=prep_done,
-                    completed=completed,
-                    active_chapters=active_chapters,
-                    target_completed=set(str(c) for c in chapters),
-                    tts_devices=plan.tts_devices if (produce and not dispatcher.is_drained) else (),
-                    encode_devices=plan.encode_devices if render else (),
-                    shared_encode=(plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE and job == "produce"),
-                    produce=produce,
-                    render=render,
-                    recorder=recorder,
-                    worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-                    min_free_disk_mb=min_free_disk_mb,
-                    finalizer=finalizer,
-                )
+            _run_coordinator_stage(
+                ctx=ctx,
+                work=work,
+                project=project,
+                config=config,
+                plan=plan,
+                workers=workers,
+                batch_size=batch_size,
+                dispatcher=dispatcher if (produce and not dispatcher.is_drained) else None,
+                chapter_states=chapter_states,
+                pending_encode=pending_encode,
+                expected=expected,
+                clips=clips,
+                prep_done=prep_done,
+                completed=completed,
+                active_chapters=active_chapters,
+                target_completed=set(str(c) for c in chapters),
+                tts_devices=plan.tts_devices if (produce and not dispatcher.is_drained) else (),
+                encode_devices=plan.encode_devices if render else (),
+                produce=produce,
+                render=render,
+                recorder=recorder,
+                worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
+                min_free_disk_mb=min_free_disk_mb,
+                finalizer=finalizer,
+            )
             if finalizer is not None:
                 finalizer.wait_ordered(canonical_order=active_chapters)
             finished_ok = True
@@ -896,7 +829,6 @@ def _run_coordinator_stage(
     target_completed,
     tts_devices,
     encode_devices,
-    shared_encode,
     produce,
     render,
     recorder,
@@ -937,25 +869,12 @@ def _run_coordinator_stage(
     elif not has_tts and has_enc:
         for d in enc_devs:
             children.append(ctx.Process(target=_encode_queue, args=(encode_jobs, events, d, workers)))
-    elif shared_encode:
+    else:
         for d in tts_devs:
             children.append(ctx.Process(
                 target=_dual_tts_shared_worker_loop,
                 args=(tts_jobs, encode_jobs, events, d, workers, batch_size, d in enc_set),
             ))
-        for d in enc_devs:
-            if d not in tts_set:
-                children.append(ctx.Process(target=_encode_queue, args=(encode_jobs, events, d, workers)))
-    else:
-        # Policy D (one TTS + overlapping encode on secondary GPU -> producer joins encode after unload)
-        for idx, d in enumerate(tts_devs):
-            target = _tts_then_encode_worker_loop if idx == 0 else _tts_worker_loop
-            args = (
-                (tts_jobs, encode_jobs, events, d, workers, batch_size, d in enc_set)
-                if idx == 0
-                else (tts_jobs, events, d, batch_size)
-            )
-            children.append(ctx.Process(target=target, args=args))
         for d in enc_devs:
             if d not in tts_set:
                 children.append(ctx.Process(target=_encode_queue, args=(encode_jobs, events, d, workers)))

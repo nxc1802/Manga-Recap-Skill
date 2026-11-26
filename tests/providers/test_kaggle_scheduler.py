@@ -35,10 +35,6 @@ def test_policy_normalization_and_device_isolation():
         ("policy_a", ExecutionPolicy.BASELINE_SPLIT),
         ("B", ExecutionPolicy.DUAL_TTS_SHARED_ENCODE),
         ("dual_tts_shared_encode", ExecutionPolicy.DUAL_TTS_SHARED_ENCODE),
-        ("C", ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE),
-        ("dual_tts_then_dual_encode", ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE),
-        ("D", ExecutionPolicy.ONE_TTS_DUAL_ENCODE),
-        ("one_tts_dual_encode", ExecutionPolicy.ONE_TTS_DUAL_ENCODE),
         ("auto", ExecutionPolicy.AUTO),
     ]:
         assert normalize_policy(alias) == canonical
@@ -58,7 +54,7 @@ def test_policy_normalization_and_device_isolation():
 
     # NVENC failure on GPU 0 isolates encoding to GPU 1 WITHOUT dropping healthy CUDA TTS device 0 or 1
     mixed_plan = resolve_execution_policy(
-        "dual_tts_then_dual_encode",
+        "dual_tts_shared_encode",
         job="produce",
         encoder="h264_nvenc",
         cuda_devices=[0, 1],
@@ -226,11 +222,10 @@ class _DummyCtx:
     "policy_name",
     [
         ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-        ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE,
-        ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
+        ExecutionPolicy.BASELINE_SPLIT,
     ],
 )
-def test_policies_b_c_d_preserve_ch1_and_chapter_order(unit_project, monkeypatch, policy_name):
+def test_policies_b_and_a_preserve_ch1_and_chapter_order(unit_project, monkeypatch, policy_name):
     project, ch1_preview_hash = _setup_two_chapter_project(unit_project)
     tts_calls = []
     encode_calls = []
@@ -323,7 +318,7 @@ def test_policies_b_c_d_preserve_ch1_and_chapter_order(unit_project, monkeypatch
         plan = VisualPlan.load(ch_dir / "visual_plan.json")
         assert len(plan.shots) == 2
 
-    if policy_name in (ExecutionPolicy.DUAL_TTS_SHARED_ENCODE, ExecutionPolicy.DUAL_TTS_THEN_DUAL_ENCODE):
+    if policy_name == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE:
         assert set(unloaded_gpus) == {0, 1}
     else:
         assert unloaded_gpus == [0]
