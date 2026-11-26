@@ -1,0 +1,1084 @@
+{
+  "runs": [
+    {
+      "run_id": "baseline_split_r1_5471",
+      "repeat": 1,
+      "policy": "baseline_split",
+      "requested_batch_size": null,
+      "effective_batch_size": null,
+      "account_used": "account_3",
+      "username": "cuongnguyenxuan4work",
+      "kernel_ref": "cuongnguyenxuan4work/mr-nhan-vat-phu-c2-5685",
+      "host_wall_sec": 615.398,
+      "host_timing": {
+        "package_sec": 4.6361,
+        "dataset_create_sec": 11.2824,
+        "dataset_ready_sec": 7.0926,
+        "kernel_push_sec": 2.7306
+      },
+      "quota_used_delta_sec": 254.36,
+      "hardware": {
+        "captured_at": "2026-11-26T15:09:21.381105+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30465.6,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "baseline_split",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy A baseline: GPU0 TTS + shared NVENC encode"
+        }
+      },
+      "resources": {
+        "sample_count": 131,
+        "peak_load_1m": 2.64,
+        "min_disk_free_mb": 2572574.8,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 1915.0
+          },
+          "1": {
+            "peak_sm_util_pct": 24.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 433.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 210.1818,
+        "active_union_sec": 201.6886,
+        "sum_all_spans_sec": 490.7414,
+        "overlap_saved_sec": 289.0528,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3736,
+            "sum_worker_sec": 0.3736,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 125.6351,
+            "sum_worker_sec": 279.6472,
+            "intra_stage_overlap_sec": 154.0121
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3587,
+            "sum_worker_sec": 0.3587,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 49.4121,
+            "sum_worker_sec": 49.4121,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "shot_prep": {
+            "count": 7,
+            "wall_union_sec": 91.1381,
+            "sum_worker_sec": 91.1382,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "tts": {
+            "count": 7,
+            "wall_union_sec": 69.8116,
+            "sum_worker_sec": 69.8116,
+            "intra_stage_overlap_sec": 0.0
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 300.96,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22536326,
+            "duration": 300.967,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "9029",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 290.8,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19004449,
+            "duration": 290.8,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8724",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    },
+    {
+      "run_id": "dual_tts_shared_encode_r1_6173",
+      "repeat": 1,
+      "policy": "dual_tts_shared_encode",
+      "requested_batch_size": null,
+      "effective_batch_size": null,
+      "account_used": "account_4",
+      "username": "nguynxuncngde180528",
+      "kernel_ref": "nguynxuncngde180528/mr-nhan-vat-phu-c2-6395",
+      "host_wall_sec": 605.409,
+      "host_timing": {
+        "package_sec": 4.7713,
+        "dataset_create_sec": 9.1477,
+        "dataset_ready_sec": 5.9217,
+        "kernel_push_sec": 1.7536
+      },
+      "quota_used_delta_sec": 227.93,
+      "hardware": {
+        "captured_at": "2026-11-26T15:21:10.781243+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30438.9,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "dual_tts_shared_encode",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0,
+            1
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy B: dual GPU TTS with concurrent shared encode"
+        }
+      },
+      "resources": {
+        "sample_count": 103,
+        "peak_load_1m": 4.24,
+        "min_disk_free_mb": 2572550.1,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2467.0
+          },
+          "1": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2139.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 183.8854,
+        "active_union_sec": 175.1119,
+        "sum_all_spans_sec": 545.9634,
+        "overlap_saved_sec": 370.8515,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3984,
+            "sum_worker_sec": 0.3985,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 90.3671,
+            "sum_worker_sec": 349.9032,
+            "intra_stage_overlap_sec": 259.5361
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3428,
+            "sum_worker_sec": 0.3428,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 51.1476,
+            "sum_worker_sec": 51.1476,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "shot_prep": {
+            "count": 5,
+            "wall_union_sec": 31.81,
+            "sum_worker_sec": 31.81,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "tts": {
+            "count": 7,
+            "wall_union_sec": 57.4523,
+            "sum_worker_sec": 112.3613,
+            "intra_stage_overlap_sec": 54.909
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 298.56,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22506342,
+            "duration": 298.567,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8957",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 291.68,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19259995,
+            "duration": 291.68,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8750",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    },
+    {
+      "run_id": "dual_tts_then_dual_encode_r1_6792",
+      "repeat": 1,
+      "policy": "dual_tts_then_dual_encode",
+      "requested_batch_size": null,
+      "effective_batch_size": null,
+      "account_used": "account_4",
+      "username": "nguynxuncngde180528",
+      "kernel_ref": "nguynxuncngde180528/mr-nhan-vat-phu-c2-7022",
+      "host_wall_sec": 701.543,
+      "host_timing": {
+        "package_sec": 5.05,
+        "dataset_create_sec": 12.2627,
+        "dataset_ready_sec": 6.448,
+        "kernel_push_sec": 1.6973
+      },
+      "quota_used_delta_sec": 316.38,
+      "hardware": {
+        "captured_at": "2026-11-26T15:32:19.003643+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30474.1,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "dual_tts_then_dual_encode",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0,
+            1
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy C: dual GPU TTS unload barrier then clean dual GPU encode"
+        }
+      },
+      "resources": {
+        "sample_count": 55,
+        "peak_load_1m": 3.54,
+        "min_disk_free_mb": 2572541.5,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 18.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 433.0
+          },
+          "1": {
+            "peak_sm_util_pct": 16.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 433.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 238.4616,
+        "active_union_sec": 210.0169,
+        "sum_all_spans_sec": 589.548,
+        "overlap_saved_sec": 379.5311,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3779,
+            "sum_worker_sec": 0.3779,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 85.6681,
+            "sum_worker_sec": 339.1796,
+            "intra_stage_overlap_sec": 253.5115
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3606,
+            "sum_worker_sec": 0.3606,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 54.8445,
+            "sum_worker_sec": 54.8446,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "shot_prep": {
+            "count": 6,
+            "wall_union_sec": 31.3357,
+            "sum_worker_sec": 31.3358,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "tts": {
+            "count": 7,
+            "wall_union_sec": 82.8949,
+            "sum_worker_sec": 163.4495,
+            "intra_stage_overlap_sec": 80.5546
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 300.08,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22516587,
+            "duration": 300.08,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "9002",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 292.0,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19270428,
+            "duration": 292.0,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8760",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    },
+    {
+      "run_id": "one_tts_dual_encode_r1_7509",
+      "repeat": 1,
+      "policy": "one_tts_dual_encode",
+      "requested_batch_size": null,
+      "effective_batch_size": null,
+      "account_used": "account_4",
+      "username": "nguynxuncngde180528",
+      "kernel_ref": "nguynxuncngde180528/mr-nhan-vat-phu-c2-7728",
+      "host_wall_sec": 663.366,
+      "host_timing": {
+        "package_sec": 4.8709,
+        "dataset_create_sec": 10.3226,
+        "dataset_ready_sec": 5.8708,
+        "kernel_push_sec": 1.8833
+      },
+      "quota_used_delta_sec": 288.28,
+      "hardware": {
+        "captured_at": "2026-11-26T15:44:00.968781+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30513.6,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "one_tts_dual_encode",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy D: GPU0 TTS overlapped with GPU1 encode then dual encode"
+        }
+      },
+      "resources": {
+        "sample_count": 121,
+        "peak_load_1m": 6.17,
+        "min_disk_free_mb": 2572538.9,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 1753.0
+          },
+          "1": {
+            "peak_sm_util_pct": 18.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 433.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 212.4654,
+        "active_union_sec": 195.6375,
+        "sum_all_spans_sec": 509.1226,
+        "overlap_saved_sec": 313.4851,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3728,
+            "sum_worker_sec": 0.3728,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 94.6154,
+            "sum_worker_sec": 332.901,
+            "intra_stage_overlap_sec": 238.2856
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3695,
+            "sum_worker_sec": 0.3696,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 53.8714,
+            "sum_worker_sec": 53.8713,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "shot_prep": {
+            "count": 7,
+            "wall_union_sec": 31.5995,
+            "sum_worker_sec": 31.5993,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "tts": {
+            "count": 7,
+            "wall_union_sec": 90.0085,
+            "sum_worker_sec": 90.0086,
+            "intra_stage_overlap_sec": 0.0001
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 300.16,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22521682,
+            "duration": 300.167,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "9005",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 292.48,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19281434,
+            "duration": 292.48,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8774",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    },
+    {
+      "run_id": "dual_tts_shared_encode_bs16_r1_12217",
+      "repeat": 1,
+      "policy": "dual_tts_shared_encode",
+      "requested_batch_size": 16,
+      "effective_batch_size": 16,
+      "account_used": "account_4",
+      "username": "nguynxuncngde180528",
+      "kernel_ref": "nguynxuncngde180528/mr-nhan-vat-phu-c2-12228",
+      "host_wall_sec": 408.601,
+      "host_timing": {
+        "package_sec": 4.9557,
+        "dataset_create_sec": 10.7601,
+        "dataset_ready_sec": 6.5821,
+        "kernel_push_sec": 2.3286
+      },
+      "quota_used_delta_sec": 245.89,
+      "hardware": {
+        "captured_at": "2026-11-26T16:58:45.541755+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30447.4,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "dual_tts_shared_encode",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0,
+            1
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy B: dual GPU TTS with concurrent shared encode"
+        },
+        "batch_size": 16
+      },
+      "resources": {
+        "sample_count": 100,
+        "peak_load_1m": 4.35,
+        "min_disk_free_mb": 2572546.0,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2183.0
+          },
+          "1": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2051.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 179.0356,
+        "active_union_sec": 170.8279,
+        "sum_all_spans_sec": 532.863,
+        "overlap_saved_sec": 362.0351,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3763,
+            "sum_worker_sec": 0.3764,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 88.2147,
+            "sum_worker_sec": 344.2265,
+            "intra_stage_overlap_sec": 256.0118
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3812,
+            "sum_worker_sec": 0.3812,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 53.3386,
+            "sum_worker_sec": 53.3387,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "shot_prep": {
+            "count": 8,
+            "wall_union_sec": 32.1958,
+            "sum_worker_sec": 32.1957,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "tts": {
+            "count": 6,
+            "wall_union_sec": 53.6959,
+            "sum_worker_sec": 102.3445,
+            "intra_stage_overlap_sec": 48.6486
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 300.32,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22507856,
+            "duration": 300.333,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "9010",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 290.96,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19269101,
+            "duration": 290.967,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8729",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    },
+    {
+      "run_id": "dual_tts_shared_encode_bs32_r1_12643",
+      "repeat": 1,
+      "policy": "dual_tts_shared_encode",
+      "requested_batch_size": 32,
+      "effective_batch_size": 32,
+      "account_used": "account_4",
+      "username": "nguynxuncngde180528",
+      "kernel_ref": "nguynxuncngde180528/mr-nhan-vat-phu-c2-12653",
+      "host_wall_sec": 418.275,
+      "host_timing": {
+        "package_sec": 4.7539,
+        "dataset_create_sec": 8.9399,
+        "dataset_ready_sec": 24.0628,
+        "kernel_push_sec": 1.8426
+      },
+      "quota_used_delta_sec": 216.72,
+      "hardware": {
+        "captured_at": "2026-11-26T17:05:34.158718+00:00",
+        "python_version": "3.13.16",
+        "cpu_cores": 4,
+        "ram_total_mb": 32098.9,
+        "ram_available_mb": 30489.8,
+        "disk_total_mb": 19986.6,
+        "disk_free_mb": 19780.6,
+        "cuda_available": true,
+        "cuda_version": "13.0",
+        "cuda_device_count": 2,
+        "devices": [
+          {
+            "index": 0,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          },
+          {
+            "index": 1,
+            "name": "Tesla T4",
+            "vram_total_mb": 14911.7,
+            "nvenc_usable": true
+          }
+        ],
+        "usable_nvenc_devices": [
+          0,
+          1
+        ],
+        "ffmpeg_encoders": [
+          "libx264",
+          "libx264rgb",
+          "h264_nvenc",
+          "h264_qsv",
+          "h264_v4l2m2m",
+          "h264_vaapi"
+        ],
+        "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+        "model_cache_warm": false,
+        "versions": {
+          "torch": "2.11.0+cu130",
+          "vieneu": "3.8.5",
+          "pydantic": "2.14.1",
+          "pillow": "12.3.0",
+          "kaggle": "2.0.2"
+        },
+        "scheduler_policy": {
+          "policy": "dual_tts_shared_encode",
+          "job": "produce",
+          "encoder": "h264_nvenc",
+          "tts_devices": [
+            0,
+            1
+          ],
+          "encode_devices": [
+            0,
+            1
+          ],
+          "selection_reason": "Policy B: dual GPU TTS with concurrent shared encode"
+        },
+        "batch_size": 32
+      },
+      "resources": {
+        "sample_count": 108,
+        "peak_load_1m": 4.53,
+        "min_disk_free_mb": 2572548.6,
+        "gpu_peaks": {
+          "0": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2403.0
+          },
+          "1": {
+            "peak_sm_util_pct": 100.0,
+            "peak_nvenc_util_pct": 100.0,
+            "peak_vram_used_mb": 2197.0
+          }
+        }
+      },
+      "timing": {
+        "wall_makespan_sec": 190.5703,
+        "active_union_sec": 182.2122,
+        "sum_all_spans_sec": 546.7118,
+        "overlap_saved_sec": 364.4996,
+        "stages": {
+          "bootstrap_verify": {
+            "count": 1,
+            "wall_union_sec": 0.3618,
+            "sum_worker_sec": 0.3618,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "encode": {
+            "count": 167,
+            "wall_union_sec": 88.7241,
+            "sum_worker_sec": 348.7278,
+            "intra_stage_overlap_sec": 260.0037
+          },
+          "export_and_compile": {
+            "count": 1,
+            "wall_union_sec": 0.3424,
+            "sum_worker_sec": 0.3424,
+            "intra_stage_overlap_sec": 0.0
+          },
+          "finalize": {
+            "count": 2,
+            "wall_union_sec": 52.1498,
+            "sum_worker_sec": 52.1499,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "shot_prep": {
+            "count": 5,
+            "wall_union_sec": 30.1608,
+            "sum_worker_sec": 30.1609,
+            "intra_stage_overlap_sec": 0.0001
+          },
+          "tts": {
+            "count": 4,
+            "wall_union_sec": 57.9253,
+            "sum_worker_sec": 114.969,
+            "intra_stage_overlap_sec": 57.0437
+          }
+        }
+      },
+      "validation": {
+        "2": {
+          "segments": 37,
+          "all_synthesized": true,
+          "script_duration_sec": 302.24,
+          "srt_bytes": 13054,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 22523135,
+            "duration": 302.24,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "9067",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        },
+        "3": {
+          "segments": 34,
+          "all_synthesized": true,
+          "script_duration_sec": 290.72,
+          "srt_bytes": 12451,
+          "ffprobe": {
+            "ok": true,
+            "size_bytes": 19239346,
+            "duration": 290.733,
+            "video_codec": "h264",
+            "width": 1920,
+            "height": 1080,
+            "r_frame_rate": "30/1",
+            "nb_frames": "8722",
+            "audio_codec": "aac",
+            "audio_sample_rate": "48000"
+          },
+          "has_receipt": true
+        }
+      }
+    }
+  ]
+}

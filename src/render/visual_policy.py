@@ -14,12 +14,39 @@ SCROLL_VIEWPORT_H_OVER_W = 1.3
 TALL_PANEL_THRESHOLD = 2.4
 
 
+def resolve_accepted_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
+    """
+    Resolves accepted render-only display crop while enforcing safety booleans:
+    `decision_valid`, `crop_safe`, and `text_detection_uncertain`.
+    """
+    if not metadata:
+        return Region()
+    if metadata.get("decision_valid") is False or metadata.get("crop_safe") is False:
+        return Region()
+    if isinstance(metadata.get("display_crop"), dict):
+        return Region.model_validate(metadata["display_crop"])
+    return Region()
+
+
+def _map_subbox_into_region(parent: Region, child: Region) -> Region:
+    w = parent.x_max - parent.x_min
+    h = parent.y_max - parent.y_min
+    return Region(
+        x_min=round(parent.x_min + child.x_min * w, 6),
+        y_min=round(parent.y_min + child.y_min * h, 6),
+        x_max=round(min(1.0, parent.x_min + child.x_max * w), 6),
+        y_max=round(min(1.0, parent.y_min + child.y_max * h), 6),
+    )
+
+
 def compute_adaptive_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
     """
     Computes render-only display crop: trims up to 10% top and 10% bottom
     (`keep = max(0.80, min(1.0, W/H))`), never cropping below 1:1 and never
-    altering the panel image analyzed by VLM. Respects explicit `display_crop`.
+    altering the panel image analyzed by VLM. Respects explicit safe `display_crop`.
     """
+    if metadata and (metadata.get("decision_valid") is False or metadata.get("crop_safe") is False):
+        return Region()
     if metadata and isinstance(metadata.get("display_crop"), dict):
         return Region.model_validate(metadata["display_crop"])
     if width <= 0 or height <= 0:
@@ -92,12 +119,20 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
         raise ValueError("Narration and real panel evidence are required")
     if script.project_slug != manifest.project_slug or script.chapter_number != manifest.chapter_number:
         raise ValueError("Narration/evidence identity mismatch")
+    root = Path(chapter_dir).resolve()
     known = set()
     panel_by_key = {}
     for panel in manifest.panels:
-        evidence_path(chapter_dir, panel)
         if panel.status == PanelStatus.NEEDS_REVIEW:
             raise ValueError(f"Panel needs review: {panel.panel_id}")
+        if panel.status == PanelStatus.SKIP:
+            panel_path = (root / panel.relative_path).resolve()
+            if not panel_path.is_relative_to(root / "panels"):
+                raise ValueError(f"Missing or unsafe panel evidence: {panel.panel_id}")
+            if panel_path.is_file():
+                evidence_path(chapter_dir, panel)
+        else:
+            evidence_path(chapter_dir, panel)
         for key in (panel.panel_id, panel.filename, Path(panel.filename).stem):
             known.add(key)
             panel_by_key[key] = panel
@@ -131,8 +166,11 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
             if key in by_id and by_id[key] != panel:
                 raise ValueError(f"Ambiguous panel identifier: {key}")
             by_id[key] = panel
-        path = evidence_path(root, panel)
-        omit, reason = detect_omit_visual_band(path, panel)
+        if panel.status == PanelStatus.SKIP:
+            omit, reason = detect_omit_visual_band(None, panel)
+        else:
+            path = evidence_path(root, panel)
+            omit, reason = detect_omit_visual_band(path, panel)
         omitted[panel.panel_id] = reason if omit else None
         if not omit and panel.status == PanelStatus.ACTIVE:
             approved.append(panel)
@@ -210,10 +248,16 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
             metadata = displayed.evidence_metadata
             if not isinstance(metadata.get("text_detection_uncertain", True), bool):
                 raise ValueError("text_detection_uncertain must be an explicit boolean")
+            if not isinstance(metadata.get("crop_safe", True), bool):
+                raise ValueError("crop_safe must be an explicit boolean")
+            if not isinstance(metadata.get("decision_valid", True), bool):
+                raise ValueError("decision_valid must be an explicit boolean")
             focus = [Region.model_validate(x) for x in metadata.get("focus_regions", [])]
             avoid = [Region.model_validate(x) for x in metadata.get("avoid_regions", [])]
+            crop_safe = metadata.get("crop_safe", True)
+            decision_valid = metadata.get("decision_valid", True)
             # Uncertain text detection and absent safe focus evidence use full panel.
-            uncertain = metadata.get("text_detection_uncertain", True) or bool(avoid and not focus)
+            uncertain = metadata.get("text_detection_uncertain", True) or (not decision_valid) or bool(avoid and not focus)
             tall_hint = metadata.get("tall_motion_hint")
             if displayed.status != PanelStatus.ACTIVE:
                 raise ValueError(f"Only Group 1 ACTIVE panels may be rendered: {displayed.panel_id}")
@@ -240,11 +284,25 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
                     travel_frac_for_scroll = travel_frac
                 else:
                     boxes, used_motion = [display_box], ProductionMotion.STATIC
-            elif is_tall_panel(displayed.width, displayed.height):
-                boxes, used_motion = decompose_tall_panel(displayed.panel_id, displayed.width, displayed.height), ProductionMotion.STATIC
-            else:
-                box = Region.model_validate(segment.focus_box.model_dump()) if segment.focus_box else Region()
+            elif segment.focus_box is not None:
+                box = Region.model_validate(segment.focus_box.model_dump())
                 boxes, used_motion = [box], motion
+            else:
+                display_box = resolve_accepted_display_box(displayed.width, displayed.height, metadata)
+                eff_w = max(1, round((display_box.x_max - display_box.x_min) * float(displayed.width)))
+                eff_h = max(1, round((display_box.y_max - display_box.y_min) * float(displayed.height)))
+                if is_tall_panel(eff_w, eff_h):
+                    sub_tiles = decompose_tall_panel(displayed.panel_id, eff_w, eff_h)
+                    boxes = (
+                        sub_tiles
+                        if display_box == Region()
+                        else [_map_subbox_into_region(display_box, t) for t in sub_tiles]
+                    )
+                    used_motion = ProductionMotion.STATIC
+                elif metadata.get("display_crop") is not None and crop_safe:
+                    boxes, used_motion = [display_box], motion
+                else:
+                    boxes, used_motion = [Region()], motion
             for box in boxes:
                 scroll_val = (
                     custom_scroll_rate
@@ -350,7 +408,8 @@ def validate_visual_plan(plan, chapter_dir, manifest, script, target_width, targ
             if reference.source_box == Region() and reference.motion_type == ProductionMotion.STATIC:
                 panel = next(p for p in manifest.panels if p.panel_id == (shot.substitute_panel_id or shot.source_panel_id))
                 uncertain = panel.evidence_metadata.get("text_detection_uncertain", True)
-                if uncertain or shot.substitute_panel_id or (shot.avoid_regions and reference.source_box == Region()):
+                crop_unsafe = (panel.evidence_metadata.get("crop_safe") is False) or (panel.evidence_metadata.get("decision_valid") is False)
+                if uncertain or crop_unsafe or shot.substitute_panel_id or (shot.avoid_regions and reference.source_box == Region()):
                     if shot.source_box != Region() or shot.motion_type != ProductionMotion.STATIC:
                         raise ValueError("Unsafe crop/motion for uncertain text or substitute")
             if shot.source_box != Region() and any(_intersects(shot.source_box, region) for region in shot.avoid_regions):

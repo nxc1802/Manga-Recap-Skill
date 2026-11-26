@@ -264,12 +264,36 @@ class KaggleClient:
         """Pushes kernel bundle and returns resolved Kaggle kernel reference."""
         if not self.api:
             raise KaggleAuthError("Kaggle API is not authenticated", category="auth_failed", provider=PROVIDER_NAME)
-        push_res = self.api.kernels_push(str(staging_dir))
+        try:
+            push_res = self.api.kernels_push(str(staging_dir))
+        except Exception as exc:
+            resp = getattr(exc, "response", None)
+            status = getattr(resp, "status_code", None)
+            if isinstance(status, int) and 400 <= status < 500:
+                body = (getattr(resp, "text", "") or "")[:300]
+                category = "dataset_propagating" if status in {400, 404} else "submission_rejected"
+                raise KaggleExecutionError(
+                    f"Kaggle rejected kernel submission (HTTP {status}): {body}",
+                    category=category,
+                    provider=PROVIDER_NAME,
+                ) from exc
+            raise
         error = push_res.get("error") if isinstance(push_res, dict) else getattr(push_res, "error", None)
         if not push_res or (isinstance(error, (str, bool)) and error):
             raise KaggleExecutionError(
                 "Kaggle rejected kernel submission",
                 category="submission_rejected",
+                provider=PROVIDER_NAME,
+            )
+        invalid_ds = (
+            push_res.get("invalidDatasetSources")
+            if isinstance(push_res, dict)
+            else getattr(push_res, "invalidDatasetSources", None)
+        )
+        if isinstance(invalid_ds, (list, tuple)) and len(invalid_ds) > 0:
+            raise KaggleExecutionError(
+                f"Kaggle kernel dataset sources not yet available: {invalid_ds}",
+                category="dataset_propagating",
                 provider=PROVIDER_NAME,
             )
         assigned_ref = getattr(push_res, "ref", None)

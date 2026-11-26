@@ -169,6 +169,7 @@ class KaggleCloudService:
         *,
         series: bool = False,
         cloud_policy: Optional[str] = None,
+        cloud_batch_size: Optional[int] = None,
     ) -> Path:
         from src.cloud.payload import package_payload
 
@@ -179,6 +180,7 @@ class KaggleCloudService:
             job_type,
             series=series,
             cloud_policy=cloud_policy,
+            cloud_batch_size=cloud_batch_size,
         )
         with tarfile.open(path) as archive:
             manifest = json.load(archive.extractfile("payload_manifest.json"))
@@ -255,6 +257,7 @@ class KaggleCloudService:
         series_chapters: Optional[List[str]] = None,
         compile_feature: bool = False,
         cloud_policy: Optional[str] = None,
+        cloud_batch_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Dispatches a chapter or series job to Kaggle Cloud, monitors progress, and syncs outputs."""
         if job_type not in {"tts", "render", "produce"}:
@@ -309,6 +312,7 @@ class KaggleCloudService:
             job_type=job_type,
             series=series,
             cloud_policy=cloud_policy,
+            cloud_batch_size=cloud_batch_size,
         )
         host_timing["package_sec"] = round(time.monotonic() - t_pack, 4)
 
@@ -393,7 +397,20 @@ class KaggleCloudService:
         target_kernel_ref = expected_kernel_ref
         reconciled_state: Optional[Dict[str, Any]] = None
         try:
-            target_kernel_ref = client.push_kernel(staging_dir, expected_kernel_ref)
+            for attempt in range(4):
+                try:
+                    target_kernel_ref = client.push_kernel(staging_dir, expected_kernel_ref)
+                    break
+                except KaggleExecutionError as exc:
+                    if getattr(exc, "category", None) == "dataset_propagating" and attempt < 3:
+                        logger.info(
+                            "Kaggle dataset still propagating for kernel '%s' (attempt %d/4); retrying in 6s...",
+                            expected_kernel_ref,
+                            attempt + 1,
+                        )
+                        time.sleep(6)
+                        continue
+                    raise
         except KaggleExecutionError as exc:
             self._write_cloud_job_state(
                 job_state_path,

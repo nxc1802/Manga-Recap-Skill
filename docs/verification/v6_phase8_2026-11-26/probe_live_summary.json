@@ -1,0 +1,428 @@
+{
+  "account_name": "account_2",
+  "username": "nguyenxuancuongk18dn",
+  "kernel_ref": "nguyenxuancuongk18dn/mr-v6-p8probe-698572",
+  "dataset_ref": "nguyenxuancuongk18dn/mr-v6-p8probe-698366",
+  "timing": {
+    "queue_sec": 6.3272,
+    "remote_wall_sec": 138.9556
+  },
+  "probe_json_path": "scratch/probe_out/nguyenxuancuongk18dn_mr-v6-p8probe-698572/results/p8_live_probe.json",
+  "probe": {
+    "started_utc": "2026-11-26T13:09:49Z",
+    "pip_install": {
+      "returncode": 0,
+      "duration_sec": 9.512,
+      "stderr_tail": "ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.\ndopamine-rl 4.1.2 requires gym<=0.25.2, but you have gym 0.26.2 which is incompatible.\n"
+    },
+    "disk_usage": {
+      "tmp": {
+        "total_mb": 8352646.9,
+        "used_mb": 5779468.7,
+        "free_mb": 2573162.2
+      },
+      "kaggle_working": {
+        "total_mb": 19986.6,
+        "used_mb": 1.3,
+        "free_mb": 19969.3
+      }
+    },
+    "parent_hardware_probe": {
+      "captured_at": "2026-11-26T13:10:16.104823+00:00",
+      "python_version": "3.13.16",
+      "cpu_cores": 4,
+      "ram_total_mb": 32098.9,
+      "ram_available_mb": 30505.0,
+      "disk_total_mb": 19986.6,
+      "disk_free_mb": 19969.3,
+      "cuda_available": true,
+      "cuda_version": "13.0",
+      "cuda_device_count": 2,
+      "devices": [
+        {
+          "index": 0,
+          "name": "Tesla T4",
+          "vram_total_mb": 14911.7,
+          "nvenc_usable": true
+        },
+        {
+          "index": 1,
+          "name": "Tesla T4",
+          "vram_total_mb": 14911.7,
+          "nvenc_usable": true
+        }
+      ],
+      "usable_nvenc_devices": [
+        0,
+        1
+      ],
+      "ffmpeg_encoders": [
+        "libx264",
+        "libx264rgb",
+        "h264_nvenc",
+        "h264_qsv",
+        "h264_v4l2m2m",
+        "h264_vaapi"
+      ],
+      "ffmpeg_version": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+      "model_cache_warm": false,
+      "versions": {
+        "torch": "2.11.0+cu130",
+        "vieneu": "3.8.5",
+        "pydantic": "2.14.1",
+        "pillow": "12.3.0",
+        "kaggle": "2.0.2"
+      }
+    },
+    "v6_no_iso_concurrent": {
+      "wall_sec": 67.984,
+      "results": [
+        {
+          "requested_gpu_id": 0,
+          "isolated_env": false,
+          "cuda_visible_devices": null,
+          "torch_visible_count": 2,
+          "before_alloc_mb": [
+            0.0,
+            0.0
+          ],
+          "load_sec": 49.127,
+          "runtime": {
+            "mode": "v3turbo",
+            "sdk_loaded": true,
+            "vieneu_installed": true,
+            "vieneu_version": "3.8.5",
+            "torch_installed": true,
+            "torch_version": "2.11.0+cu130",
+            "cuda_available": true,
+            "device_count": 2,
+            "cuda_visible_devices": null,
+            "device_name": "Tesla T4",
+            "bf16_supported": true,
+            "ort_installed": true,
+            "ort_providers": [
+              "AzureExecutionProvider",
+              "CPUExecutionProvider"
+            ],
+            "provider": "pytorch_cuda",
+            "tts_backend": "pytorch",
+            "engine_class": "VieNeuTTSv3Turbo",
+            "dtype": "torch.bfloat16",
+            "supports_infer": true,
+            "supports_infer_batch": true,
+            "neural_batching": true,
+            "batching_mode": "native_infer_batch",
+            "sub_session_providers": {
+              "speaker_encoder": [
+                "CPUExecutionProvider"
+              ],
+              "denoiser": [
+                "CPUExecutionProvider"
+              ]
+            },
+            "vram_free_mb": 14176.8,
+            "vram_allocated_mb": 333.8,
+            "vram_peak_allocated_mb": 475.1,
+            "vram_reserved_mb": 614.0,
+            "vram_total_mb": 14911.7
+          },
+          "after_load_alloc_mb": [
+            333.8,
+            0.0
+          ],
+          "synth_sec": 8.376,
+          "outputs": [
+            {
+              "seq_id": "p01_g0_0",
+              "duration": 3.52,
+              "batching_mode": "native_infer_batch",
+              "effective_batch_size": 2
+            },
+            {
+              "seq_id": "p02_g0_0",
+              "duration": 4.16,
+              "batching_mode": "native_infer_batch",
+              "effective_batch_size": 2
+            }
+          ],
+          "after_synth_alloc_mb": [
+            373.45,
+            0.0
+          ],
+          "vram_usage_mb": {
+            "allocated_mb": 373.5,
+            "peak_allocated_mb": 475.1,
+            "reserved_mb": 660.0,
+            "free_mb": 13976.8,
+            "total_mb": 14911.7
+          },
+          "nvenc_smoke_ok": true,
+          "ok": true
+        },
+        {
+          "requested_gpu_id": 1,
+          "isolated_env": false,
+          "cuda_visible_devices": null,
+          "torch_visible_count": 2,
+          "before_alloc_mb": [
+            0.0,
+            0.0
+          ],
+          "load_sec": 49.31,
+          "runtime": {
+            "mode": "v3turbo",
+            "sdk_loaded": true,
+            "vieneu_installed": true,
+            "vieneu_version": "3.8.5",
+            "torch_installed": true,
+            "torch_version": "2.11.0+cu130",
+            "cuda_available": true,
+            "device_count": 2,
+            "cuda_visible_devices": null,
+            "device_name": "Tesla T4",
+            "bf16_supported": true,
+            "ort_installed": true,
+            "ort_providers": [
+              "AzureExecutionProvider",
+              "CPUExecutionProvider"
+            ],
+            "provider": "pytorch_cuda",
+            "tts_backend": "pytorch",
+            "engine_class": "VieNeuTTSv3Turbo",
+            "dtype": "torch.bfloat16",
+            "supports_infer": true,
+            "supports_infer_batch": true,
+            "neural_batching": true,
+            "batching_mode": "native_infer_batch",
+            "sub_session_providers": {
+              "speaker_encoder": [
+                "CPUExecutionProvider"
+              ],
+              "denoiser": [
+                "CPUExecutionProvider"
+              ]
+            },
+            "vram_free_mb": 14178.8,
+            "vram_allocated_mb": 334.2,
+            "vram_peak_allocated_mb": 475.1,
+            "vram_reserved_mb": 612.0,
+            "vram_total_mb": 14911.7
+          },
+          "after_load_alloc_mb": [
+            0.0,
+            334.18
+          ],
+          "synth_sec": 8.191,
+          "outputs": [
+            {
+              "seq_id": "p01_g1_0",
+              "duration": 3.52,
+              "batching_mode": "native_infer_batch",
+              "effective_batch_size": 2
+            },
+            {
+              "seq_id": "p02_g1_0",
+              "duration": 4.16,
+              "batching_mode": "native_infer_batch",
+              "effective_batch_size": 2
+            }
+          ],
+          "after_synth_alloc_mb": [
+            0.0,
+            373.83
+          ],
+          "vram_usage_mb": {
+            "allocated_mb": 373.8,
+            "peak_allocated_mb": 475.1,
+            "reserved_mb": 660.0,
+            "free_mb": 14078.8,
+            "total_mb": 14911.7
+          },
+          "nvenc_smoke_ok": true,
+          "ok": true
+        }
+      ]
+    },
+    "isolated_gpu1_check": {
+      "requested_gpu_id": 1,
+      "isolated_env": true,
+      "cuda_visible_devices": "1",
+      "torch_visible_count": 1,
+      "before_alloc_mb": [
+        0.0
+      ],
+      "load_sec": 9.215,
+      "runtime": {
+        "mode": "v3turbo",
+        "sdk_loaded": true,
+        "vieneu_installed": true,
+        "vieneu_version": "3.8.5",
+        "torch_installed": true,
+        "torch_version": "2.11.0+cu130",
+        "cuda_available": true,
+        "device_count": 1,
+        "cuda_visible_devices": "1",
+        "device_name": "Tesla T4",
+        "bf16_supported": true,
+        "ort_installed": true,
+        "ort_providers": [
+          "AzureExecutionProvider",
+          "CPUExecutionProvider"
+        ],
+        "provider": "pytorch_cuda",
+        "tts_backend": "pytorch",
+        "engine_class": "VieNeuTTSv3Turbo",
+        "dtype": "torch.bfloat16",
+        "supports_infer": true,
+        "supports_infer_batch": true,
+        "neural_batching": true,
+        "batching_mode": "native_infer_batch",
+        "sub_session_providers": {
+          "speaker_encoder": [
+            "CPUExecutionProvider"
+          ],
+          "denoiser": [
+            "CPUExecutionProvider"
+          ]
+        },
+        "vram_free_mb": 14178.8,
+        "vram_allocated_mb": 334.2,
+        "vram_peak_allocated_mb": 475.1,
+        "vram_reserved_mb": 612.0,
+        "vram_total_mb": 14911.7
+      },
+      "after_load_alloc_mb": [
+        334.18
+      ],
+      "synth_sec": 2.312,
+      "outputs": [
+        {
+          "seq_id": "p01_g1_1",
+          "duration": 3.52,
+          "batching_mode": "native_infer_batch",
+          "effective_batch_size": 2
+        },
+        {
+          "seq_id": "p02_g1_1",
+          "duration": 4.16,
+          "batching_mode": "native_infer_batch",
+          "effective_batch_size": 2
+        }
+      ],
+      "after_synth_alloc_mb": [
+        373.83
+      ],
+      "vram_usage_mb": {
+        "allocated_mb": 373.8,
+        "peak_allocated_mb": 475.1,
+        "reserved_mb": 660.0,
+        "free_mb": 14078.8,
+        "total_mb": 14911.7
+      },
+      "nvenc_smoke_ok": true,
+      "ok": true,
+      "wall_sec": 15.691
+    },
+    "ok": true
+  },
+  "quota_before": [
+    {
+      "account_name": "existing",
+      "username": "cuongnguyen1802",
+      "allowed_sec": 108000.0,
+      "used_sec": 15911.22,
+      "reserved_sec": 0.0,
+      "remaining_sec": 92088.78,
+      "remaining_hours": 25.58,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_2",
+      "username": "nguyenxuancuongk18dn",
+      "allowed_sec": 108000.0,
+      "used_sec": 8.95,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107991.05,
+      "remaining_hours": 30.0,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_3",
+      "username": "cuongnguyenxuan4work",
+      "allowed_sec": 108000.0,
+      "used_sec": 16.57,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107983.43,
+      "remaining_hours": 30.0,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_4",
+      "username": "nguynxuncngde180528",
+      "allowed_sec": 108000.0,
+      "used_sec": 10.2,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107989.8,
+      "remaining_hours": 30.0,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    }
+  ],
+  "quota_after": [
+    {
+      "account_name": "existing",
+      "username": "cuongnguyen1802",
+      "allowed_sec": 108000.0,
+      "used_sec": 15911.22,
+      "reserved_sec": 0.0,
+      "remaining_sec": 92088.78,
+      "remaining_hours": 25.58,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_2",
+      "username": "nguyenxuancuongk18dn",
+      "allowed_sec": 108000.0,
+      "used_sec": 126.17,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107873.83,
+      "remaining_hours": 29.96,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_3",
+      "username": "cuongnguyenxuan4work",
+      "allowed_sec": 108000.0,
+      "used_sec": 16.57,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107983.43,
+      "remaining_hours": 30.0,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    },
+    {
+      "account_name": "account_4",
+      "username": "nguynxuncngde180528",
+      "allowed_sec": 108000.0,
+      "used_sec": 10.2,
+      "reserved_sec": 0.0,
+      "remaining_sec": 107989.8,
+      "remaining_hours": 30.0,
+      "exhausted": false,
+      "quota_refresh_time": "2026-11-28T00:00:00",
+      "authenticated": true
+    }
+  ]
+}

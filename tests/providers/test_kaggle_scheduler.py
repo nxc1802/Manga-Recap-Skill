@@ -12,9 +12,12 @@ import pytest
 
 from src.cloud import dual_gpu_worker as worker
 from src.cloud.scheduler import (
+    MAX_CLOUD_TTS_BATCH_SIZE,
+    SUPPORTED_BATCH_CAPS,
     ExecutionPolicy,
     UtteranceDispatcher,
     UtteranceItem,
+    default_cloud_batch_size,
     estimate_utterance_cost,
     normalize_policy,
     pack_tts_batches,
@@ -65,6 +68,20 @@ def test_policy_normalization_and_device_isolation():
     assert mixed_plan.encode_devices == (1,)
     assert mixed_plan.encoder == "h264_nvenc"
 
+    # Full produce `auto` selects Policy B (dual_tts_shared_encode) on verified Dual-GPU + Dual-NVENC,
+    # while single-GPU or degraded single-NVENC cleanly falls back to baseline_split.
+    auto_dual = resolve_execution_policy(
+        "auto", job="produce", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0, 1]
+    )
+    assert auto_dual.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
+    assert auto_dual.tts_devices == (0, 1)
+    assert auto_dual.encode_devices == (0, 1)
+
+    auto_degraded = resolve_execution_policy(
+        "auto", job="produce", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0]
+    )
+    assert auto_degraded.policy == ExecutionPolicy.BASELINE_SPLIT
+
 
 def test_cost_aware_dispatcher_composite_keys_batching_and_oom_backoff(tmp_path):
     assert estimate_utterance_cost("Ngắn.") < estimate_utterance_cost("Đây là một câu dài hơn nhiều, có dấu phẩy, và dấu chấm.")
@@ -99,15 +116,15 @@ def test_cost_aware_dispatcher_composite_keys_batching_and_oom_backoff(tmp_path)
     assert disp.effective_cap_for_device(1) == 12
     disp.mark_completed(u.key for u in b0)
 
-    # Different batch caps [4, 8, 12, 16] work cleanly
-    for cap in (4, 8, 12, 16):
+    # Different batch caps [4, 8, 12, 16, 24, 32] work cleanly
+    for cap in SUPPORTED_BATCH_CAPS:
         sub = [
             UtteranceItem(0, "1", i, f"c{i}", "Ngắn.", "huyen", 1.0, None, None, tmp_path / f"c_{i}.wav", f"fp{i}")
-            for i in range(20)
+            for i in range(40)
         ]
         packed = pack_tts_batches(sub, max_batch_size=cap)
         assert all(len(group) <= cap for group in packed)
-        assert len(packed[0]) == min(cap, 20)
+        assert len(packed[0]) == min(cap, 40)
 
 
 def _setup_two_chapter_project(unit_project):
@@ -491,3 +508,44 @@ def test_authored_visual_plan_waits_for_full_tts_and_policy_a_baseline(unit_proj
     # With authored VisualPlan present, NO Chapter 2 shot encodes before ALL Chapter 2 TTS segments complete!
     assert len(ch2_tts) == 2 and len(ch2_enc) == 2
     assert max(ch2_tts) < min(ch2_enc)
+
+
+def test_default_cloud_batch_size_and_pipeline_override(unit_project, monkeypatch):
+    from src.cloud.telemetry import TelemetryRecorder
+
+    assert SUPPORTED_BATCH_CAPS == (4, 8, 12, 16, 24, 32)
+    assert MAX_CLOUD_TTS_BATCH_SIZE == 32
+    assert default_cloud_batch_size("produce") == 16
+    assert default_cloud_batch_size("tts") == 32
+    assert default_cloud_batch_size("render") == 16
+    assert UtteranceDispatcher().max_batch_size == 16
+
+    project, ch1 = unit_project
+    recorded_batch_sizes = []
+    monkeypatch.setattr(
+        worker,
+        "_run_scheduled_pipeline",
+        lambda project, chapters, job, **kwargs: recorded_batch_sizes.append((job, kwargs["batch_size"])) or {"chapters": list(chapters)},
+    )
+
+    for job, override, expected in [
+        ("produce", None, 16),
+        ("tts", None, 32),
+        ("produce", 24, 24),
+    ]:
+        rec = TelemetryRecorder(project_slug="unit", chapters=["1"])
+        worker.run_pipeline(
+            project,
+            ["1"],
+            job,
+            encoder="h264_nvenc",
+            gpu_ids=(0, 1),
+            render_workers=2,
+            batch_size=override,
+            single_preview=True,
+            telemetry=rec,
+            policy="auto",
+            usable_nvenc_devices=(0, 1),
+        )
+        assert rec._hardware["batch_size"] == expected
+        assert recorded_batch_sizes[-1] == (job, expected)

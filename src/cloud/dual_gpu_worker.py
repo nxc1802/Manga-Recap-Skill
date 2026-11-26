@@ -17,8 +17,10 @@ from src.cloud.lifecycle import check_disk_low_water
 from src.cloud.payload import verify_payload_manifest
 from src.cloud.scheduler import (
     ExecutionPolicy,
+    MAX_CLOUD_TTS_BATCH_SIZE,
     UtteranceDispatcher,
     UtteranceItem,
+    default_cloud_batch_size,
     resolve_execution_policy,
 )
 from src.cloud.telemetry import (
@@ -597,7 +599,7 @@ def _run_scheduled_pipeline(
         clips = {}
         active_chapters = []
         prep_done = set()
-        dispatcher = UtteranceDispatcher(max_batch_size=min(16, max(1, int(batch_size))))
+        dispatcher = UtteranceDispatcher(max_batch_size=min(MAX_CLOUD_TTS_BATCH_SIZE, max(1, int(batch_size))))
         chapter_states = {}
         pending_encode = deque()
 
@@ -1140,14 +1142,15 @@ def _run_coordinator_stage(
 
 
 def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=2,
-                 batch_size=12, single_preview=True, telemetry=None,
+                 batch_size=None, single_preview=True, telemetry=None,
                  worker_heartbeat_timeout_sec=1800.0, min_free_disk_mb=256,
                  policy="auto", usable_nvenc_devices=None):
     """Run scheduled single- or dual-GPU TTS and shot encoding pipeline cleanly."""
     project = Path(project).resolve()
     config = read_json(project / "project.json")
     workers = max(1, min(4, int(render_workers)))
-    if job not in {"tts", "render", "produce"} or not chapters or batch_size < 1:
+    eff_batch_size = int(default_cloud_batch_size(job) if batch_size is None else batch_size)
+    if job not in {"tts", "render", "produce"} or not chapters or eff_batch_size < 1:
         raise ValueError("Invalid worker job")
     if not single_preview or any(number != "1" for number in chapters):
         require_preview_approval(project)
@@ -1163,7 +1166,9 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
 
     recorder = telemetry or TelemetryRecorder(project_slug=project.name, policy=plan.policy, chapters=list(chapters))
     recorder.policy = plan.policy
-    recorder.set_hardware({**(recorder._hardware or {}), "scheduler_policy": plan.as_dict()})
+    recorder.set_hardware(
+        {**(recorder._hardware or {}), "scheduler_policy": plan.as_dict(), "batch_size": eff_batch_size}
+    )
 
     if job in {"tts", "render"} or plan.policy != ExecutionPolicy.BASELINE_SPLIT:
         return _run_scheduled_pipeline(
@@ -1172,7 +1177,7 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
             job,
             plan=plan,
             workers=workers,
-            batch_size=batch_size,
+            batch_size=eff_batch_size,
             single_preview=single_preview,
             config=config,
             recorder=recorder,
@@ -1206,7 +1211,7 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
         sampler.start()
         children = [ctx.Process(target=_audio_then_encode, args=(
             project, chapters, work, job, single_preview, config, eff_encoder, devices[0], len(devices),
-            workers, jobs, events, batch_size,
+            workers, jobs, events, eff_batch_size,
         ))]
         if len(devices) == 2:
             children.append(ctx.Process(target=_encode_queue, args=(jobs, events, devices[1], workers)))
@@ -1322,6 +1327,8 @@ def run(root, manifest_hash, output_dir, encoder="h264_nvenc", render_workers=2,
     chapters = manifest["chapters"]
     single_preview = not manifest.get("series")
     effective_policy = manifest.get("cloud_policy") or policy
+    raw_batch_size = manifest.get("cloud_batch_size")
+    effective_batch_size = int(raw_batch_size) if raw_batch_size is not None else None
     run_pipeline(
         project,
         chapters,
@@ -1329,6 +1336,7 @@ def run(root, manifest_hash, output_dir, encoder="h264_nvenc", render_workers=2,
         encoder=encoder,
         gpu_ids=devices,
         render_workers=render_workers,
+        batch_size=effective_batch_size,
         single_preview=single_preview,
         telemetry=recorder,
         policy=effective_policy,

@@ -44,8 +44,16 @@ POLICY_ALIASES: Dict[str, str] = {
     "one_tts_dual_encode": ExecutionPolicy.ONE_TTS_DUAL_ENCODE,
 }
 
-SUPPORTED_BATCH_CAPS = (4, 8, 12, 16)
+MAX_CLOUD_TTS_BATCH_SIZE = 32
+SUPPORTED_BATCH_CAPS = (4, 8, 12, 16, 24, 32)
 DEFAULT_LONG_UTTERANCE_CAP = 4
+
+
+def default_cloud_batch_size(job: str = "produce") -> int:
+    """Returns the verified default VieNeu CUDA micro-batch size for a cloud job type."""
+    if str(job).strip().lower() == "tts":
+        return MAX_CLOUD_TTS_BATCH_SIZE
+    return 16
 
 
 def normalize_policy(policy: Optional[str]) -> str:
@@ -95,7 +103,7 @@ def resolve_execution_policy(
     encoder: str,
     cuda_devices: Sequence[int],
     usable_nvenc_devices: Optional[Sequence[int]] = None,
-    default_auto_produce_policy: str = ExecutionPolicy.BASELINE_SPLIT,
+    default_auto_produce_policy: str = ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
 ) -> DeviceRolePlan:
     """
     Resolves policy A-D and isolates TTS CUDA devices from usable NVENC devices.
@@ -160,7 +168,8 @@ def resolve_execution_policy(
         )
 
     if canonical == ExecutionPolicy.AUTO:
-        chosen = default_auto_produce_policy if len(cuda_list) >= 2 else ExecutionPolicy.BASELINE_SPLIT
+        dual_nvenc_ready = len(cuda_list) >= 2 and eff_encoder == "h264_nvenc" and len(encode_pool) >= 2
+        chosen = default_auto_produce_policy if dual_nvenc_ready else ExecutionPolicy.BASELINE_SPLIT
     else:
         chosen = canonical
 
@@ -268,7 +277,7 @@ class UtteranceItem:
 def pack_tts_batches(
     items: Sequence[UtteranceItem],
     *,
-    max_batch_size: int = 12,
+    max_batch_size: int = 16,
     long_utterance_cap: int = DEFAULT_LONG_UTTERANCE_CAP,
 ) -> List[List[UtteranceItem]]:
     """
@@ -276,8 +285,8 @@ def pack_tts_batches(
     same ``(voice, round(speed, 6))`` and length bucket, prioritizing earliest
     blocking ``(chapter_index, segment_index)`` groups first.
     """
-    eff_max = max(1, min(int(max_batch_size), MAX_LONG_TEXT_BATCH_SIZE))
-    long_cap = max(1, min(eff_max, int(long_utterance_cap)))
+    eff_max = max(1, min(int(max_batch_size), MAX_CLOUD_TTS_BATCH_SIZE))
+    long_cap = max(1, min(eff_max, int(long_utterance_cap), MAX_LONG_TEXT_BATCH_SIZE))
     grouped: Dict[Tuple[str, float, int], List[UtteranceItem]] = {}
     for item in sorted(items, key=lambda u: (u.chapter_index, u.segment_index, len(u.text))):
         gkey = (item.voice, round(float(item.speed), 6), item.length_bucket)
@@ -310,7 +319,7 @@ class UtteranceDispatcher:
     and tracks adaptive per-device batch caps after CUDA OOM backoff events.
     """
 
-    max_batch_size: int = 12
+    max_batch_size: int = 16
     long_utterance_cap: int = DEFAULT_LONG_UTTERANCE_CAP
     _pending: Dict[Tuple[str, str], UtteranceItem] = field(default_factory=dict)
     _in_flight: Dict[Tuple[str, str], int] = field(default_factory=dict)

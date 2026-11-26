@@ -257,3 +257,32 @@ def test_bootstrap_runtime_verifies_payload_and_invokes_worker(unit_project, tmp
     (runtime_root / "injected.py").write_text("print('bad')", encoding="utf-8")
     with pytest.raises(RuntimeError, match="inventory mismatch"):
         verify_runtime_files(runtime_root, manifest_hash)
+
+
+def test_push_kernel_retries_transient_dataset_propagation_404(unit_project, monkeypatch):
+    project, chapter = unit_project
+    monkeypatch.setattr("src.cloud.kaggle_service.time.sleep", lambda *_: None)
+
+    class _FakeHttpError(Exception):
+        def __init__(self, status_code: int, text: str):
+            super().__init__(f"HTTP {status_code}")
+            self.response = SimpleNamespace(status_code=status_code, text=text)
+
+    svc = object.__new__(KaggleCloudService)
+    svc.account_name = "primary"
+    svc._username = "u1"
+    svc._accounts = [("primary", "tok1")]
+    mock_api = MagicMock()
+    mock_api.dataset_status.return_value = "ready"
+    mock_api.dataset_list_files.return_value = SimpleNamespace(dataset_files=[SimpleNamespace(name="payload.tar.gz")])
+    mock_api.kernels_push.side_effect = [
+        _FakeHttpError(404, "Dataset not found yet"),
+        SimpleNamespace(ref="/code/u1/propagated-ok", error=None, invalidDatasetSources=["u1/ds"]),
+        SimpleNamespace(ref="/code/u1/propagated-ok", error=None, invalidDatasetSources=[]),
+    ]
+    svc._api = mock_api
+
+    res = svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+    assert res["status"] == "dispatched"
+    assert res["kernel_ref"] == "u1/propagated-ok"
+    assert mock_api.kernels_push.call_count == 3

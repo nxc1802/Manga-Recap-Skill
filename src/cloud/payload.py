@@ -33,7 +33,16 @@ def verify_payload_manifest(root, expected_manifest_hash):
     return manifest
 
 
-def package_payload(project_dir, chapter_number, output, job_type, *, series=False, cloud_policy=None):
+def package_payload(
+    project_dir,
+    chapter_number,
+    output,
+    job_type,
+    *,
+    series=False,
+    cloud_policy=None,
+    cloud_batch_size=None,
+):
     from src.core.human_review import require_preview_approval, require_voice_approval
     from src.core.series_setup import require_series_setup
     from src.core.storage import load_manifest, load_recap_script
@@ -168,6 +177,8 @@ def package_payload(project_dir, chapter_number, output, job_type, *, series=Fal
         )
         if cloud_policy:
             manifest["cloud_policy"] = str(cloud_policy)
+        if cloud_batch_size is not None:
+            manifest["cloud_batch_size"] = int(cloud_batch_size)
         atomic_write_json(stage / "payload_manifest.json", manifest)
         digest = calculate_sha256(stage / "payload_manifest.json")
         verify_payload_manifest(stage, digest)

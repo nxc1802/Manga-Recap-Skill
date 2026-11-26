@@ -134,6 +134,48 @@ def test_minimal_payload_pruning_by_job_type_and_worker_import_preflight(unit_pr
     )
     assert proc.returncode == 0, proc.stderr
 
+    # 1b. Extracted pruned payload MUST validate & build shots cleanly even when manifest contains unreferenced SKIP panels
+    from PIL import Image
+    from src.core.schemas import PanelStatus
+    ch2_dir = project / "chapters" / "2"
+    m2 = load_manifest(ch2_dir)
+    skip_img = ch2_dir / "panels" / "panel_skip_999.png"
+    Image.new("RGB", (100, 100), color="white").save(skip_img)
+    m2.panels.append(
+        m2.panels[0].model_copy(
+            update={
+                "panel_id": "panel_skip_999",
+                "sequence_number": len(m2.panels) + 1,
+                "filename": "panel_skip_999.png",
+                "relative_path": "panels/panel_skip_999.png",
+                "source_image": "page_skip.jpg",
+                "width": 100,
+                "height": 100,
+                "aspect_ratio": 1.0,
+                "sha256": calculate_sha256(skip_img),
+                "status": PanelStatus.SKIP,
+                "notes": "blank_band",
+            }
+        )
+    )
+    atomic_write_json(ch2_dir / "manifest.json", m2)
+    prod_skip_tar, _ = package_payload(
+        project, ["1", "2"], tmp_path / "prod_skip.tar.gz", "produce", series=True, cloud_policy="baseline_split"
+    )
+    extracted_skip = tmp_path / "preflight_skip"
+    with tarfile.open(prod_skip_tar) as archive:
+        archive.extractall(extracted_skip, filter="data")
+    rt_ch2 = extracted_skip / "project" / "chapters" / "2"
+    assert not (rt_ch2 / "panels" / "panel_skip_999.png").exists()
+    rt_s2 = load_recap_script(rt_ch2)
+    rt_s2.segments[0].duration = 0.5
+    shots_after_prune = [
+        sh
+        for grp in iter_segment_shots(rt_ch2, load_manifest(rt_ch2), rt_s2, 1280, 720, False)
+        for sh in grp
+    ]
+    assert len(shots_after_prune) >= 1
+
     # 2. TTS-only payload skips active chapter panels/ as well
     tts_tar, _ = package_payload(project, "2", tmp_path / "tts.tar.gz", "tts", series=False)
     with tarfile.open(tts_tar) as archive:
@@ -311,3 +353,53 @@ def test_contiguous_chunk_planning_and_incremental_series_resume(unit_project, m
     assert compile_calls == ["1,2,3,4"]
     assert resumed["skipped_verified"] == ["1", "2"]
     assert resumed["compiled_video"] == "/tmp/full.mp4"
+
+
+def test_payload_and_worker_forward_cloud_batch_size(unit_project, tmp_path, monkeypatch):
+    from src.cloud import dual_gpu_worker as worker
+
+    project = _build_series_project(unit_project, num_chapters=2)
+
+    default_tar, _ = package_payload(project, "2", tmp_path / "default.tar.gz", "produce", series=True)
+    with tarfile.open(default_tar) as ar:
+        default_manifest = json.load(ar.extractfile("payload_manifest.json"))
+    assert "cloud_batch_size" not in default_manifest
+
+    override_tar, manifest_hash = package_payload(
+        project,
+        "2",
+        tmp_path / "override.tar.gz",
+        "produce",
+        series=True,
+        cloud_policy="dual_tts_shared_encode",
+        cloud_batch_size=16,
+    )
+    with tarfile.open(override_tar) as ar:
+        override_manifest = json.load(ar.extractfile("payload_manifest.json"))
+    assert override_manifest["cloud_batch_size"] == 16
+
+    root = tmp_path / "worker_root"
+    root.mkdir()
+    with tarfile.open(override_tar) as ar:
+        ar.extractall(root, filter="data")
+
+    captured = []
+    monkeypatch.setattr(
+        worker,
+        "probe_worker_hardware",
+        lambda *_a, **_kw: {"devices": [{"index": 0}, {"index": 1}], "usable_nvenc_devices": [0, 1]},
+    )
+    monkeypatch.setattr(
+        worker,
+        "run_pipeline",
+        lambda project_dir, chapters, job, **kwargs: captured.append(
+            (job, kwargs["batch_size"], kwargs["policy"])
+        )
+        or {"chapters": list(chapters)},
+    )
+    monkeypatch.setattr("src.cloud.payload.export_results", lambda *a, **kw: None)
+
+    out_dir = tmp_path / "worker_out"
+    out_dir.mkdir()
+    worker.run(root, manifest_hash, out_dir, encoder="h264_nvenc", render_workers=2)
+    assert captured == [("produce", 16, "dual_tts_shared_encode")]
