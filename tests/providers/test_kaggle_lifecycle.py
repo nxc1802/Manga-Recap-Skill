@@ -380,3 +380,163 @@ def test_worker_heartbeat_watchdog_and_disk_low_water(unit_project, tmp_path, mo
             worker_heartbeat_timeout_sec=5.0,
         )
     assert fake_child.terminated
+
+
+def test_timeout_unknown_cancel_false_and_original_account_reconcile(unit_project, tmp_path, monkeypatch):
+    """P0 S1: QUEUE_TIMEOUT / CLIENT_TIMEOUT block duplicates, failed cancel stays unresolved, reconcile uses original account."""
+    project, chapter = unit_project
+    mgr = KaggleAccountManager(tmp_path / "kaggle_accounts.json")
+    mgr.add("acct_1", "KGAT_token_1")
+    mgr.add("acct_2", "KGAT_token_2")
+    monkeypatch.setenv("KAGGLE_ACCOUNTS_FILE", str(mgr.registry_file))
+    monkeypatch.setattr("src.cloud.kaggle_service.time.sleep", lambda *_: None)
+
+    api_by_acct = {"acct_1": MagicMock(), "acct_2": MagicMock()}
+    api_by_acct["acct_1"].kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.QUEUED", failureMessage=None)
+    # Unsupported/failed cancel returns False -> cancel_job MUST NOT mark CANCELLED.
+    api_by_acct["acct_1"].kernels_cancel.side_effect = RuntimeError("cancel requires kernelSessionId")
+
+    def auth(self):
+        self._username = self.account_name
+        self._api = api_by_acct[self.account_name]
+
+    monkeypatch.setattr(KaggleCloudService, "_authenticate", auth)
+    svc = KaggleCloudService()
+    svc._select_account(1)  # currently switched to acct_2!
+
+    state_path = chapter / "cloud_job.json"
+    atomic_write_json(
+        state_path,
+        {
+            "project_slug": "unit",
+            "chapter_number": "1",
+            "job_type": "render",
+            "kernel_ref": "acct_1/queued-job",
+            "account_name": "acct_1",
+            "username": "acct_1",
+            "status": LifecycleState.QUEUE_TIMEOUT,
+        },
+    )
+
+    # Cancel failure leaves status unresolved (QUEUE_TIMEOUT), not CANCELLED, using original acct_1!
+    cancel_res = svc.cancel_job("unit", "1")
+    assert cancel_res["cancelled"] is False
+    assert cancel_res["resolved"] is False
+    assert load_cloud_job_state(state_path).status == LifecycleState.QUEUE_TIMEOUT
+    api_by_acct["acct_1"].kernels_cancel.assert_called_once()
+    api_by_acct["acct_2"].kernels_cancel.assert_not_called()
+
+    # QUEUE_TIMEOUT while remote still QUEUED blocks duplicate dispatch even while active account is acct_2!
+    with pytest.raises(KaggleExecutionError, match="already recorded"):
+        svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+    api_by_acct["acct_1"].kernels_status.assert_called_once_with("acct_1/queued-job")
+    api_by_acct["acct_2"].kernels_status.assert_not_called()
+
+    # Unknown status probe or CLIENT_TIMEOUT -> COMPLETE stays blocked until pull/sync completes!
+    atomic_write_json(
+        state_path,
+        {
+            "project_slug": "unit",
+            "chapter_number": "1",
+            "job_type": "render",
+            "kernel_ref": "acct_1/running-timeout",
+            "account_name": "acct_1",
+            "username": "acct_1",
+            "status": LifecycleState.CLIENT_TIMEOUT,
+        },
+    )
+    api_by_acct["acct_1"].kernels_status.return_value = SimpleNamespace(status="UNKNOWN_STATUS", failureMessage=None)
+    with pytest.raises(KaggleExecutionError, match="already recorded"):
+        check_no_duplicate_active_job(state_path, service=svc)
+    assert load_cloud_job_state(state_path).status == LifecycleState.CLIENT_TIMEOUT
+
+    api_by_acct["acct_1"].kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.COMPLETE", failureMessage=None)
+    with pytest.raises(KaggleExecutionError, match="already completed"):
+        check_no_duplicate_active_job(state_path, service=svc)
+    assert load_cloud_job_state(state_path).status == LifecycleState.REMOTE_COMPLETE
+
+    # Remote terminal FAILED unblocks safely.
+    api_by_acct["acct_1"].kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.ERROR", failureMessage="OOM")
+    reconciled = check_no_duplicate_active_job(state_path, service=svc)
+    assert reconciled is not None and reconciled.status == LifecycleState.FAILED
+
+
+def test_project_lock_blocks_overlapping_chapter_series_chunk_and_concurrent_dispatch(unit_project, monkeypatch):
+    """P0 S1: project lock serializes overlapping reservations, blocks chapter vs series overlap, and blocks sync failures."""
+    import threading
+    from src.cloud.lifecycle import reserve_cloud_job_slot
+    from src.core.schemas import ChapterMetadata
+    from src.core.project import get_chapter_dir
+
+    project, ch1 = unit_project
+    ch2 = project / "chapters" / "2"
+    ch2.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(
+        ch2 / "chapter.json",
+        ChapterMetadata(project_slug="unit", chapter_number="2", title="Chapter 2", chapter_id="ch2"),
+    )
+    (ch2 / "script.json").write_text((ch1 / "script.json").read_text(encoding="utf-8"), encoding="utf-8")
+
+    svc = object.__new__(KaggleCloudService)
+    svc.account_name = "primary"
+    svc._username = "u1"
+    svc._accounts = [("primary", "tok1")]
+    mock_api = MagicMock()
+    mock_api.dataset_status.return_value = "ready"
+    mock_api.dataset_list_files.return_value = SimpleNamespace(dataset_files=[SimpleNamespace(name="payload.tar.gz")])
+    mock_api.kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.RUNNING", failureMessage=None)
+    svc._api = mock_api
+    monkeypatch.setattr("src.cloud.kaggle_service.time.sleep", lambda *_: None)
+
+    # 1. Chapter 1 active blocks overlapping series job [1, 2]
+    atomic_write_json(
+        ch1 / "cloud_job.json",
+        {"project_slug": "unit", "chapter_number": "1", "chapters": ["1"], "kernel_ref": "u1/ch1", "status": "RUNNING"},
+    )
+    with pytest.raises(KaggleExecutionError, match="already recorded"):
+        svc.dispatch_series_job("unit", ["1", "2"], job_type="render", gpu=False, wait=False)
+
+    # 2. Project-level series job [1] in REMOTE_COMPLETE (after sync failure) blocks chapter 1, while chapter 2 proceeds!
+    (ch1 / "cloud_job.json").unlink()
+    # Force explicit REMOTE_COMPLETE check without re-polling to RUNNING first in step 2!
+    mock_api.kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.COMPLETE", failureMessage=None)
+    atomic_write_json(
+        project / "cloud_job.json",
+        {
+            "project_slug": "unit",
+            "chapter_number": "1",
+            "chapters": ["1"],
+            "series": True,
+            "kernel_ref": "u1/ser1",
+            "status": LifecycleState.REMOTE_COMPLETE,
+        },
+    )
+    with pytest.raises(KaggleExecutionError, match="already completed"):
+        svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+
+    mock_api.kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.RUNNING", failureMessage=None)
+
+    # 3. Concurrent slot reservation under FileLock: exactly 1 caller reserves ch2, the second blocks.
+    barrier = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def _race(tag):
+        barrier.wait(timeout=5)
+        try:
+            res_id, _ = reserve_cloud_job_slot(
+                project,
+                ch2 / "cloud_job.json",
+                ["2"],
+                {"project_slug": "unit", "chapter_number": "2", "chapters": ["2"], "kernel_ref": f"u1/{tag}"},
+            )
+            results.append(res_id)
+        except Exception as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=_race, args=("k1",))
+    t2 = threading.Thread(target=_race, args=("k2",))
+    t1.start(); t2.start()
+    t1.join(timeout=5); t2.join(timeout=5)
+    assert len(results) == 1
+    assert len(errors) == 1 and isinstance(errors[0], KaggleExecutionError)

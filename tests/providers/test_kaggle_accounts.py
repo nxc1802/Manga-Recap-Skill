@@ -46,34 +46,36 @@ def test_legacy_token_kept_once_and_default_respected(accounts,monkeypatch):
     assert accounts.candidates()[0][0]=='account_3'
 
 
-@pytest.mark.parametrize('outcomes',[
-    [False,{'status':'success'}],
-    [RuntimeError('quota exceeded KGAT_test_1'),{'status':'success'}],
-    [RuntimeError('2 sessions running'),False,{'status':'success'}],
-    [{'status':'error'}, {'success':False}, {'status':'dispatched'}],
-    [False,False,False],
-    [{},None,False],
-    [CliValidationError('G6 missing')],
-    [ValueError('Artifact hash mismatch')],
+@pytest.mark.parametrize('outcome', [
+    False,
+    None,
+    {},
+    {'status': 'error'},
+    {'success': False},
+    RuntimeError('quota exceeded KGAT_test_1'),
+    RuntimeError('2 sessions running'),
+    CliValidationError('G6 missing'),
+    ValueError('Artifact hash mismatch'),
 ])
-def test_fallback_once_success_stop_and_validation_fail_closed(accounts,monkeypatch,outcomes,caplog):
-    def auth(self): self._api=object(); self._username=self.account_name
-    monkeypatch.setattr(KaggleCloudService,'_authenticate',auth)
-    service=KaggleCloudService()
-    calls=[]
+def test_fallback_fails_closed_on_ambiguous_or_unclassified_outcomes(accounts, monkeypatch, outcome, caplog):
+    def auth(self): self._api = object(); self._username = self.account_name
+    monkeypatch.setattr(KaggleCloudService, '_authenticate', auth)
+    service = KaggleCloudService()
+    calls = []
+
     @with_account_fallback
     def dispatch(self):
         calls.append(self.account_name)
-        result=outcomes[len(calls)-1]
-        if isinstance(result,Exception): raise result
-        return result
-    if len(outcomes)==1:
-        with pytest.raises(type(outcomes[0])): dispatch(service)
-    elif outcomes[-1] is False:
-        with pytest.raises(RuntimeError,match='All configured'): dispatch(service)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    if isinstance(outcome, Exception):
+        with pytest.raises(type(outcome)):
+            dispatch(service)
     else:
-        assert dispatch(service)==outcomes[-1]
-    assert calls==[f'account_{i+1}' for i in range(len(outcomes))]
+        assert dispatch(service) == outcome
+    assert calls == ['account_1']
     assert 'KGAT_' not in caplog.text
 
 
@@ -141,58 +143,83 @@ def test_first_add_preserves_existing_and_remove_is_effective(tmp_path,monkeypat
     assert manager.candidates()==[]
 
 
-def test_reused_service_tries_all_accounts_without_persisting_failure_state(accounts,monkeypatch):
-    monkeypatch.setattr(KaggleCloudService,'_authenticate',lambda self:setattr(self,'_api',object()))
-    service=KaggleCloudService()
+def test_reused_service_rotates_only_on_explicit_safe_pre_submit_errors(accounts, monkeypatch):
+    from src.cloud.kaggle_service import KaggleExecutionError
+    from src.providers.kaggle import KaggleAuthError
+
+    monkeypatch.setattr(KaggleCloudService, '_authenticate', lambda self: setattr(self, '_api', object()))
+    service = KaggleCloudService()
     service._select_account(2)
-    seen=[]
+    seen = []
+
     @with_account_fallback
     def operation(self):
         seen.append(self.account_name)
-        return False if self.account_name=='account_3' else {'status':'success'}
-    assert operation(service)['status']=='success'
-    assert seen==['account_3','account_1']
-    assert set(json.loads(accounts.registry_file.read_text()))=={'accounts','default_account'}
+        if self.account_name == 'account_3':
+            raise KaggleAuthError('stale token on account_3', category='auth_failed', provider='kaggle')
+        if self.account_name == 'account_1':
+            raise KaggleExecutionError('slug locked pre-submit', category='submission_rejected', provider='kaggle')
+        return {'status': 'success'}
+
+    assert operation(service)['status'] == 'success'
+    assert seen == ['account_3', 'account_1', 'account_2']
+    assert set(json.loads(accounts.registry_file.read_text())) == {'accounts', 'default_account'}
 
 
 # The canonical fixture contains isolated image/PCM inputs, not live production evidence.
 from tests.workflow.test_canonical_workflow import unit_project
 
 
-def test_real_dispatch_fallback_on_rejected_submission(accounts,unit_project,monkeypatch):
+def test_real_dispatch_blocks_quota_rotation_and_falls_back_only_on_safe_rejection(accounts, unit_project, monkeypatch):
     import tarfile
-    root,chapter=unit_project
-    pushes=[]
+    from src.cloud.kaggle_service import KaggleQuotaExhaustedError
+
+    root, chapter = unit_project
+    pushes = []
+    quota_mode = {'quota_for_acct_1': True}
+
     class Api:
-        def __init__(self,name): self.name=name
-        def dataset_create_new(self,folder,**kwargs):
+        def __init__(self, name): self.name = name
+
+        def dataset_create_new(self, folder, **kwargs):
             from pathlib import Path
-            data=json.loads((Path(folder)/'dataset-metadata.json').read_text())
-            assert data['id'].startswith(self.name+'/')
+            data = json.loads((Path(folder) / 'dataset-metadata.json').read_text())
+            assert data['id'].startswith(self.name + '/')
             assert kwargs['public'] is False
-        def dataset_status(self,ref): return SimpleNamespace(status='ready')
-        def dataset_list_files(self,ref): return SimpleNamespace(dataset_files=[SimpleNamespace(name='payload.tar.gz')])
-        def kernels_push(self,folder):
+
+        def dataset_status(self, ref): return SimpleNamespace(status='ready')
+        def dataset_list_files(self, ref): return SimpleNamespace(dataset_files=[SimpleNamespace(name='payload.tar.gz')])
+
+        def kernels_push(self, folder):
             from pathlib import Path
-            metadata=json.loads((Path(folder)/'kernel-metadata.json').read_text())
-            assert metadata['id'].startswith(self.name+'/')
-            assert 'KGAT_' not in (Path(folder)/'worker.py').read_text()
-            with tarfile.open(Path(folder)/'payload.tar.gz') as archive:
+            metadata = json.loads((Path(folder) / 'kernel-metadata.json').read_text())
+            assert metadata['id'].startswith(self.name + '/')
+            assert 'KGAT_' not in (Path(folder) / 'worker.py').read_text()
+            with tarfile.open(Path(folder) / 'payload.tar.gz') as archive:
                 assert not any('kaggle_accounts' in name for name in archive.getnames())
             pushes.append(self.name)
-            if self.name=='account_1': return SimpleNamespace(error='GPU quota exceeded')
-            return SimpleNamespace(ref=self.name+'/accepted',error='')
-    def auth(self): self._username=self.account_name;self._api=Api(self.account_name)
-    monkeypatch.setattr(KaggleCloudService,'_authenticate',auth)
-    monkeypatch.setattr('src.cloud.kaggle_service.time.sleep',lambda *_:None)
-    service=KaggleCloudService()
-    before=(chapter/'chapter.json').read_bytes()
-    with pytest.raises(RuntimeError, match='Kaggle rejected kernel submission'):
-        service.dispatch_chapter_job('unit','1',job_type='render',wait=False)
-    assert pushes==['account_1']
-    # Optional utility wrapper still supports multi-account fallback when explicitly applied
-    wrapped=with_account_fallback(KaggleCloudService.dispatch_chapter_job)
-    result=wrapped(service,'unit','1',job_type='render',wait=False)
-    assert pushes==['account_1','account_1','account_2']
-    assert result['status']=='dispatched' and result['kernel_ref']=='account_2/accepted'
-    assert (chapter/'chapter.json').read_bytes()==before
+            if self.name == 'account_1':
+                if quota_mode['quota_for_acct_1']:
+                    return SimpleNamespace(error='GPU quota exceeded')
+                return SimpleNamespace(error='kernel slug conflict pre-submit')
+            return SimpleNamespace(ref=self.name + '/accepted', error='')
+
+    def auth(self): self._username = self.account_name; self._api = Api(self.account_name)
+    monkeypatch.setattr(KaggleCloudService, '_authenticate', auth)
+    monkeypatch.setattr('src.cloud.kaggle_service.time.sleep', lambda *_: None)
+    service = KaggleCloudService()
+    before = (chapter / 'chapter.json').read_bytes()
+
+    # Quota rejection NEVER rotates to another account (prevents limit evasion) and rolls back reservation cleanly.
+    with pytest.raises(KaggleQuotaExhaustedError, match='quota'):
+        service.dispatch_chapter_job_with_fallback('unit', '1', job_type='render', wait=False)
+    assert pushes == ['account_1']
+    assert not (chapter / 'cloud_job.json').exists()
+
+    # Explicit non-quota pre-submit rejection rotates safely to account_2 without leaving stale state.
+    quota_mode['quota_for_acct_1'] = False
+    service2 = KaggleCloudService()
+    result = service2.dispatch_chapter_job_with_fallback('unit', '1', job_type='render', wait=False)
+    assert pushes == ['account_1', 'account_1', 'account_2']
+    assert result['status'] == 'dispatched' and result['kernel_ref'] == 'account_2/accepted'
+    assert (chapter / 'chapter.json').read_bytes() == before

@@ -115,11 +115,10 @@ def test_poll_queue_timeout_cancel_and_account_fallback(tmp_path, monkeypatch):
             poll_interval=0,
         )
 
-    # 3. dispatch_chapter_job_with_fallback skips exhausted account and rotates on QUEUED timeout
+    # 3. dispatch_chapter_job_with_fallback fails closed on quota exhaustion & QUEUED timeout (no account rotation)
     mgr = KaggleAccountManager(tmp_path / "kaggle_accounts.json")
     mgr.add("acct_1", "KGAT_token_1")
     mgr.add("acct_2", "KGAT_token_2")
-    mgr.add("acct_3", "KGAT_token_3")
     monkeypatch.setenv("KAGGLE_ACCOUNTS_FILE", str(mgr.registry_file))
     monkeypatch.setattr(
         KaggleCloudService,
@@ -127,20 +126,28 @@ def test_poll_queue_timeout_cancel_and_account_fallback(tmp_path, monkeypatch):
         lambda self: (setattr(self, "_api", object()), setattr(self, "_username", self.account_name)),
     )
     cloud_svc = KaggleCloudService()
-    attempted = []
 
-    def fake_dispatch(self, slug, ch, **kwargs):
-        attempted.append(self.account_name)
-        if self.account_name == "acct_1":
-            raise KaggleQuotaExhaustedError("quota exhausted")
-        if self.account_name == "acct_2":
-            raise KaggleQueueTimeoutError("queued too long")
-        return {"status": "success", "account": self.account_name}
+    attempted_quota = []
 
-    monkeypatch.setattr(KaggleCloudService, "dispatch_chapter_job", fake_dispatch)
-    res = cloud_svc.dispatch_chapter_job_with_fallback("proj", "1", job_type="render")
-    assert res == {"status": "success", "account": "acct_3"}
-    assert attempted == ["acct_1", "acct_2", "acct_3"]
+    def fail_quota(self, slug, ch, **kwargs):
+        attempted_quota.append(self.account_name)
+        raise KaggleQuotaExhaustedError("quota exhausted")
+
+    monkeypatch.setattr(KaggleCloudService, "dispatch_chapter_job", fail_quota)
+    with pytest.raises(KaggleQuotaExhaustedError):
+        cloud_svc.dispatch_chapter_job_with_fallback("proj", "1", job_type="render")
+    assert attempted_quota == ["acct_1"]
+
+    attempted_queue = []
+
+    def fail_queue(self, slug, ch, **kwargs):
+        attempted_queue.append(self.account_name)
+        raise KaggleQueueTimeoutError("queued too long")
+
+    monkeypatch.setattr(KaggleCloudService, "dispatch_chapter_job", fail_queue)
+    with pytest.raises(KaggleQueueTimeoutError):
+        cloud_svc.dispatch_chapter_job_with_fallback("proj", "1", job_type="render")
+    assert attempted_queue == ["acct_1"]
 
 
 def test_render_dispatch_requires_voice_approval_before_kaggle_push(tmp_path, monkeypatch):

@@ -26,6 +26,8 @@ from src.cloud.lifecycle import (
     normalize_remote_status,
     persist_submit_intent,
     reconcile_submit_unknown,
+    release_pre_submit_reservation,
+    reserve_cloud_job_slot,
 )
 from src.core.logger import logger
 from src.core.project import get_chapter_dir, get_project_dir
@@ -69,7 +71,18 @@ class KaggleCloudService:
     def _require_kernel_submission(result: Any) -> None:
         error = result.get("error") if isinstance(result, dict) else getattr(result, "error", None)
         if not result or (isinstance(error, (str, bool)) and error):
-            raise KaggleExecutionError("Kaggle rejected kernel submission", category="submission_rejected", provider="kaggle")
+            err_text = str(error or "").strip()
+            if "quota" in err_text.lower():
+                raise KaggleQuotaExhaustedError(
+                    f"Kaggle rejected kernel submission (quota): {err_text}",
+                    category="quota_exhausted",
+                    provider="kaggle",
+                )
+            raise KaggleExecutionError(
+                f"Kaggle rejected kernel submission: {err_text}" if err_text else "Kaggle rejected kernel submission",
+                category="submission_rejected",
+                provider="kaggle",
+            )
 
     def __init__(self, api_token: Optional[str] = None):
         from src.cloud.account_manager import KaggleAccountManager
@@ -110,6 +123,37 @@ class KaggleCloudService:
             username=getattr(self, "_username", None),
             account_name=getattr(self, "account_name", "unknown"),
         )
+
+    def bind_job_account(
+        self, account_name: Optional[str], username: Optional[str] = None
+    ) -> tuple[Optional[KaggleClient], Optional[Any]]:
+        """Temporarily binds the original account for reconciliation and returns ``(client, restore_fn)``."""
+        target_acct = (account_name or "").strip()
+        target_user = (username or "").strip()
+        curr_acct = getattr(self, "account_name", "unknown")
+        curr_user = getattr(self, "_username", None)
+        matches_current = (
+            (target_acct in ("", "unknown") or target_acct == curr_acct)
+            and (target_user in ("", "unknown") or target_user == curr_user)
+        )
+        if matches_current:
+            client = self._client()
+            return (client if client.is_authenticated else None), None
+
+        accounts = getattr(self, "_accounts", None) or []
+        orig_index = getattr(self, "_account_index", 0)
+        for idx, (acct_name, _) in enumerate(accounts):
+            if target_acct not in ("", "unknown") and acct_name == target_acct:
+                self._select_account(idx)
+                client = self._client()
+                def _restore() -> None:
+                    if 0 <= orig_index < len(accounts):
+                        self._select_account(orig_index)
+                if client.is_authenticated and (target_user in ("", "unknown") or client.username == target_user):
+                    return client, _restore
+                _restore()
+                return None, None
+        return None, None
 
     @property
     def is_authenticated(self) -> bool:
@@ -271,16 +315,6 @@ class KaggleCloudService:
         project = get_project_dir(project_slug)
         chapter = get_chapter_dir(project_slug, chapter_number)
         job_state_path = (project if series else chapter) / "cloud_job.json"
-        check_no_duplicate_active_job(job_state_path, client=client)
-
-        if gpu:
-            quota = self.get_gpu_quota_status()
-            if quota and quota.get("exhausted"):
-                raise KaggleQuotaExhaustedError(
-                    f"Kaggle account '{getattr(self, 'account_name', 'unknown')}' ({self.get_username()}) "
-                    f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
-                    f"refreshes {quota.get('quota_refresh_time') or 'next cycle'})."
-                )
 
         resolved_queue_timeout: Optional[float] = 900.0 if queue_timeout_seconds is None else (
             None if float(queue_timeout_seconds) <= 0 else float(queue_timeout_seconds)
@@ -300,59 +334,95 @@ class KaggleCloudService:
             kernel_slug
             or f"mr-{project_slug[:12]}-c{chapter_number}-{int(time.time()) % 100000}".lower().replace("_", "-")
         )[:45].rstrip("-")
+        expected_kernel_ref = f"{self._username}/{kernel_slug}"
+        base_meta: Dict[str, Any] = {
+            "project_slug": project_slug,
+            "chapter_number": str(chapter_number),
+            "job_type": job_type,
+            "kernel_ref": expected_kernel_ref,
+            "account_name": getattr(self, "account_name", "unknown"),
+            "username": self.get_username(),
+            "gpu": gpu,
+            "series": series,
+            "chapters": chapters,
+            "budget": budget.as_dict(),
+            "cloud_policy": cloud_policy or "auto",
+        }
+        reservation_id, prior_state = reserve_cloud_job_slot(
+            project,
+            job_state_path,
+            chapters,
+            base_meta,
+            client=client,
+            service=self,
+        )
+
         staging_dir = Path(tempfile.mkdtemp(prefix="manga-kaggle-"))
         payload_tar = staging_dir / "payload.tar.gz"
         host_timing: Dict[str, float] = {}
+        try:
+            if gpu:
+                quota = self.get_gpu_quota_status()
+                if quota and quota.get("exhausted"):
+                    raise KaggleQuotaExhaustedError(
+                        f"Kaggle account '{getattr(self, 'account_name', 'unknown')}' ({self.get_username()}) "
+                        f"has exhausted its weekly GPU quota ({quota['used_sec']:.1f}s / {quota['allowed_sec']:.1f}s used, "
+                        f"refreshes {quota.get('quota_refresh_time') or 'next cycle'}).",
+                        category="quota_exhausted",
+                        provider="kaggle",
+                    )
 
-        t_pack = time.monotonic()
-        self.package_chapter_payload(
-            project_slug,
-            chapters if series else chapter_number,
-            payload_tar,
-            job_type=job_type,
-            series=series,
-            cloud_policy=cloud_policy,
-            cloud_batch_size=cloud_batch_size,
-        )
-        host_timing["package_sec"] = round(time.monotonic() - t_pack, 4)
+            t_pack = time.monotonic()
+            self.package_chapter_payload(
+                project_slug,
+                chapters if series else chapter_number,
+                payload_tar,
+                job_type=job_type,
+                series=series,
+                cloud_policy=cloud_policy,
+                cloud_batch_size=cloud_batch_size,
+            )
+            host_timing["package_sec"] = round(time.monotonic() - t_pack, 4)
 
-        worker_py = staging_dir / "worker.py"
-        worker_code = self.generate_worker_script(
-            project_slug=project_slug,
-            chapter_number=chapter_number,
-            render_workers=render_workers,
-            encoder_preference=encoder_preference,
-            job_type=job_type,
-            video_mode=video_mode,
-            burn_subtitles=burn_subtitles,
-            fps=fps,
-            target_width=target_width,
-            target_height=target_height,
-            compile_feature=compile_feature,
-        )
-        worker_py.write_text(worker_code, encoding="utf-8")
+            worker_py = staging_dir / "worker.py"
+            worker_code = self.generate_worker_script(
+                project_slug=project_slug,
+                chapter_number=chapter_number,
+                render_workers=render_workers,
+                encoder_preference=encoder_preference,
+                job_type=job_type,
+                video_mode=video_mode,
+                burn_subtitles=burn_subtitles,
+                fps=fps,
+                target_width=target_width,
+                target_height=target_height,
+                compile_feature=compile_feature,
+            )
+            worker_py.write_text(worker_code, encoding="utf-8")
 
-        dataset_slug = f"mr-payload-{self._payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
-        ds_staging = staging_dir / "dataset"
-        ds_staging.mkdir()
-        shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
-        ds_ref = f"{self._username}/{dataset_slug}"
-        atomic_write_json(
-            ds_staging / "dataset-metadata.json",
-            {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
-        )
-        t_ds_create = time.monotonic()
-        client.create_private_dataset(ds_staging)
-        host_timing["dataset_create_sec"] = round(time.monotonic() - t_ds_create, 4)
-        t_ds_ready = time.monotonic()
-        self._wait_for_dataset_ready(
-            ds_ref,
-            expected_file="payload.tar.gz",
-            timeout_sec=budget.dataset_transfer_timeout_sec,
-        )
-        host_timing["dataset_ready_sec"] = round(time.monotonic() - t_ds_ready, 4)
+            dataset_slug = f"mr-payload-{self._payload_manifest_hash[:12]}-{time.time_ns() % 1000000000}"
+            ds_staging = staging_dir / "dataset"
+            ds_staging.mkdir()
+            shutil.copy2(payload_tar, ds_staging / "payload.tar.gz")
+            ds_ref = f"{self._username}/{dataset_slug}"
+            atomic_write_json(
+                ds_staging / "dataset-metadata.json",
+                {"title": dataset_slug, "id": ds_ref, "licenses": [{"name": "other"}]},
+            )
+            t_ds_create = time.monotonic()
+            client.create_private_dataset(ds_staging)
+            host_timing["dataset_create_sec"] = round(time.monotonic() - t_ds_create, 4)
+            t_ds_ready = time.monotonic()
+            self._wait_for_dataset_ready(
+                ds_ref,
+                expected_file="payload.tar.gz",
+                timeout_sec=budget.dataset_transfer_timeout_sec,
+            )
+            host_timing["dataset_ready_sec"] = round(time.monotonic() - t_ds_ready, 4)
+        except Exception:
+            release_pre_submit_reservation(project, job_state_path, reservation_id, prior_state)
+            raise
 
-        expected_kernel_ref = f"{self._username}/{kernel_slug}"
         metadata = {
             "id": expected_kernel_ref,
             "title": kernel_slug,
@@ -372,21 +442,12 @@ class KaggleCloudService:
         (staging_dir / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
         job_meta = {
-            "project_slug": project_slug,
-            "chapter_number": str(chapter_number),
-            "job_type": job_type,
-            "kernel_ref": expected_kernel_ref,
+            **base_meta,
             "dataset_ref": ds_ref,
-            "account_name": getattr(self, "account_name", "unknown"),
-            "username": self.get_username(),
-            "gpu": gpu,
-            "series": series,
-            "chapters": chapters,
             "payload_manifest_sha256": self._payload_manifest_hash,
             "input_hashes": self._dispatch_input_hashes,
             "host_timing": host_timing,
-            "budget": budget.as_dict(),
-            "cloud_policy": cloud_policy or "auto",
+            "reservation_id": reservation_id,
         }
         persist_submit_intent(job_state_path, job_meta)
 
@@ -411,16 +472,8 @@ class KaggleCloudService:
                         time.sleep(6)
                         continue
                     raise
-        except KaggleExecutionError as exc:
-            self._write_cloud_job_state(
-                job_state_path,
-                {
-                    **job_meta,
-                    "status": LifecycleState.FAILED,
-                    "error": str(exc),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
+        except (KaggleExecutionError, KaggleQuotaExhaustedError):
+            release_pre_submit_reservation(project, job_state_path, reservation_id, prior_state)
             raise
         except Exception as exc:
             ambiguous = {
@@ -787,42 +840,74 @@ class KaggleCloudService:
         return result
 
     def reconcile_job(self, project_slug: str, chapter_number: Optional[str] = None) -> Dict[str, Any]:
-        """Refreshes ``cloud_job.json`` status from remote Kaggle kernel status."""
+        """Refreshes ``cloud_job.json`` status from remote Kaggle kernel status via its original account."""
         target_dir = get_chapter_dir(project_slug, chapter_number) if chapter_number else get_project_dir(project_slug)
         state_path = target_dir / "cloud_job.json"
         state = load_cloud_job_state(state_path)
         if state.project_slug != project_slug:
             raise ValueError("Cloud job project mismatch")
-        if not self.is_authenticated:
-            raise RuntimeError("Kaggle API is not authenticated")
-        raw_status, norm, fail_msg = self._client().get_kernel_status(state.kernel_ref)
+        client, restore_fn = self.bind_job_account(state.account_name, state.username)
+        if client is None:
+            raise RuntimeError(
+                f"Authenticate the Kaggle account '{state.account_name}' ({state.username}) that owns job '{state.kernel_ref}'"
+            )
+        try:
+            raw_status, norm, fail_msg = client.get_kernel_status(state.kernel_ref)
+        finally:
+            if callable(restore_fn):
+                restore_fn()
+        mapped = normalize_remote_status(norm or raw_status)
+        if mapped == "COMPLETE":
+            status_val = LifecycleState.REMOTE_COMPLETE
+        elif mapped == "FAILED":
+            status_val = LifecycleState.FAILED
+        elif mapped in {"QUEUED", "RUNNING"}:
+            status_val = mapped
+        else:
+            status_val = state.status
         updated = {
             **state.model_dump(mode="json"),
-            "status": "FAILED" if norm in {"FAILED", "ERROR", "CANCEL", "CANCEL_ACKNOWLEDGED"} else norm,
+            "status": status_val,
+            "last_remote_status": mapped,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if fail_msg:
             updated["error"] = str(fail_msg)
-        elif updated["status"] == "FAILED":
+        elif status_val == LifecycleState.FAILED:
             updated["error"] = f"status={raw_status}"
         self._write_cloud_job_state(state_path, updated)
         return updated
 
     def cancel_job(self, project_slug: str, chapter_number: Optional[str] = None) -> Dict[str, Any]:
-        """Cancels an active Kaggle job if supported and records terminal state locally."""
+        """Cancels an active Kaggle job via its original account; leaves unresolved if cancel is unsupported/fails."""
         target_dir = get_chapter_dir(project_slug, chapter_number) if chapter_number else get_project_dir(project_slug)
         state_path = target_dir / "cloud_job.json"
         state = load_cloud_job_state(state_path)
-        cancelled = self._client().cancel_kernel(state.kernel_ref)
+        client, restore_fn = self.bind_job_account(state.account_name, state.username)
+        if client is None:
+            raise RuntimeError(
+                f"Authenticate the Kaggle account '{state.account_name}' ({state.username}) that owns job '{state.kernel_ref}'"
+            )
+        try:
+            cancelled = bool(client.cancel_kernel(state.kernel_ref))
+        finally:
+            if callable(restore_fn):
+                restore_fn()
         updated = {
             **state.model_dump(mode="json"),
-            "status": "CANCELLED" if cancelled else state.status,
-            "error": "Cancelled by operator" if cancelled else state.error,
+            "status": LifecycleState.CANCELLED if cancelled else state.status,
+            "cancel_attempted": True,
+            "cancel_confirmed": cancelled,
+            "error": "Cancelled by operator" if cancelled else (state.error or "Cancel unconfirmed"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        if cancelled:
-            self._write_cloud_job_state(state_path, updated)
-        return updated
+        self._write_cloud_job_state(state_path, updated)
+        return {
+            **updated,
+            "cancelled": cancelled,
+            "resolved": cancelled,
+            "blocker": (None if cancelled else "Kaggle cancel unsupported or failed; run reconcile/pull to verify termination."),
+        }
 
     def _wait_for_dataset_ready(
         self,
@@ -959,8 +1044,9 @@ class KaggleCloudService:
                 and float(queue_timeout_seconds) > 0
                 and elapsed >= float(queue_timeout_seconds)
             ):
+                cancelled = False
                 try:
-                    client.cancel_kernel(target_kernel_ref)
+                    cancelled = bool(client.cancel_kernel(target_kernel_ref))
                 except Exception as cancel_err:
                     logger.warning("Best-effort queue cancel failed for %s: %s", target_kernel_ref, cancel_err)
                 _persist(
@@ -968,12 +1054,17 @@ class KaggleCloudService:
                     {
                         "queue_timeout_seconds": float(queue_timeout_seconds),
                         "queue_notice_emitted": queue_notice_emitted,
+                        "cancel_attempted": True,
+                        "cancel_confirmed": cancelled,
+                        "last_remote_status": last_norm,
                     },
                 )
                 raise KaggleQueueTimeoutError(
                     f"Kaggle Cloud job '{target_kernel_ref}' (account '{getattr(self, 'account_name', 'unknown')}') "
                     f"remained QUEUED for {int(elapsed)}s (limit={int(queue_timeout_seconds)}s). "
-                    "Switch Kaggle account or fallback to local execution (--local / h264_videotoolbox)."
+                    "Remote kernel may still be queued/running; reconcile or pull before resubmitting.",
+                    category="queue_timeout",
+                    provider="kaggle",
                 )
 
         if not completed_cleanly:

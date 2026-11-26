@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from src.cloud.jobs import CloudJob, load_cloud_job_state, write_cloud_job_state
 from src.core.errors import ProviderIntegrityError
 from src.core.logger import logger
-from src.core.storage import read_json
+from src.core.storage import FileLock, read_json
 from src.providers.kaggle import (
     PROVIDER_NAME,
+    KaggleAuthError,
     KaggleExecutionError,
     KaggleSubmitAmbiguousError,
 )
@@ -42,6 +45,8 @@ ACTIVE_JOB_STATES = {
     LifecycleState.RUNNING,
     "DISPATCHED",
     LifecycleState.REMOTE_COMPLETE,
+    LifecycleState.QUEUE_TIMEOUT,
+    LifecycleState.CLIENT_TIMEOUT,
 }
 
 TERMINAL_REMOTE_FAILURE_STATES = {
@@ -52,11 +57,18 @@ TERMINAL_REMOTE_FAILURE_STATES = {
     "CANCEL_ACKNOWLEDGED",
 }
 
+SAFE_PRE_SUBMIT_FALLBACK_CATEGORIES = {
+    "auth_failed",
+    "submission_rejected",
+}
+
 NON_RETRYABLE_FALLBACK_CATEGORIES = {
     "remote_failed",
     "submit_unknown",
     "active_job_exists",
     "client_poll_timeout",
+    "queue_timeout",
+    "quota_exhausted",
     "invalid_response",
     "dataset_failed",
     "manifest_mismatch",
@@ -194,12 +206,31 @@ def reconcile_submit_unknown(
     return updated
 
 
+def _resolve_reconcile_client(
+    state: CloudJob, *, client: Any = None, service: Any = None
+) -> Tuple[Any, Optional[Callable[[], None]]]:
+    """Returns `(client, restore_fn)` bound cleanly to the persisted original account if available."""
+    if service is not None and hasattr(service, "bind_job_account"):
+        return service.bind_job_account(state.account_name, state.username)
+    if client is None or not getattr(client, "is_authenticated", False):
+        return None, None
+    acct = getattr(client, "account_name", "unknown")
+    user = getattr(client, "username", None)
+    orig_acct = state.account_name or "unknown"
+    orig_user = state.username or "unknown"
+    if orig_acct not in ("", "unknown") and acct not in ("", "unknown") and acct != orig_acct:
+        if orig_user in ("", "unknown") or user != orig_user:
+            return None, None
+    return client, None
+
+
 def check_no_duplicate_active_job(
     job_state_path: Path,
     *,
     client: Any = None,
+    service: Any = None,
 ) -> Optional[CloudJob]:
-    """Blocks new submission when an unresolved active/ambiguous local job exists."""
+    """Blocks new submission when an unresolved active, timed-out, or ambiguous local job exists."""
     if not job_state_path.exists():
         return None
     try:
@@ -215,10 +246,11 @@ def check_no_duplicate_active_job(
     if norm_status.upper() not in {s.upper() for s in ACTIVE_JOB_STATES}:
         return state
 
-    # Reconcile ambiguous/active job with Kaggle if possible before deciding.
-    if client is not None and getattr(client, "is_authenticated", False) and state.kernel_ref:
+    # Reconcile ambiguous/timed-out/active job via its original persisted account only.
+    reconciled_client, restore_fn = _resolve_reconcile_client(state, client=client, service=service)
+    if reconciled_client is not None and state.kernel_ref:
         try:
-            raw_status, norm, fail_msg = client.get_kernel_status(state.kernel_ref)
+            raw_status, norm, fail_msg = reconciled_client.get_kernel_status(state.kernel_ref)
             remote_state = normalize_remote_status(norm or raw_status)
             if remote_state == "FAILED":
                 updated = {
@@ -229,21 +261,143 @@ def check_no_duplicate_active_job(
                 }
                 write_cloud_job_state(job_state_path, updated)
                 return CloudJob.model_validate(updated)
-        except Exception:
-            pass
+            if remote_state == "COMPLETE":
+                updated = {
+                    **state.model_dump(mode="json"),
+                    "status": LifecycleState.REMOTE_COMPLETE,
+                    "last_remote_status": "COMPLETE",
+                    "updated_at": _utc_iso_now(),
+                }
+                write_cloud_job_state(job_state_path, updated)
+                state = CloudJob.model_validate(updated)
+                norm_status = LifecycleState.REMOTE_COMPLETE
+            elif remote_state in {"QUEUED", "RUNNING"}:
+                updated = {
+                    **state.model_dump(mode="json"),
+                    "status": remote_state,
+                    "last_remote_status": remote_state,
+                    "updated_at": _utc_iso_now(),
+                }
+                write_cloud_job_state(job_state_path, updated)
+                state = CloudJob.model_validate(updated)
+                norm_status = remote_state
+        except Exception as exc:
+            logger.warning(
+                "Could not reconcile Kaggle job '%s' (account=%s): %s",
+                state.kernel_ref,
+                state.account_name,
+                exc,
+            )
+        finally:
+            if callable(restore_fn):
+                restore_fn()
 
     if norm_status.upper() == LifecycleState.SUBMIT_UNKNOWN:
         raise KaggleSubmitAmbiguousError(
-            f"Previous Kaggle job '{state.kernel_ref or 'unknown'}' is in SUBMIT_UNKNOWN; run 'cloud pull/reconcile' before resubmitting.",
+            f"Previous Kaggle job '{state.kernel_ref or 'unknown'}' (account={state.account_name}) is in SUBMIT_UNKNOWN; run 'cloud pull/reconcile' before resubmitting.",
             category="submit_unknown",
             provider=PROVIDER_NAME,
         )
+    if norm_status.upper() == LifecycleState.REMOTE_COMPLETE:
+        raise KaggleExecutionError(
+            f"Remote Kaggle job '{state.kernel_ref}' (account={state.account_name}) already completed but is not yet synced. "
+            "Run 'cloud pull' to verify and download outputs instead of resubmitting.",
+            category="active_job_exists",
+            provider=PROVIDER_NAME,
+        )
     raise KaggleExecutionError(
-        f"An active Kaggle job '{state.kernel_ref}' is already recorded in state '{state.status}'. "
-        "Wait, pull, or cancel it instead of submitting a duplicate job.",
+        f"An active or unresolved Kaggle job '{state.kernel_ref or 'reservation'}' (account={state.account_name}) "
+        f"is already recorded in state '{state.status}'. Reconcile, pull, or confirm termination before submitting.",
         category="active_job_exists",
         provider=PROVIDER_NAME,
     )
+
+
+def _state_overlaps_chapters(state: CloudJob, target_chapters: set[str]) -> bool:
+    recorded = {str(c) for c in (state.chapters or []) if str(c).strip()}
+    if not recorded and state.chapter_number:
+        recorded = {str(state.chapter_number).strip()}
+    if not recorded:
+        return True
+    return bool(recorded & target_chapters)
+
+
+def reserve_cloud_job_slot(
+    project_dir: Path,
+    job_state_path: Path,
+    chapters: Iterable[str],
+    job_meta: Dict[str, Any],
+    *,
+    client: Any = None,
+    service: Any = None,
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Atomically checks chapter/series/chunk overlap under project lock and reserves ``SUBMITTING`` intent."""
+    target_chapters = {str(c).strip() for c in chapters if str(c).strip()}
+    lock = FileLock(project_dir / "cloud_dispatch.lock", timeout=10.0)
+    with lock:
+        candidate_paths = [project_dir / "cloud_job.json"]
+        for ch in sorted(target_chapters):
+            candidate_paths.append(project_dir / "chapters" / ch / "cloud_job.json")
+        if job_state_path not in candidate_paths:
+            candidate_paths.append(job_state_path)
+
+        seen_paths: set[Path] = set()
+        for path in candidate_paths:
+            resolved = path.resolve()
+            if resolved in seen_paths or not path.exists():
+                continue
+            seen_paths.add(resolved)
+            try:
+                existing = load_cloud_job_state(path)
+            except Exception:
+                check_no_duplicate_active_job(path, client=client, service=service)
+                continue
+            # Project-level cloud_job.json blocks only if its chapters overlap or if overwriting it directly.
+            if resolved == (project_dir / "cloud_job.json").resolve() and resolved != job_state_path.resolve():
+                if not _state_overlaps_chapters(existing, target_chapters):
+                    continue
+            check_no_duplicate_active_job(path, client=client, service=service)
+
+        prior_state: Optional[Dict[str, Any]] = None
+        if job_state_path.exists():
+            prior_state = read_json(job_state_path)
+        reservation_id = uuid.uuid4().hex
+        intent = {
+            **job_meta,
+            "status": LifecycleState.SUBMITTING,
+            "reservation_id": reservation_id,
+            "submitted_at": _utc_iso_now(),
+            "updated_at": _utc_iso_now(),
+        }
+        write_cloud_job_state(job_state_path, intent)
+        return reservation_id, prior_state
+
+
+def release_pre_submit_reservation(
+    project_dir: Path,
+    job_state_path: Path,
+    reservation_id: str,
+    prior_state: Optional[Dict[str, Any]],
+) -> None:
+    """Rolls back an unpushed ``SUBMITTING`` reservation cleanly on safe pre-submit rejection."""
+    lock = FileLock(project_dir / "cloud_dispatch.lock", timeout=10.0)
+    with lock:
+        if not job_state_path.exists():
+            return
+        try:
+            current = read_json(job_state_path)
+        except Exception:
+            return
+        if (
+            str(current.get("status") or "").upper() != LifecycleState.SUBMITTING
+            or current.get("reservation_id") != reservation_id
+        ):
+            return
+        if prior_state is not None:
+            write_cloud_job_state(job_state_path, prior_state)
+        else:
+            with contextlib.suppress(Exception):
+                job_state_path.unlink()
 
 
 def persist_submit_intent(

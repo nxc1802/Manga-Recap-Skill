@@ -1,14 +1,27 @@
-"""Try each configured token cleanly on pre-execution quota/queue rejection; never replay post-submit ambiguity."""
+"""Account fallback strictly for explicitly classified safe pre-submit failures (never quota/timeout/unknown)."""
 from functools import wraps
-from src.cloud.lifecycle import NON_RETRYABLE_FALLBACK_CATEGORIES
+from src.cloud.lifecycle import NON_RETRYABLE_FALLBACK_CATEGORIES, SAFE_PRE_SUBMIT_FALLBACK_CATEGORIES
 from src.core.errors import (
-    DomainValidationError,
+    ProviderAuthError,
     ProviderError,
-    ProviderIntegrityError,
-    StorageError,
+    ProviderQuotaError,
 )
 from src.core.logger import logger
-from src.providers.kaggle import KaggleClientPollTimeoutError, KaggleSubmitAmbiguousError
+
+
+def _is_safe_pre_submit_fallback(exc: BaseException) -> bool:
+    """Allows rotating accounts ONLY on explicit pre-submit auth or non-quota rejection errors."""
+    if isinstance(exc, ProviderQuotaError):
+        return False
+    if isinstance(exc, ProviderAuthError):
+        return True
+    if isinstance(exc, ProviderError):
+        category = getattr(exc, "category", None)
+        if category in NON_RETRYABLE_FALLBACK_CATEGORIES:
+            return False
+        if category in SAFE_PRE_SUBMIT_FALLBACK_CATEGORIES:
+            return "quota" not in str(exc).lower()
+    return False
 
 
 def with_account_fallback(operation):
@@ -20,35 +33,25 @@ def with_account_fallback(operation):
             return operation(self, *args, **kwargs)
         start = self._account_index
         order = list(range(start, len(candidates))) + list(range(start))
+        last_exc: BaseException | None = None
         for index in order:
             if index != self._account_index:
                 self._select_account(index)
             if not self.is_authenticated:
                 continue
             try:
-                result = operation(self, *args, **kwargs)
-                if result and not (
-                    isinstance(result, dict) and (result.get("status") in {"error", "failed"} or result.get("success") is False)
-                ):
-                    return result
-            except (
-                DomainValidationError,
-                ValueError,
-                StorageError,
-                ProviderIntegrityError,
-                KaggleSubmitAmbiguousError,
-                KaggleClientPollTimeoutError,
-            ):
-                # Input/approval/integrity/post-submit-ambiguous errors must fail closed immediately.
-                raise
-            except ProviderError as exc:
-                if getattr(exc, "category", None) in NON_RETRYABLE_FALLBACK_CATEGORIES:
-                    raise
-                logger.warning("Kaggle account '%s' failed (%s); trying the next token", self.account_name, type(exc).__name__)
-                continue
+                return operation(self, *args, **kwargs)
             except Exception as exc:
-                logger.warning("Kaggle account '%s' failed (%s); trying the next token", self.account_name, type(exc).__name__)
-                continue
-            logger.warning("Kaggle account '%s' failed; trying the next token", self.account_name)
-        raise RuntimeError("All configured Kaggle accounts failed; stopped without publishing success") from None
+                if _is_safe_pre_submit_fallback(exc):
+                    last_exc = exc
+                    logger.warning(
+                        "Kaggle account '%s' rejected pre-submit (%s); trying the next account",
+                        self.account_name,
+                        getattr(exc, "category", type(exc).__name__),
+                    )
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("No authenticated Kaggle account available for pre-submit dispatch") from None
     return dispatch

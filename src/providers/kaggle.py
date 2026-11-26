@@ -280,8 +280,15 @@ class KaggleClient:
             raise
         error = push_res.get("error") if isinstance(push_res, dict) else getattr(push_res, "error", None)
         if not push_res or (isinstance(error, (str, bool)) and error):
+            err_text = str(error or "").strip()
+            if "quota" in err_text.lower():
+                raise KaggleQuotaExhaustedError(
+                    f"Kaggle rejected kernel submission (quota): {err_text}",
+                    category="quota_exhausted",
+                    provider=PROVIDER_NAME,
+                )
             raise KaggleExecutionError(
-                "Kaggle rejected kernel submission",
+                f"Kaggle rejected kernel submission: {err_text}" if err_text else "Kaggle rejected kernel submission",
                 category="submission_rejected",
                 provider=PROVIDER_NAME,
             )
