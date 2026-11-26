@@ -230,8 +230,12 @@ def _prepare_chapter(project, number, work, job, quality, settings, encoder, wor
     if produce:
         update_checkpoint(chapter, StageType.TTS, CheckpointStatus.RUNNING)
     voice = resolve_voice_id(approval.primary_voice)
-    prep = _ChapterShotPrep(chapter, manifest, script, work, settings, encoder, quality, subtitle, watermark, watermark_xy)
-    if not produce:
+    prep = (
+        _ChapterShotPrep(chapter, manifest, script, work, settings, encoder, quality, subtitle, watermark, watermark_xy)
+        if render
+        else None
+    )
+    if prep is not None and not produce:
         prep.input_script = None
     for start in range(0, len(script.segments), batch_size):
         segments = script.segments[start:start + batch_size]

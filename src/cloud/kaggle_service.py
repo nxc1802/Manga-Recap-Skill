@@ -168,6 +168,7 @@ class KaggleCloudService:
         job_type: str = "produce",
         *,
         series: bool = False,
+        cloud_policy: Optional[str] = None,
     ) -> Path:
         from src.cloud.payload import package_payload
 
@@ -177,6 +178,7 @@ class KaggleCloudService:
             out_tar_path,
             job_type,
             series=series,
+            cloud_policy=cloud_policy,
         )
         with tarfile.open(path) as archive:
             manifest = json.load(archive.extractfile("payload_manifest.json"))
@@ -252,6 +254,7 @@ class KaggleCloudService:
         target_height: Optional[int] = None,
         series_chapters: Optional[List[str]] = None,
         compile_feature: bool = False,
+        cloud_policy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Dispatches a chapter or series job to Kaggle Cloud, monitors progress, and syncs outputs."""
         if job_type not in {"tts", "render", "produce"}:
@@ -305,6 +308,7 @@ class KaggleCloudService:
             payload_tar,
             job_type=job_type,
             series=series,
+            cloud_policy=cloud_policy,
         )
         host_timing["package_sec"] = round(time.monotonic() - t_pack, 4)
 
@@ -464,7 +468,7 @@ class KaggleCloudService:
         with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
             client.download_kernel_output(target_kernel_ref, Path(download))
             if series:
-                result = self.sync_series_results(project_slug, chapters, Path(download))
+                result = self.sync_series_results(project_slug, chapters, Path(download), job_type=job_type)
             else:
                 result = self.sync_results(project_slug, chapter_number, Path(download), job_type=job_type)
         self._write_cloud_job_state(job_state_path, {**job_meta, "status": "synced", "result": result})
@@ -507,6 +511,7 @@ class KaggleCloudService:
         project_slug: str,
         chapters: List[str],
         downloaded_dir: Path,
+        job_type: str = "produce",
     ) -> Dict[str, Any]:
         from src.cloud.payload import sync_results
 
@@ -514,7 +519,7 @@ class KaggleCloudService:
             get_project_dir(project_slug),
             chapters,
             downloaded_dir,
-            "produce",
+            job_type,
             getattr(self, "_payload_manifest_hash", None),
             getattr(self, "_dispatch_input_hashes", None),
             series=True,
@@ -545,6 +550,150 @@ class KaggleCloudService:
     @with_account_fallback
     def dispatch_series_job_with_fallback(self, *args, **kwargs) -> Dict[str, Any]:
         return self.dispatch_series_job(*args, **kwargs)
+
+    def dispatch_series_chunks(
+        self,
+        project_slug: str,
+        chapters: List[Any],
+        *,
+        job_type: str = "produce",
+        max_chunk_runtime_sec: float = 25200.0,
+        max_chunk_payload_mb: float = 15360.0,
+        max_chapters_per_chunk: Optional[int] = None,
+        compile_feature: bool = False,
+        use_fallback: bool = True,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Executes a multi-chapter series in workload-sized chunks with verified per-chapter resume."""
+        from src.cloud.chunking import filter_pending_chapters, plan_series_chunks, write_series_chunk_plan
+
+        numbers = [str(number).strip() for number in chapters]
+        if not numbers:
+            raise ValueError("Expected at least one chapter")
+        project = get_project_dir(project_slug)
+        plan_state_path = project / "cloud_series_plan.json"
+
+        verified_done, pending = filter_pending_chapters(project, numbers, job_type, series=True)
+        chunks = (
+            plan_series_chunks(
+                project,
+                pending,
+                job_type,
+                max_chunk_runtime_sec=max_chunk_runtime_sec,
+                max_chunk_payload_mb=max_chunk_payload_mb,
+                max_chapters_per_chunk=max_chapters_per_chunk,
+            )
+            if pending
+            else []
+        )
+
+        chunk_records = [
+            {
+                **chunk.as_dict(),
+                "status": "pending",
+            }
+            for chunk in chunks
+        ]
+        write_series_chunk_plan(
+            plan_state_path,
+            {
+                "project_slug": project_slug,
+                "job_type": job_type,
+                "all_chapters": numbers,
+                "skipped_verified": verified_done,
+                "chunks": chunk_records,
+                "status": "running" if chunks else "synced",
+            },
+        )
+
+        published: Dict[str, Any] = {}
+        dispatch_fn = self.dispatch_chapter_job_with_fallback if use_fallback else self.dispatch_chapter_job
+        for idx, chunk in enumerate(chunks):
+            chunk_records[idx]["status"] = "running"
+            write_series_chunk_plan(
+                plan_state_path,
+                {
+                    "project_slug": project_slug,
+                    "job_type": job_type,
+                    "all_chapters": numbers,
+                    "skipped_verified": verified_done,
+                    "chunks": chunk_records,
+                    "status": "running",
+                },
+            )
+            chunk_res = dispatch_fn(
+                project_slug,
+                chunk.chapters[0],
+                job_type=job_type,
+                series_chapters=list(chunk.chapters),
+                wait=True,
+                compile_feature=False,
+                **kwargs,
+            )
+            chunk_records[idx]["status"] = "synced"
+            if isinstance(chunk_res, dict) and isinstance(chunk_res.get("published"), dict):
+                published.update(chunk_res["published"])
+            write_series_chunk_plan(
+                plan_state_path,
+                {
+                    "project_slug": project_slug,
+                    "job_type": job_type,
+                    "all_chapters": numbers,
+                    "skipped_verified": verified_done,
+                    "chunks": chunk_records,
+                    "status": "running",
+                },
+            )
+
+        verified_after, remaining = filter_pending_chapters(project, numbers, job_type, series=True)
+        feature: Dict[str, Any] = {}
+        compiled_video: Optional[str] = None
+        if compile_feature and job_type != "tts" and not remaining:
+            from src.core.workflow import compile_project_chapters
+
+            compile_res = compile_project_chapters(project_slug, chapters=",".join(numbers), output=None)
+            feature = {
+                key: str(val)
+                for key, val in (compile_res or {}).items()
+                if isinstance(val, str)
+            }
+            compiled_video = feature.get("compiled_video") or feature.get("export_video_path")
+
+        write_series_chunk_plan(
+            plan_state_path,
+            {
+                "project_slug": project_slug,
+                "job_type": job_type,
+                "all_chapters": numbers,
+                "skipped_verified": verified_done,
+                "verified_after": verified_after,
+                "chunks": chunk_records,
+                "feature": feature,
+                "status": "synced" if not remaining else "partial",
+            },
+        )
+        return {
+            "status": "success" if not remaining else "partial",
+            "job_type": f"{job_type}_series",
+            "project_slug": project_slug,
+            "chapters": numbers,
+            "skipped_verified": verified_done,
+            "dispatched_chunks": [chunk.chapters for chunk in chunks],
+            "published": published,
+            "feature": feature,
+            "compiled_video": compiled_video,
+            "plan_path": str(plan_state_path),
+        }
+
+    def resume_series_chunks(self, project_slug: str, chapters: Optional[List[Any]] = None, **kwargs) -> Dict[str, Any]:
+        """Resumes an interrupted chunked series run from ``cloud_series_plan.json``."""
+        project = get_project_dir(project_slug)
+        plan_state_path = project / "cloud_series_plan.json"
+        if chapters is None:
+            saved = read_json(plan_state_path)
+            chapters = list(saved["all_chapters"])
+            kwargs.setdefault("job_type", saved.get("job_type", "produce"))
+        return self.dispatch_series_chunks(project_slug, chapters, **kwargs)
 
     def pull(self, project_slug: str, chapter_number: Optional[str] = None) -> Dict[str, Any]:
         """Resumes a dispatched cloud job, awaits completion, downloads, validates, and syncs outputs."""
@@ -613,7 +762,7 @@ class KaggleCloudService:
         with tempfile.TemporaryDirectory(prefix="manga-kaggle-output-") as download:
             self._client().download_kernel_output(str(job_dict.get("kernel_ref") or state.kernel_ref), Path(download))
             if state.series:
-                result = self.sync_series_results(project_slug, state.chapters, Path(download))
+                result = self.sync_series_results(project_slug, state.chapters, Path(download), job_type=state.job_type)
             else:
                 result = self.sync_results(project_slug, state.chapter_number, Path(download), state.job_type)
         self._write_cloud_job_state(state_path, {**job_dict, "status": "synced", "result": result})
