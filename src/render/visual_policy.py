@@ -14,12 +14,24 @@ SCROLL_VIEWPORT_H_OVER_W = 1.3
 TALL_PANEL_THRESHOLD = 2.4
 
 
+def _is_incompatible_legacy_crop(metadata: dict | None) -> bool:
+    if not metadata:
+        return False
+    if metadata.get("crop_method") == "legacy_9preset":
+        return True
+    if metadata.get("decision_policy") in ("legacy_9preset", "9preset_safe"):
+        return True
+    if "center_crop_preset" in metadata and metadata.get("crop_method") != "4sided_pct":
+        return True
+    return False
+
+
 def resolve_accepted_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
     """
-    Resolves accepted render-only display crop while enforcing safety booleans:
-    `decision_valid`, `crop_safe`, and `text_detection_uncertain`.
+    Resolves accepted render-only display crop while enforcing safety booleans and
+    falling back conservatively to full image for incompatible legacy crop metadata.
     """
-    if not metadata:
+    if not metadata or _is_incompatible_legacy_crop(metadata):
         return Region()
     if metadata.get("decision_valid") is False or metadata.get("crop_safe") is False:
         return Region()
@@ -41,10 +53,12 @@ def _map_subbox_into_region(parent: Region, child: Region) -> Region:
 
 def compute_adaptive_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
     """
-    Computes render-only display crop: trims up to 10% top and 10% bottom
-    (`keep = max(0.80, min(1.0, W/H))`), never cropping below 1:1 and never
-    altering the panel image analyzed by VLM. Respects explicit safe `display_crop`.
+    Computes render-only display crop: respects explicit trusted `display_crop`, uses
+    full-image conservative fallback on incompatible legacy evidence, or trims up to
+    10% top/bottom (`keep = max(0.80, min(1.0, W/H))`).
     """
+    if _is_incompatible_legacy_crop(metadata):
+        return Region()
     if metadata and (metadata.get("decision_valid") is False or metadata.get("crop_safe") is False):
         return Region()
     if metadata and isinstance(metadata.get("display_crop"), dict):

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from src.core.settings import resolve_gemini_api_key
 from src.ingest.decision import (
-    CENTER_CROP_2D_PRESETS,
     CROP_POLICY_VERSION,
     DECISION_QUESTION_VERSION,
     DecisionPolicyConfig,
@@ -40,7 +39,6 @@ __all__ = [
     "DECISIONS_MODEL",
     "DECISION_QUESTION_VERSION",
     "CROP_POLICY_VERSION",
-    "CENTER_CROP_2D_PRESETS",
     "DecisionPolicyConfig",
     "DecisionClient",
     "ProviderContentBlockedError",

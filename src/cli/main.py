@@ -145,7 +145,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_decide.add_argument("--refresh-decisions", action="store_true", help="Bypass cached Decision API answers and re-query")
     p_decide.add_argument("--reapply-policy", action="store_true", help="Re-apply guardrails and thresholds over cached raw answers without API calls")
     p_decide.add_argument("--dry-run", action="store_true", help="Report cache hits and pending API requests without mutating chapter artifacts")
-    p_decide.add_argument("--decision-policy", choices=["4sided", "legacy_9preset"], default=None, help="Override Decision crop/routing policy (default: 4sided adaptive; legacy_9preset for rollback)")
 
     # 5. tts
     p_tts = subparsers.add_parser("tts", help="Synthesize audio for script segments", parents=[common_parent])

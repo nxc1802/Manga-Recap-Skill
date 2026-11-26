@@ -1058,22 +1058,11 @@ def decide_chapter_panels(
     refresh_decisions: bool = False,
     reapply_policy: bool = False,
     dry_run: bool = False,
-    decision_policy: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not project_slug or chapter_num is None:
         raise DomainValidationError("Both --project and --chapter are required.")
-    from src.ingest.decision import DecisionPolicyConfig, run_decision_pipeline
+    from src.ingest.decision import run_decision_pipeline
     chap_dir = get_chapter_dir(project_slug, chapter_num)
-    cfg = None
-    if decision_policy == "legacy_9preset":
-        cfg = DecisionPolicyConfig(
-            policy="legacy_9preset",
-            verify_merges=False,
-            image_resolution=None,
-            adaptive_tall_resolution=None,
-        )
-    elif decision_policy is not None:
-        cfg = DecisionPolicyConfig(policy=decision_policy)
     return run_decision_pipeline(
         chap_dir,
         max_workers=workers,
@@ -1081,7 +1070,6 @@ def decide_chapter_panels(
         refresh_decisions=refresh_decisions,
         reapply_policy=reapply_policy,
         dry_run=dry_run,
-        config=cfg,
     )
 
 

@@ -9,7 +9,6 @@ import pytest
 from PIL import Image, ImageDraw
 
 from src.core.decision_engine import (
-    CENTER_CROP_2D_PRESETS,
     call_gemini_decision as compat_call_gemini_decision,
     run_decision_pipeline as compat_run_decision_pipeline,
 )
@@ -138,25 +137,6 @@ def _four_sided_payload(
             "crop_top": _edge_obj(edges[1]),
             "crop_right": _edge_obj(edges[2]),
             "crop_bottom": _edge_obj(edges[3]),
-        },
-        "usage": {"total_input_tokens": tokens},
-    }
-
-
-def _choice_payload(
-    *,
-    panel_group: str = "group_1_story_art",
-    structure_action: str = "ok_single",
-    center_crop_2d: str = "center_2d_tight",
-    motion_mode: str = "static",
-    tokens: int = 100,
-) -> Dict[str, Any]:
-    return {
-        "answers": {
-            "panel_group": {"choice": panel_group},
-            "structure_action": {"choice": structure_action},
-            "center_crop_2d": {"choice": center_crop_2d},
-            "motion_mode": {"choice": motion_mode},
         },
         "usage": {"total_input_tokens": tokens},
     }
@@ -441,25 +421,46 @@ def test_pipeline_split_merge_and_compat_facade(tmp_path, monkeypatch):
     assert dec["display_crop"] == crop_edges_to_region(0, 0, 10, 0)
 
 
-def test_legacy_9preset_rollback_and_cache_upgrade(tmp_path, monkeypatch):
+def test_stale_legacy_metadata_conservative_fallback_and_cache_upgrade(tmp_path, monkeypatch):
+    from src.core.visual_contract import Region
+    from src.render.visual_policy import compute_adaptive_display_box, resolve_accepted_display_box
+
     chap_dir = _make_manifest_chapter(
         tmp_path,
         monkeypatch,
         [{"panel_id": "panel_001", "width": 800, "height": 1200}],
     )
-    legacy_cfg = DecisionPolicyConfig(policy="legacy_9preset", verify_merges=False, image_resolution=None, adaptive_tall_resolution=None)
-    legacy_client = DecisionClient(
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(lambda _r: httpx.Response(200, json=_choice_payload(center_crop_2d="left_focus_2d")))
-        )
-    )
-    res_legacy = run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=legacy_client, config=legacy_cfg)
-    assert res_legacy["policy"] == "legacy_9preset"
-    man_legacy = load_manifest(chap_dir)
-    assert man_legacy.panels[0].evidence_metadata["center_crop_preset"] == "left_focus_2d"
-    assert man_legacy.panels[0].evidence_metadata["display_crop"] == CENTER_CROP_2D_PRESETS["left_focus_2d"]
+    with pytest.raises(ValueError, match="Only '4sided' is supported"):
+        DecisionPolicyConfig(policy="legacy_9preset")
 
-    # Upgrading to promoted default 4sided invalidates legacy cache cleanly and upgrades metadata
+    # Old legacy_9preset manifest evidence must fall back conservatively to FULL Region(), never guessing crop
+    man_legacy = load_manifest(chap_dir)
+    man_legacy.panels[0].evidence_metadata = {
+        "decision_policy": "legacy_9preset",
+        "crop_method": "legacy_9preset",
+        "center_crop_preset": "left_focus_2d",
+        "display_crop": {"x_min": 0.0, "y_min": 0.08, "x_max": 0.82, "y_max": 0.92},
+        "decision_valid": True,
+        "crop_safe": True,
+    }
+    atomic_write_json(chap_dir / "manifest.json", man_legacy)
+    atomic_write_json(
+        chap_dir / "decision_cache.json",
+        {
+            "panel_001": {
+                "sha256": man_legacy.panels[0].sha256,
+                "width": 800,
+                "height": 1200,
+                "cache_version": "legacy-v5",
+                "raw_answers": {"panel_group": {"choice": "group_1_story_art"}},
+                "decision": {"status": "active"},
+            }
+        },
+    )
+    assert resolve_accepted_display_box(800, 1200, man_legacy.panels[0].evidence_metadata) == Region()
+    assert compute_adaptive_display_box(800, 1200, man_legacy.panels[0].evidence_metadata) == Region()
+
+    # Running Decision pipeline invalidates legacy cache cleanly and upgrades metadata to canonical 4sided
     upgrade_calls = 0
 
     def _upgrade_handler(_: httpx.Request) -> httpx.Response:
@@ -473,4 +474,5 @@ def test_legacy_9preset_rollback_and_cache_upgrade(tmp_path, monkeypatch):
     assert res_upgraded["policy"] == "4sided"
     man_upgraded = load_manifest(chap_dir)
     assert man_upgraded.panels[0].evidence_metadata["crop_method"] == "4sided_pct"
+    assert "center_crop_preset" not in man_upgraded.panels[0].evidence_metadata
     assert man_upgraded.panels[0].evidence_metadata["display_crop"] == crop_edges_to_region(10, 0, 0, 0)

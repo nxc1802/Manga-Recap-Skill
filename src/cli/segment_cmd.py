@@ -88,5 +88,4 @@ def handle_decide(args: argparse.Namespace) -> Dict[str, Any]:
         refresh_decisions=bool(getattr(args, "refresh_decisions", False)),
         reapply_policy=bool(getattr(args, "reapply_policy", False)),
         dry_run=bool(getattr(args, "dry_run", False)),
-        decision_policy=getattr(args, "decision_policy", None),
     )

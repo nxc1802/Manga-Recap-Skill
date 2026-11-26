@@ -45,37 +45,15 @@ CROP_POLICY_VERSION = "2026-v6.2-4sided"
 CROP_PCT_OPTIONS: Tuple[int, ...] = (0, 10, 20, 30, 40)
 CROP_PCT_KEYS: Tuple[str, ...] = ("0", "10", "20", "30", "40")
 CROP_EDGE_NAMES: Tuple[str, ...] = ("left", "top", "right", "bottom")
-
-VALID_DECISION_POLICIES: Tuple[str, ...] = (
-    "legacy_9preset",
-    "9preset_safe",
-    "4sided_with_motion",
-    "4sided",
-)
-
-# 9 2D center-crop presets (retained for legacy_9preset Baseline A comparison & migration reading)
-CENTER_CROP_2D_PRESETS: Dict[str, Dict[str, float]] = {
-    "full": {"x_min": 0.00, "y_min": 0.00, "x_max": 1.00, "y_max": 1.00},
-    "center_v80": {"x_min": 0.00, "y_min": 0.10, "x_max": 1.00, "y_max": 0.90},
-    "center_2d_tight": {"x_min": 0.08, "y_min": 0.10, "x_max": 0.92, "y_max": 0.90},
-    "top_focus": {"x_min": 0.04, "y_min": 0.00, "x_max": 0.96, "y_max": 0.80},
-    "bottom_focus": {"x_min": 0.04, "y_min": 0.20, "x_max": 0.96, "y_max": 1.00},
-    "left_focus_2d": {"x_min": 0.00, "y_min": 0.08, "x_max": 0.82, "y_max": 0.92},
-    "right_focus_2d": {"x_min": 0.18, "y_min": 0.08, "x_max": 1.00, "y_max": 0.92},
-    "top_left_2d": {"x_min": 0.00, "y_min": 0.00, "x_max": 0.84, "y_max": 0.82},
-    "top_right_2d": {"x_min": 0.16, "y_min": 0.00, "x_max": 1.00, "y_max": 0.82},
-}
+FULL_DISPLAY_REGION: Dict[str, float] = {"x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0}
 
 
 @dataclass(frozen=True)
 class DecisionPolicyConfig:
-    """Typed evaluation & guardrail configuration supporting controlled A/B ablations."""
+    """Canonical 4-sided adaptive guardrail configuration for Decision 1 routing and crop framing."""
 
     policy: str = "4sided"
-    include_motion_question: Optional[bool] = None
-    apply_guardrails: Optional[bool] = None
-    verify_high_risk_crop: bool = False
-    verify_merges: Optional[bool] = None
+    verify_merges: bool = True
     image_resolution: Optional[str] = "medium"
     adaptive_tall_resolution: Optional[str] = "high"
     max_height: int = 1024
@@ -91,37 +69,15 @@ class DecisionPolicyConfig:
     split_min_child_ratio: float = 0.10
     split_min_child_px: int = 120
     max_merge_vcs_gap_px: int = 1400
-    verify_high_risk_area_trigger: float = 0.72
-    verify_high_risk_edge_pct_trigger: int = 30
-    verify_high_risk_conf_trigger: float = 0.82
-    verify_high_risk_noul_threshold: float = 0.75
     cost_usd_per_1m_input_tokens: float = DECISION_USD_PER_1M_INPUT_TOKENS
 
     def __post_init__(self) -> None:
-        if self.policy not in VALID_DECISION_POLICIES:
-            raise ValueError(f"Unsupported decision policy '{self.policy}'. Expected one of {VALID_DECISION_POLICIES}.")
-
-    @property
-    def uses_4sided_crop(self) -> bool:
-        return self.policy in ("4sided", "4sided_with_motion")
-
-    @property
-    def uses_guardrails(self) -> bool:
-        if self.apply_guardrails is not None:
-            return bool(self.apply_guardrails)
-        return self.policy != "legacy_9preset"
-
-    @property
-    def asks_motion_question(self) -> bool:
-        if self.include_motion_question is not None:
-            return bool(self.include_motion_question)
-        return self.policy in ("legacy_9preset", "9preset_safe", "4sided_with_motion")
+        if self.policy != "4sided":
+            raise ValueError(f"Unsupported decision policy '{self.policy}'. Only '4sided' is supported in V6.1.")
 
     @property
     def checks_merge_pairs(self) -> bool:
-        if self.verify_merges is not None:
-            return bool(self.verify_merges)
-        return self.uses_guardrails
+        return bool(self.verify_merges)
 
 
 _EDGE_CRITERIA: Dict[str, str] = {
@@ -136,128 +92,44 @@ _EDGE_CRITERIA: Dict[str, str] = {
 def build_panel_questions(
     width: int,
     height: int,
-    *,
-    policy: str = "4sided",
-    include_motion: Optional[bool] = None,
 ) -> Tuple[str, Dict[str, Dict[str, Any]]]:
-    """Builds standardized closed-set questions for single-panel routing and framing."""
+    """Builds standardized closed-set questions for single-panel routing and 4-sided edge framing."""
     hw = round(height / float(max(1, width)), 2)
-    if policy in ("4sided", "4sided_with_motion"):
-        ask_motion = (policy == "4sided_with_motion") if include_motion is None else bool(include_motion)
-        ctx = (
-            f"Manga panel {width}x{height}px (H/W={hw:.2f}) for 16:9 recap display. "
-            "Preserve character faces, eyes, bodies, action details, and essential story dialogue. "
-            "Trim only safely dispensable outer blank margin, flat backdrop, site watermark, or outer filler. "
-            "Trim percentages apply independently to original panel edges."
-        )
-        questions: Dict[str, Dict[str, Any]] = {
-            "panel_group": {
-                "type": "choice",
-                "instructions": "Classify this panel into one production group.",
-                "criteria": {
-                    "group_1_story_art": "Contains manga characters, creatures, action, effects, or scene art (even if overlaid with a site watermark).",
-                    "group_2_text_only": "Contains ONLY speech bubbles, narration, SFX, or title card on plain background with NO character or scene drawing.",
-                    "group_3_skip": "Standalone site ad banner, standalone translator watermark/logo, dotted separator, or blank transition strip with NO story artwork or dialogue.",
-                },
-            },
-            "structure_action": {
-                "type": "choice",
-                "instructions": "Does this panel have a vertical segmentation defect requiring split or merge?",
-                "criteria": {
-                    "ok_single": "Single frame, continuous tall illustration without stacked separate borders, or non-story card.",
-                    "needs_split": "Tall strip (typically H/W >= 2.2) with 2+ distinct stacked scenes/frames to separate.",
-                    "merge_with_prev": "Short cut-off sliver or split fragment belonging together with the immediately preceding panel.",
-                },
-            },
-        }
-        for side in CROP_EDGE_NAMES:
-            questions[f"crop_{side}"] = {
-                "type": "choice",
-                "instructions": (
-                    f"How much of the {side.upper()} edge of this original image can be safely trimmed "
-                    "(0-40%) without clipping faces, bodies, action, or essential dialogue?"
-                ),
-                "criteria": dict(_EDGE_CRITERIA),
-            }
-        if ask_motion:
-            questions["motion_mode"] = {
-                "type": "choice",
-                "instructions": "Select video camera motion based on aspect ratio after display crop.",
-                "criteria": {
-                    "static": f"Static hold when cropped H/W <= {SCROLL_VIEWPORT_H_OVER_W}.",
-                    "slow_pan_down": f"Slow scroll down only when cropped H/W > {SCROLL_VIEWPORT_H_OVER_W}.",
-                },
-            }
-        return ctx, questions
-
     ctx = (
-        f"Webtoon panel metadata: width={width}px, height={height}px, height/width ratio={hw:.2f}. "
-        "Classify this single panel independently for manga recap video production."
+        f"Manga panel {width}x{height}px (H/W={hw:.2f}) for 16:9 recap display. "
+        "Preserve character faces, eyes, bodies, action details, and essential story dialogue. "
+        "Trim only safely dispensable outer blank margin, flat backdrop, site watermark, or outer filler. "
+        "Trim percentages apply independently to original panel edges."
     )
-    questions = {
+    questions: Dict[str, Dict[str, Any]] = {
         "panel_group": {
             "type": "choice",
-            "instructions": "Classify this panel into one of the three production groups.",
+            "instructions": "Classify this panel into one production group.",
             "criteria": {
-                "group_1_story_art": (
-                    "Contains manga/webtoon artwork showing characters, creatures, action, magic effects, "
-                    "or environments (with or without speech bubbles)."
-                ),
-                "group_2_text_only": (
-                    "Contains ONLY speech bubbles, narration text, sound effects (SFX), or a chapter title card "
-                    "on a plain solid black, white, or blank gradient background with NO character or scene drawing."
-                ),
-                "group_3_skip": (
-                    "Website advertisement banner (e.g. TRUYENQQQ.COM promo), standalone translator watermark/logo "
-                    "(e.g. RINKO COMICS.COM), dotted separator, or blank transition strip with no story dialogue."
-                ),
+                "group_1_story_art": "Contains manga characters, creatures, action, effects, or scene art (even if overlaid with a site watermark).",
+                "group_2_text_only": "Contains ONLY speech bubbles, narration, SFX, or title card on plain background with NO character or scene drawing.",
+                "group_3_skip": "Standalone site ad banner, standalone translator watermark/logo, dotted separator, or blank transition strip with NO story artwork or dialogue.",
             },
         },
         "structure_action": {
             "type": "choice",
-            "instructions": "Check if this panel has a structural segmentation defect.",
+            "instructions": "Does this panel have a vertical segmentation defect requiring split or merge?",
             "criteria": {
-                "ok_single": (
-                    "Complete single frame, OR a single continuous tall illustration/scene without separate "
-                    "stacked panel borders, OR a non-story text/ad card."
-                ),
-                "needs_split": (
-                    "Very tall composite strip (especially H/W > 2.6) containing TWO OR MORE distinct sequential "
-                    "story frames/scenes stacked vertically (including frames bridged by a speech bubble in between)."
-                ),
-                "merge_with_prev": (
-                    "Very short cut-off sliver or half-sliced fragment (H/W < 0.4) clearly cut mid-speech-bubble "
-                    "or mid-face that belongs together with the immediately preceding panel."
-                ),
-            },
-        },
-        "center_crop_2d": {
-            "type": "choice",
-            "instructions": (
-                "Choose the best 2D display framing crop for a 16:9 video frame focusing on character faces "
-                "and visual action while avoiding edge speech bubbles and dead margins."
-            ),
-            "criteria": {
-                "full": "Keep 100% of image (square/landscape H/W <= 1.25 or tight composition touching all edges).",
-                "center_v80": "Keep middle 80% vertically (x:0..1, y:0.10..0.90), trimming top/bottom empty margin or edge bubbles.",
-                "center_2d_tight": "Keep 2D center subject box (x:0.08..0.92, y:0.10..0.90), trimming bubbles/margins on all 4 sides.",
-                "top_focus": "Focus upper 80% (x:0.04..0.96, y:0.00..0.80) when key character/face is near the top.",
-                "bottom_focus": "Focus lower 80% (x:0.04..0.96, y:0.20..1.00) when key character/face is near the bottom.",
-                "left_focus_2d": "Focus left-center 2D (x:0.00..0.82, y:0.08..0.92) when subject is on left and bubble/blank on right.",
-                "right_focus_2d": "Focus right-center 2D (x:0.18..1.00, y:0.08..0.92) when subject is on right and bubble/blank on left.",
-                "top_left_2d": "Focus top-left 2D (x:0.00..0.84, y:0.00..0.82) for upper-left character framing.",
-                "top_right_2d": "Focus top-right 2D (x:0.16..1.00, y:0.00..0.82) for upper-right character framing.",
-            },
-        },
-        "motion_mode": {
-            "type": "choice",
-            "instructions": "Select video camera motion for this panel based on its aspect ratio and layout.",
-            "criteria": {
-                "static": f"Keep static when the display crop has H/W <= {SCROLL_VIEWPORT_H_OVER_W}.",
-                "slow_pan_down": f"Scroll down only when the display crop has H/W > {SCROLL_VIEWPORT_H_OVER_W}.",
+                "ok_single": "Single frame, continuous tall illustration without stacked separate borders, or non-story card.",
+                "needs_split": "Tall strip (typically H/W >= 2.2) with 2+ distinct stacked scenes/frames to separate.",
+                "merge_with_prev": "Short cut-off sliver or split fragment belonging together with the immediately preceding panel.",
             },
         },
     }
+    for side in CROP_EDGE_NAMES:
+        questions[f"crop_{side}"] = {
+            "type": "choice",
+            "instructions": (
+                f"How much of the {side.upper()} edge of this original image can be safely trimmed "
+                "(0-40%) without clipping faces, bodies, action, or essential dialogue?"
+            ),
+            "criteria": dict(_EDGE_CRITERIA),
+        }
     return ctx, questions
 
 
@@ -266,37 +138,28 @@ def compute_decision_cache_version(
     *,
     config: Optional[DecisionPolicyConfig] = None,
 ) -> str:
-    """Computes a stable version stamp over model + question contract + preprocess config."""
+    """Computes a stable version stamp over model + 4-sided question contract + preprocess config."""
     cfg = config or DecisionPolicyConfig()
-    _, sample_questions = build_panel_questions(
-        1000,
-        1000,
-        policy=cfg.policy,
-        include_motion=cfg.asks_motion_question,
-    )
+    _, sample_questions = build_panel_questions(1000, 1000)
     canonical_spec: Dict[str, Any] = {
         "model": model,
         "question_version": DECISION_QUESTION_VERSION,
-        "policy": cfg.policy,
-        "asks_motion": cfg.asks_motion_question,
+        "policy": "4sided",
+        "crop_policy_version": CROP_POLICY_VERSION,
+        "crop_pct_options": list(CROP_PCT_OPTIONS),
         "questions": sample_questions,
         "preprocess": {
             "max_height": cfg.max_height,
-            "max_width": cfg.max_width if cfg.policy != "legacy_9preset" else None,
+            "max_width": cfg.max_width,
             "jpeg_quality": cfg.jpeg_quality,
             "image_resolution": cfg.image_resolution,
             "adaptive_tall_resolution": cfg.adaptive_tall_resolution,
         },
     }
-    if cfg.policy in ("legacy_9preset", "9preset_safe"):
-        canonical_spec["crop_presets"] = CENTER_CROP_2D_PRESETS
-    else:
-        canonical_spec["crop_policy_version"] = CROP_POLICY_VERSION
-        canonical_spec["crop_pct_options"] = list(CROP_PCT_OPTIONS)
     digest = hashlib.sha256(
         json.dumps(canonical_spec, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:16]
-    return f"{model}:{DECISION_QUESTION_VERSION}:{cfg.policy}:{digest}"
+    return f"{model}:{DECISION_QUESTION_VERSION}:4sided:{digest}"
 
 
 def crop_edges_to_region(left: int, top: int, right: int, bottom: int) -> Dict[str, float]:
@@ -399,7 +262,7 @@ def evaluate_4sided_crop(
             answers.get(f"crop_{side}"),
             edge_conf_threshold=cfg.edge_conf_threshold,
             edge_margin_threshold=cfg.edge_margin_threshold,
-            apply_guardrails=cfg.uses_guardrails,
+            apply_guardrails=True,
         )
         if raw_pct is None:
             valid = False
@@ -517,17 +380,16 @@ def interpret_panel_answers(
     config: Optional[DecisionPolicyConfig] = None,
 ) -> Dict[str, Any]:
     """
-    Pure, deterministic interpretation over raw API answers so policy thresholds can be
-    re-evaluated cleanly via `--reapply-policy` without re-calling Gemini Decisions API.
+    Pure, deterministic 4-sided interpretation over raw API answers so thresholds can be
+    re-evaluated offline via `--reapply-policy` without re-calling Gemini Decisions API.
     """
     cfg = config or DecisionPolicyConfig()
     if raw_payload.get("blocked"):
-        full_box = dict(CENTER_CROP_2D_PRESETS["full"])
+        full_box = dict(FULL_DISPLAY_REGION)
         return {
             "panel_group": "needs_review",
             "status": PanelStatus.NEEDS_REVIEW.value,
             "structure_action": "ok_single",
-            "center_crop_2d": "full" if not cfg.uses_4sided_crop else None,
             "crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "raw_crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "display_crop": full_box,
@@ -538,7 +400,7 @@ def interpret_panel_answers(
             "group_confidence": None,
             "structure_confidence": None,
             "crop_confidence": None,
-            "crop_method": "4sided_pct" if cfg.uses_4sided_crop else "legacy_9preset",
+            "crop_method": "4sided_pct",
             "review_reason": raw_payload.get("review_reason") or "content_blocked",
             "usage": raw_payload.get("usage", {}),
             "_meta": raw_payload.get("_meta", {}),
@@ -575,42 +437,7 @@ def interpret_panel_answers(
     valid_group = group_key in group_map
     valid_struct = struct_key in ("ok_single", "needs_split", "merge_with_prev")
 
-    if not cfg.uses_guardrails:
-        # Frozen Baseline A compatibility mode
-        eff_group = group_key if valid_group else "group_1_story_art"
-        eff_struct = struct_key if valid_struct else "ok_single"
-        status = group_map[eff_group]
-        crop_key = answers.get("center_crop_2d", {}).get("choice", "full")
-        if crop_key not in CENTER_CROP_2D_PRESETS:
-            crop_key = "full"
-        motion_key = answers.get("motion_mode", {}).get("choice", "static")
-        if status != PanelStatus.ACTIVE:
-            crop_key = "full"
-            motion_key = "static"
-        hw = height / float(max(1, width))
-        if eff_struct == "needs_split" and (status != PanelStatus.ACTIVE or hw < cfg.split_min_hw):
-            eff_struct = "ok_single"
-        return {
-            "panel_group": eff_group,
-            "status": status.value,
-            "structure_action": eff_struct,
-            "center_crop_2d": crop_key,
-            "display_crop": dict(CENTER_CROP_2D_PRESETS[crop_key]),
-            "motion_mode": "scroll" if motion_key == "slow_pan_down" else "static",
-            "decision_valid": valid_group and valid_struct,
-            "crop_safe": True,
-            "text_detection_uncertain": False,
-            "group_confidence": round(group_conf, 4) if group_conf is not None else None,
-            "structure_confidence": round(struct_conf, 4) if struct_conf is not None else None,
-            "crop_confidence": None,
-            "crop_method": "legacy_9preset",
-            "review_reason": None,
-            "usage": raw_payload.get("usage", {}),
-            "_meta": raw_payload.get("_meta", {}),
-        }
-
-    # Guarded modes (9preset_safe, 4sided_with_motion, 4sided)
-    missing_group_conf = cfg.uses_4sided_crop and group_conf is None
+    missing_group_conf = group_conf is None
     low_group_conf = group_conf is not None and group_conf < cfg.group_conf_threshold
     if not valid_group or not valid_struct or missing_group_conf or low_group_conf:
         reason = (
@@ -618,12 +445,11 @@ def interpret_panel_answers(
             if not (valid_group and valid_struct)
             else ("missing_group_confidence" if missing_group_conf else f"low_group_confidence:{group_conf:.3f}")
         )
-        full_box = dict(CENTER_CROP_2D_PRESETS["full"])
+        full_box = dict(FULL_DISPLAY_REGION)
         return {
             "panel_group": group_key or "uncertain",
             "status": PanelStatus.NEEDS_REVIEW.value,
             "structure_action": "ok_single",
-            "center_crop_2d": "full" if not cfg.uses_4sided_crop else None,
             "crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "raw_crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "display_crop": full_box,
@@ -634,7 +460,7 @@ def interpret_panel_answers(
             "group_confidence": round(group_conf, 4) if group_conf is not None else None,
             "structure_confidence": round(struct_conf, 4) if struct_conf is not None else None,
             "crop_confidence": None,
-            "crop_method": "4sided_pct" if cfg.uses_4sided_crop else "legacy_9preset",
+            "crop_method": "4sided_pct",
             "review_reason": reason,
             "usage": raw_payload.get("usage", {}),
             "_meta": raw_payload.get("_meta", {}),
@@ -647,12 +473,11 @@ def interpret_panel_answers(
         eff_struct = "ok_single"
 
     if status != PanelStatus.ACTIVE:
-        full_box = dict(CENTER_CROP_2D_PRESETS["full"])
+        full_box = dict(FULL_DISPLAY_REGION)
         return {
             "panel_group": str(group_key),
             "status": status.value,
             "structure_action": eff_struct if eff_struct == "merge_with_prev" else "ok_single",
-            "center_crop_2d": "full" if not cfg.uses_4sided_crop else None,
             "crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "raw_crop_edges_pct": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "display_crop": full_box,
@@ -663,77 +488,33 @@ def interpret_panel_answers(
             "group_confidence": round(group_conf, 4) if group_conf is not None else None,
             "structure_confidence": round(struct_conf, 4) if struct_conf is not None else None,
             "crop_confidence": None,
-            "crop_method": "4sided_pct" if cfg.uses_4sided_crop else "legacy_9preset",
+            "crop_method": "4sided_pct",
             "review_reason": None,
             "usage": raw_payload.get("usage", {}),
             "_meta": raw_payload.get("_meta", {}),
         }
 
-    if cfg.uses_4sided_crop:
-        crop_res = evaluate_4sided_crop(answers, width, height, config=cfg)
-        if cfg.asks_motion_question and isinstance(answers.get("motion_mode"), dict):
-            m_choice = answers["motion_mode"].get("choice")
-            motion_mode = "scroll" if m_choice == "slow_pan_down" else "static"
-        else:
-            motion_mode = crop_res["motion_mode"]
-        return {
-            "panel_group": str(group_key),
-            "status": PanelStatus.ACTIVE.value,
-            "structure_action": eff_struct,
-            "center_crop_2d": None,
-            "crop_edges_pct": crop_res["crop_edges_pct"],
-            "raw_crop_edges_pct": crop_res["raw_crop_edges_pct"],
-            "display_crop": crop_res["display_crop"],
-            "retained_width": crop_res["retained_width"],
-            "retained_height": crop_res["retained_height"],
-            "retained_area": crop_res["retained_area"],
-            "guardrail_adjusted": crop_res["guardrail_adjusted"],
-            "motion_mode": motion_mode if crop_res["decision_valid"] else "static",
-            "decision_valid": crop_res["decision_valid"],
-            "crop_safe": crop_res["crop_safe"],
-            "text_detection_uncertain": not crop_res["decision_valid"],
-            "group_confidence": round(group_conf, 4) if group_conf is not None else None,
-            "structure_confidence": round(struct_conf, 4) if struct_conf is not None else None,
-            "crop_confidence": crop_res["crop_confidence"],
-            "crop_method": "4sided_pct",
-            "review_reason": None if crop_res["decision_valid"] else "invalid_crop_answer",
-            "usage": raw_payload.get("usage", {}),
-            "_meta": raw_payload.get("_meta", {}),
-        }
-
-    # 9preset_safe (Baseline B ablation: 9 presets + strict confidence/safety)
-    crop_obj = answers.get("center_crop_2d") if isinstance(answers.get("center_crop_2d"), dict) else {}
-    crop_key = crop_obj.get("choice")
-    crop_conf_raw = crop_obj.get("confidence")
-    crop_conf = (
-        float(crop_conf_raw)
-        if isinstance(crop_conf_raw, (int, float)) and not isinstance(crop_conf_raw, bool)
-        else None
-    )
-    if not isinstance(crop_key, str) or crop_key not in CENTER_CROP_2D_PRESETS:
-        crop_key = "full"
-        crop_safe = False
-    elif crop_key != "full" and crop_conf is not None and crop_conf < cfg.edge_conf_threshold:
-        crop_key = "full"
-        crop_safe = True
-    else:
-        crop_safe = True
-    motion_key = answers.get("motion_mode", {}).get("choice", "static")
+    crop_res = evaluate_4sided_crop(answers, width, height, config=cfg)
     return {
         "panel_group": str(group_key),
         "status": PanelStatus.ACTIVE.value,
         "structure_action": eff_struct,
-        "center_crop_2d": crop_key,
-        "display_crop": dict(CENTER_CROP_2D_PRESETS[crop_key]),
-        "motion_mode": "scroll" if motion_key == "slow_pan_down" else "static",
-        "decision_valid": True,
-        "crop_safe": crop_safe,
-        "text_detection_uncertain": not crop_safe,
+        "crop_edges_pct": crop_res["crop_edges_pct"],
+        "raw_crop_edges_pct": crop_res["raw_crop_edges_pct"],
+        "display_crop": crop_res["display_crop"],
+        "retained_width": crop_res["retained_width"],
+        "retained_height": crop_res["retained_height"],
+        "retained_area": crop_res["retained_area"],
+        "guardrail_adjusted": crop_res["guardrail_adjusted"],
+        "motion_mode": crop_res["motion_mode"] if crop_res["decision_valid"] else "static",
+        "decision_valid": crop_res["decision_valid"],
+        "crop_safe": crop_res["crop_safe"],
+        "text_detection_uncertain": not crop_res["decision_valid"],
         "group_confidence": round(group_conf, 4) if group_conf is not None else None,
         "structure_confidence": round(struct_conf, 4) if struct_conf is not None else None,
-        "crop_confidence": round(crop_conf, 4) if crop_conf is not None else None,
-        "crop_method": "legacy_9preset",
-        "review_reason": None,
+        "crop_confidence": crop_res["crop_confidence"],
+        "crop_method": "4sided_pct",
+        "review_reason": None if crop_res["decision_valid"] else "invalid_crop_answer",
         "usage": raw_payload.get("usage", {}),
         "_meta": raw_payload.get("_meta", {}),
     }
@@ -756,12 +537,7 @@ def _evaluate_panel_raw(
     config: Optional[DecisionPolicyConfig] = None,
 ) -> Dict[str, Any]:
     cfg = config or DecisionPolicyConfig()
-    ctx, questions = build_panel_questions(
-        width,
-        height,
-        policy=cfg.policy,
-        include_motion=cfg.asks_motion_question,
-    )
+    ctx, questions = build_panel_questions(width, height)
     eff_resolution = _resolve_panel_resolution(width, height, cfg)
     try:
         res = call_gemini_decision(
@@ -770,7 +546,7 @@ def _evaluate_panel_raw(
             questions=questions,
             api_key=api_key,
             max_height=cfg.max_height,
-            max_width=cfg.max_width if cfg.policy != "legacy_9preset" else None,
+            max_width=cfg.max_width,
             quality=cfg.jpeg_quality,
             image_resolution=eff_resolution,
             client=client,
@@ -790,7 +566,7 @@ def decide_single_panel(
     client: Optional[DecisionClient] = None,
     config: Optional[DecisionPolicyConfig] = None,
 ) -> Dict[str, Any]:
-    """Runs Decision 1 evaluation for a single panel image using the configured policy."""
+    """Runs Decision 1 evaluation for a single panel image using canonical 4-sided framing."""
     cfg = config or DecisionPolicyConfig()
     raw_res = _evaluate_panel_raw(
         image_path,
@@ -803,91 +579,6 @@ def decide_single_panel(
     dec = interpret_panel_answers(raw_res, width, height, config=cfg)
     dec["raw_answers"] = raw_res.get("answers", {})
     return dec
-
-
-def _build_crop_verify_composite_b64(
-    image_path: Path,
-    display_crop: Dict[str, float],
-    *,
-    max_height: int = 1024,
-) -> Dict[str, Any]:
-    """Builds a side-by-side composite (`original + proposed box | candidate crop`) for high-risk verification."""
-    with Image.open(image_path) as im:
-        rgb = im.convert("RGB")
-        w, h = rgb.size
-        left = rgb.copy()
-        draw = ImageDraw.Draw(left)
-        x0 = int(round(display_crop["x_min"] * w))
-        y0 = int(round(display_crop["y_min"] * h))
-        x1 = min(w - 1, max(x0 + 1, int(round(display_crop["x_max"] * w))))
-        y1 = min(h - 1, max(y0 + 1, int(round(display_crop["y_max"] * h))))
-        draw.rectangle([x0, y0, x1, y1], outline=(0, 220, 80), width=max(4, w // 120))
-        right = rgb.crop((x0, y0, min(w, x1 + 1), min(h, y1 + 1)))
-
-        target_h = min(max_height, max(h, right.height))
-        scale_l = target_h / float(max(1, left.height))
-        left_r = left.resize((max(1, int(round(left.width * scale_l))), target_h), Image.Resampling.LANCZOS)
-        scale_r = target_h / float(max(1, right.height))
-        right_r = right.resize((max(1, int(round(right.width * scale_r))), target_h), Image.Resampling.LANCZOS)
-
-        gap = 12
-        comp = Image.new("RGB", (left_r.width + gap + right_r.width, target_h), (24, 24, 24))
-        comp.paste(left_r, (0, 0))
-        comp.paste(right_r, (left_r.width + gap, 0))
-        buf = io.BytesIO()
-        comp.save(buf, format="JPEG", quality=82)
-        import base64
-
-        raw_bytes = buf.getvalue()
-        return {
-            "b64": base64.b64encode(raw_bytes).decode("ascii"),
-            "jpeg_bytes": len(raw_bytes),
-        }
-
-
-def verify_crop_safety_via_decision(
-    image_path: Path,
-    crop_result: Dict[str, Any],
-    api_key: str,
-    *,
-    client: DecisionClient,
-    config: DecisionPolicyConfig,
-) -> Dict[str, Any]:
-    """Runs an optional single `noul` verification pass for aggressive or borderline crops."""
-    enc = _build_crop_verify_composite_b64(
-        image_path,
-        crop_result["display_crop"],
-        max_height=config.max_height,
-    )
-    img_block: Dict[str, Any] = {"type": "image", "data": enc["b64"], "mime_type": "image/jpeg"}
-    if config.image_resolution:
-        img_block["resolution"] = config.image_resolution
-    questions = {
-        "crop_preserves_subject": {
-            "type": "noul",
-            "instructions": (
-                "Left shows the original panel with a green crop box; right shows the cropped result. "
-                "Does the cropped result preserve all faces, characters, main actions, and essential plot text?"
-            ),
-            "criteria": {
-                "true_description": "All faces, actions, and vital text remain completely intact.",
-                "false_description": "A face, limb/action detail, or essential plot speech bubble is cut off or unclear.",
-            },
-        }
-    }
-    res = client.call_input(
-        input_blocks=[img_block, {"type": "text", "text": f"Verify crop edges={crop_result.get('crop_edges_pct')}."}],
-        questions=questions,
-        api_key=api_key,
-        payload_bytes=enc["jpeg_bytes"],
-    )
-    p_ok = float(res["answers"]["crop_preserves_subject"]["noul"])
-    return {
-        "passed": p_ok >= config.verify_high_risk_noul_threshold,
-        "p_ok": round(p_ok, 4),
-        "usage": res.get("usage", {}),
-        "_meta": res.get("_meta", {}),
-    }
 
 
 def _choose_cut_ratios_detailed(
@@ -914,11 +605,10 @@ def _choose_cut_ratios_detailed(
             f"Split cleanly at horizontal red line CUT #{c['index']} (y_ratio={c['ratio']:.3f}) "
             "inside a white/empty transition gap between two stacked comic frames without cutting through faces."
         )
-    # In guarded/4sided modes ALWAYS offer no_split even if H/W >= 4.0 so continuous art is never forced-cut
-    if cfg.uses_guardrails or hw_ratio < 4.0:
-        criteria["no_split"] = (
-            "Keep panel intact without splitting if it is one continuous illustration or every red cut line cuts faces, bodies, or dialogue."
-        )
+    # Always offer no_split even if H/W >= 4.0 so continuous art is never forced-cut.
+    criteria["no_split"] = (
+        "Keep panel intact without splitting if it is one continuous illustration or every red cut line cuts faces, bodies, or dialogue."
+    )
 
     questions: Dict[str, Dict[str, Any]] = {
         "primary_cut": {
@@ -981,8 +671,8 @@ def _choose_cut_ratios_detailed(
             chosen.append(cand_map[s_choice])
     chosen.sort()
 
-    # Validate minimum child height constraints when guardrails are active
-    if cfg.uses_guardrails and chosen:
+    # Validate minimum child height constraints
+    if chosen:
         min_frac = max(cfg.split_min_child_ratio, cfg.split_min_child_px / float(panel_h))
         bounds = [0.0] + chosen + [1.0]
         valid_cuts = all((b - a) >= min_frac for a, b in zip(bounds, bounds[1:]))
@@ -1203,10 +893,7 @@ def _apply_decision_to_panel(
 
     if p.status == PanelStatus.ACTIVE:
         p.evidence_metadata.pop("review_reason", None)
-        if dec.get("center_crop_2d") is not None:
-            p.evidence_metadata["center_crop_preset"] = dec["center_crop_2d"]
-        else:
-            p.evidence_metadata.pop("center_crop_preset", None)
+        p.evidence_metadata.pop("center_crop_preset", None)
         if dec.get("crop_edges_pct") is not None:
             p.evidence_metadata["crop_edges_pct"] = dec["crop_edges_pct"]
         else:
@@ -1215,14 +902,12 @@ def _apply_decision_to_panel(
             p.evidence_metadata["raw_crop_edges_pct"] = dec["raw_crop_edges_pct"]
         else:
             p.evidence_metadata.pop("raw_crop_edges_pct", None)
-        p.evidence_metadata["crop_method"] = dec.get("crop_method", "legacy_9preset")
+        p.evidence_metadata["crop_method"] = dec.get("crop_method", "4sided_pct")
         if dec.get("crop_confidence") is not None:
             p.evidence_metadata["crop_confidence"] = dec["crop_confidence"]
         else:
             p.evidence_metadata.pop("crop_confidence", None)
-        p.evidence_metadata["crop_policy_version"] = (
-            CROP_POLICY_VERSION if cfg.uses_4sided_crop else DECISION_QUESTION_VERSION
-        )
+        p.evidence_metadata["crop_policy_version"] = CROP_POLICY_VERSION
         p.evidence_metadata["display_crop"] = dec["display_crop"]
         p.evidence_metadata["tall_motion_hint"] = dec["motion_mode"]
         if isinstance(p.notes, str) and p.notes.startswith(("needs_review |", "skip |", "text_only |")):
@@ -1456,66 +1141,6 @@ def run_decision_pipeline(
                 if first_error is not None:
                     raise first_error
 
-            # Optional Policy E verification on high-risk aggressive 4-sided crops
-            if cfg.verify_high_risk_crop and cfg.uses_4sided_crop:
-                hr_targets: List[PanelItem] = []
-                for p in panels:
-                    dec = pass1[p.panel_id]
-                    if dec["status"] != PanelStatus.ACTIVE.value or not dec.get("crop_safe"):
-                        continue
-                    edges = dec.get("crop_edges_pct") or {}
-                    if not any(int(v or 0) > 0 for v in edges.values()):
-                        continue
-                    area_f = float(dec.get("retained_area") or 1.0)
-                    max_edge = max(int(v or 0) for v in edges.values())
-                    min_conf = (dec.get("crop_confidence") or {}).get("min_edge")
-                    if (
-                        area_f <= cfg.verify_high_risk_area_trigger
-                        or max_edge >= cfg.verify_high_risk_edge_pct_trigger
-                        or (min_conf is not None and float(min_conf) < cfg.verify_high_risk_conf_trigger)
-                    ):
-                        hr_targets.append(p)
-                if hr_targets:
-                    for p in hr_targets:
-                        v_key = f"__cverify_{p.panel_id}"
-                        cached_v = cache_payload.get(v_key) if not force_refresh else None
-                        if (
-                            isinstance(cached_v, dict)
-                            and cached_v.get("sha256") == p.sha256
-                            and cached_v.get("width") == p.width
-                            and cached_v.get("height") == p.height
-                            and cached_v.get("cache_version") == cache_version
-                            and cached_v.get("crop_edges_pct") == pass1[p.panel_id].get("crop_edges_pct")
-                        ):
-                            vres = dict(cached_v["result"])
-                            telemetry["cache_hits"]["crop_verify"] += 1
-                        else:
-                            vres = verify_crop_safety_via_decision(
-                                chap_dir / p.relative_path,
-                                pass1[p.panel_id],
-                                key,
-                                client=transport,
-                                config=cfg,
-                            )
-                            _record_usage_and_latency(telemetry, "crop_verify", vres.get("usage"), vres.get("_meta"))
-                            cache_payload[v_key] = {
-                                "sha256": p.sha256,
-                                "width": p.width,
-                                "height": p.height,
-                                "cache_version": cache_version,
-                                "crop_edges_pct": pass1[p.panel_id].get("crop_edges_pct"),
-                                "result": {"passed": vres["passed"], "p_ok": vres["p_ok"]},
-                            }
-                        if not vres["passed"]:
-                            dec = pass1[p.panel_id]
-                            dec["crop_edges_pct"] = {"left": 0, "top": 0, "right": 0, "bottom": 0}
-                            dec["display_crop"] = dict(CENTER_CROP_2D_PRESETS["full"])
-                            dec["retained_width"] = dec["retained_height"] = dec["retained_area"] = 1.0
-                            dec["guardrail_adjusted"] = True
-                            dec["motion_mode"] = compute_deterministic_motion(p.width, p.height, dec["display_crop"])
-                            dec["crop_verify_failed"] = True
-                    _flush_cache()
-
             # Resolve split cut positions with cache
             split_targets = [p for p in panels if pass1[p.panel_id]["structure_action"] == "needs_split"]
             split_cuts = {}
@@ -1707,11 +1332,8 @@ def run_decision_pipeline(
             to_reclassify = [
                 p
                 for p in updated_manifest.panels
-                if (reclassify_all and not cfg.uses_4sided_crop)
-                or (
-                    p.evidence_metadata.get("repack_op") in ("split_at", "merge")
-                    and panel_origins.get(p.panel_id) != "child_pass2"
-                )
+                if p.evidence_metadata.get("repack_op") in ("split_at", "merge")
+                and panel_origins.get(p.panel_id) != "child_pass2"
             ]
             pass2 = {}
             if to_reclassify:
