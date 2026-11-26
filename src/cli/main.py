@@ -137,11 +137,15 @@ def build_parser() -> JsonAwareArgumentParser:
     p_pinspect.add_argument("--panels", required=True, help="Comma-separated panel IDs to inspect")
 
     # 4e. decide
-    p_decide = subparsers.add_parser("decide", help="Classify panels, resolve splits/merges, and assign 2D crops via gemini-decision-1", parents=[common_parent])
+    p_decide = subparsers.add_parser("decide", help="Classify panels, resolve splits/merges, and assign 4-sided crops via gemini-decision-1", parents=[common_parent])
     p_decide.add_argument("-p", "--project", required=True, help="Project slug")
     p_decide.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_decide.add_argument("--workers", type=int, default=2, help="Concurrent Decision API requests (default: 2)")
-    p_decide.add_argument("--reclassify-all", action="store_true", help="Re-evaluate all panels in Pass 2")
+    p_decide.add_argument("--reclassify-all", action="store_true", help="Refresh all Pass 1 and Pass 2 decisions cleanly")
+    p_decide.add_argument("--refresh-decisions", action="store_true", help="Bypass cached Decision API answers and re-query")
+    p_decide.add_argument("--reapply-policy", action="store_true", help="Re-apply guardrails and thresholds over cached raw answers without API calls")
+    p_decide.add_argument("--dry-run", action="store_true", help="Report cache hits and pending API requests without mutating chapter artifacts")
+    p_decide.add_argument("--decision-policy", choices=["4sided", "legacy_9preset"], default=None, help="Override Decision crop/routing policy (default: 4sided adaptive; legacy_9preset for rollback)")
 
     # 5. tts
     p_tts = subparsers.add_parser("tts", help="Synthesize audio for script segments", parents=[common_parent])

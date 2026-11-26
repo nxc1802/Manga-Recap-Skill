@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -101,6 +102,29 @@ def _compute_split_intervals(
     return [(cuts[i], cuts[i + 1]) for i in range(len(cuts) - 1) if cuts[i + 1] > cuts[i]]
 
 
+def _recover_interrupted_repack(chap_dir: Path) -> None:
+    """Restores backup directories if a prior repack crashed mid-swap and prunes stale staging dirs."""
+    panels_dir = chap_dir / "panels"
+    sheets_dir = chap_dir / "contact_sheets"
+    backup_panels = chap_dir / ".repack_backup_panels"
+    backup_sheets = chap_dir / ".repack_backup_sheets"
+    if backup_panels.exists() and not panels_dir.exists():
+        backup_panels.replace(panels_dir)
+    elif backup_panels.exists():
+        shutil.rmtree(backup_panels, ignore_errors=True)
+    if backup_sheets.exists() and not sheets_dir.exists():
+        backup_sheets.replace(sheets_dir)
+    elif backup_sheets.exists():
+        shutil.rmtree(backup_sheets, ignore_errors=True)
+    for stale in (
+        chap_dir / ".repack_panels_tmp",
+        chap_dir / ".repack_stage_panels",
+        chap_dir / ".repack_stage_sheets",
+    ):
+        if stale.exists():
+            shutil.rmtree(stale, ignore_errors=True)
+
+
 def apply_panel_plan(
     chapter_dir: Path,
     plan: PanelPlan,
@@ -108,12 +132,16 @@ def apply_panel_plan(
     cell_size: int = 480,
     grid_cols: int = 4,
     grid_rows: int = 4,
+    regenerate_sheets: bool = True,
 ) -> Dict[str, Any]:
     """
     Applies AI VLM `panel_plan.json` directly against raw pages via VCS coordinates.
-    Regenerates `panels/`, `contact_sheets/` (excluding SKIP), and `manifest.json`.
+    Uses a metadata-only fast path when no split/merge structural changes occur, and stages
+    multi-file structural repacks with backup/restore recovery before atomic swap.
     """
     chap_dir = Path(chapter_dir)
+    _recover_interrupted_repack(chap_dir)
+
     manifest = load_manifest(chap_dir)
     if manifest is None or not manifest.panels:
         raise ValueError(f"Missing or empty manifest.json in {chap_dir}")
@@ -140,117 +168,293 @@ def apply_panel_plan(
     if missing:
         raise ValueError(f"panel_plan must cover all manifest panels; missing: {missing[:10]}")
 
-    raw_dir = chap_dir / "raw"
-    valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
-    raw_files = [f for f in raw_dir.iterdir() if f.suffix.lower() in valid_exts and f.is_file()]
-    segmenter = StreamingSegmenter(target_width=target_width)
-    page_maps = segmenter.build_page_maps(raw_files)
-    _, row_vars = segmenter.compute_1d_profiles(page_maps)
-
     panels_dir = chap_dir / "panels"
     panels_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir = chap_dir / ".repack_panels_tmp"
-    if tmp_dir.exists():
-        for f in tmp_dir.glob("*"):
-            f.unlink(missing_ok=True)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
+    sheets_dir = chap_dir / "contact_sheets"
+    sheets_dir.mkdir(parents=True, exist_ok=True)
+
+    has_structural_ops = any(
+        item.op in (PanelPlanOp.SPLIT, PanelPlanOp.SPLIT_AT, PanelPlanOp.MERGE)
+        for item in plan.items
+    )
+    can_fast_metadata = (
+        not has_structural_ops
+        and [item.source_panel_ids[0] for item in plan.items] == [p.panel_id for p in manifest.panels]
+        and all((chap_dir / p.relative_path).is_file() and (chap_dir / p.relative_path).stat().st_size > 0 for p in manifest.panels)
+    )
 
     new_panels: List[PanelItem] = []
-    seq = 1
+    split_diagnostics: Dict[str, Dict[str, Any]] = {}
 
-    for item in plan.items:
-        src_items = [by_id[pid] for pid in item.source_panel_ids]
-        v_starts = [p.vcs_start for p in src_items if p.vcs_start is not None]
-        v_ends = [p.vcs_end for p in src_items if p.vcs_end is not None]
-        if len(v_starts) != len(src_items) or len(v_ends) != len(src_items):
-            raise ValueError(f"Missing VCS coordinates on source panels {item.source_panel_ids}; re-run segment first.")
-
-        v_top, v_bottom = min(v_starts), max(v_ends)
-        if item.op in (PanelPlanOp.SPLIT, PanelPlanOp.SPLIT_AT):
-            ratios = item.cut_ratios if item.cut_ratios is not None else item.split_ratios
-            sub_intervals = _compute_split_intervals(
-                v_top, v_bottom, item.split_parts, ratios, row_vars
-            )
-        else:
-            sub_intervals = [(v_top, v_bottom)]
-
-        for sub_top, sub_bottom in sub_intervals:
-            extracted = segmenter.extract_vcs_crop(page_maps, sub_top, sub_bottom)
-            if extracted is None:
-                continue
-            crop_img, source_name, crop_box = extracted
-            final_w, final_h = crop_img.size
-
-            panel_id = f"panel_{seq:03d}"
-            filename = f"{panel_id}.jpg"
-            out_file = tmp_dir / filename
-            crop_img.save(out_file, "JPEG", quality=90, progressive=True)
-            crop_img.close()
-
-            meta: Dict[str, Any] = {
-                "classification_group": item.group.value,
-                "repack_op": item.op.value,
-                "source_raw_panels": item.source_panel_ids,
-            }
+    if can_fast_metadata:
+        for item, orig in zip(plan.items, manifest.panels):
+            meta = dict(orig.evidence_metadata or {})
+            meta["classification_group"] = item.group.value
+            meta["repack_op"] = item.op.value
+            meta["source_raw_panels"] = list(item.source_panel_ids)
+            meta["source_raw_sha256s"] = [orig.sha256]
+            if orig.vcs_start is not None and orig.vcs_end is not None:
+                meta["source_vcs_range"] = [orig.vcs_start, orig.vcs_end]
             if item.tall_motion_hint:
                 meta["tall_motion_hint"] = item.tall_motion_hint
-
             notes = item.reason or f"repack:{item.op.value}"
             if item.group == PanelStatus.CONTEXT_ONLY and "text_only" not in notes.lower():
                 notes = f"text_only | {notes}"
-
             new_panels.append(
-                PanelItem(
-                    panel_id=panel_id,
-                    sequence_number=seq,
-                    filename=filename,
-                    relative_path=f"panels/{filename}",
-                    source_image=source_name,
-                    crop_box=crop_box,
-                    vcs_start=sub_top,
-                    vcs_end=sub_bottom,
-                    width=final_w,
-                    height=final_h,
-                    aspect_ratio=round(float(final_w) / float(final_h), 3) if final_h > 0 else 1.0,
-                    sha256=calculate_sha256(out_file),
-                    status=item.group,
-                    evidence_metadata=meta,
-                    notes=notes,
+                orig.model_copy(
+                    update={
+                        "status": item.group,
+                        "evidence_metadata": meta,
+                        "notes": notes,
+                    }
                 )
             )
-            seq += 1
+        contact_sheets = manifest.contact_sheets
+        if regenerate_sheets:
+            stage_sheets = chap_dir / ".repack_stage_sheets"
+            backup_sheets = chap_dir / ".repack_backup_sheets"
+            stage_sheets.mkdir(parents=True, exist_ok=True)
+            try:
+                reviewable_panels = [p for p in new_panels if p.status != PanelStatus.SKIP]
+                sheet_gen = ContactSheetGenerator(cell_size=cell_size, columns=grid_cols, rows=grid_rows)
+                contact_sheets = sheet_gen.generate_sheets(reviewable_panels, panels_dir, stage_sheets)
+                if sheets_dir.exists():
+                    sheets_dir.replace(backup_sheets)
+                stage_sheets.replace(sheets_dir)
+            except Exception:
+                if backup_sheets.exists() and not sheets_dir.exists():
+                    backup_sheets.replace(sheets_dir)
+                shutil.rmtree(stage_sheets, ignore_errors=True)
+                raise
+            finally:
+                shutil.rmtree(backup_sheets, ignore_errors=True)
+        updated_manifest = PanelManifest(
+            schema_version=manifest.schema_version,
+            project_slug=manifest.project_slug,
+            chapter_number=manifest.chapter_number,
+            source_url=manifest.source_url,
+            created_at=utc_iso_now(),
+            total_raw_images=manifest.total_raw_images,
+            total_panels=len(new_panels),
+            raw_images=manifest.raw_images,
+            panels=new_panels,
+            contact_sheets=contact_sheets,
+            panel_plan_applied=True,
+        )
+        atomic_write_json(chap_dir / "manifest.json", updated_manifest)
+        counts = {
+            "active": sum(1 for p in new_panels if p.status == PanelStatus.ACTIVE),
+            "context_only": sum(1 for p in new_panels if p.status == PanelStatus.CONTEXT_ONLY),
+            "skip": sum(1 for p in new_panels if p.status == PanelStatus.SKIP),
+        }
+        return {
+            "project_slug": manifest.project_slug,
+            "chapter_number": manifest.chapter_number,
+            "total_panels": len(new_panels),
+            "counts_by_group": counts,
+            "total_contact_sheets": len(contact_sheets),
+            "panel_plan_applied": True,
+            "fast_path": "metadata_only",
+            "split_diagnostics": split_diagnostics,
+        }
 
-    # Atomically swap repacked panels into panels/
-    for old_f in panels_dir.glob("*"):
-        old_f.unlink(missing_ok=True)
-    for new_f in tmp_dir.glob("*.jpg"):
-        new_f.replace(panels_dir / new_f.name)
-    tmp_dir.rmdir()
-
-    # Regenerate clean Contact Sheets containing only non-SKIP panels (Group 1 & Group 2)
-    sheets_dir = chap_dir / "contact_sheets"
-    sheets_dir.mkdir(parents=True, exist_ok=True)
-    for old_s in sheets_dir.glob("*"):
-        old_s.unlink(missing_ok=True)
-
-    reviewable_panels = [p for p in new_panels if p.status != PanelStatus.SKIP]
-    sheet_gen = ContactSheetGenerator(cell_size=cell_size, columns=grid_cols, rows=grid_rows)
-    contact_sheets = sheet_gen.generate_sheets(reviewable_panels, panels_dir, sheets_dir)
-
-    updated_manifest = PanelManifest(
-        schema_version=manifest.schema_version,
-        project_slug=manifest.project_slug,
-        chapter_number=manifest.chapter_number,
-        source_url=manifest.source_url,
-        created_at=utc_iso_now(),
-        total_raw_images=manifest.total_raw_images,
-        total_panels=len(new_panels),
-        raw_images=manifest.raw_images,
-        panels=new_panels,
-        contact_sheets=contact_sheets,
-        panel_plan_applied=True,
+    needs_raw_extract = any(
+        item.op in (PanelPlanOp.SPLIT, PanelPlanOp.SPLIT_AT, PanelPlanOp.MERGE)
+        or not (chap_dir / by_id[item.source_panel_ids[0]].relative_path).is_file()
+        for item in plan.items
     )
-    atomic_write_json(chap_dir / "manifest.json", updated_manifest)
+    segmenter = None
+    page_maps = None
+    row_vars = None
+    if needs_raw_extract:
+        raw_dir = chap_dir / "raw"
+        valid_exts = {".jpg", ".jpeg", ".png", ".webp"}
+        raw_files = [f for f in raw_dir.iterdir() if f.suffix.lower() in valid_exts and f.is_file()]
+        segmenter = StreamingSegmenter(target_width=target_width)
+        page_maps = segmenter.build_page_maps(raw_files)
+        _, row_vars = segmenter.compute_1d_profiles(page_maps)
+
+    stage_panels = chap_dir / ".repack_stage_panels"
+    stage_panels.mkdir(parents=True, exist_ok=True)
+    seq = 1
+    try:
+        for item in plan.items:
+            src_items = [by_id[pid] for pid in item.source_panel_ids]
+            v_starts = [p.vcs_start for p in src_items if p.vcs_start is not None]
+            v_ends = [p.vcs_end for p in src_items if p.vcs_end is not None]
+            if len(v_starts) != len(src_items) or len(v_ends) != len(src_items):
+                raise ValueError(f"Missing VCS coordinates on source panels {item.source_panel_ids}; re-run segment first.")
+
+            v_top, v_bottom = min(v_starts), max(v_ends)
+            # Reuse existing bytes for unsplit/unmerged KEEP/DROP panels when file exists cleanly.
+            if item.op in (PanelPlanOp.KEEP, PanelPlanOp.DROP) and len(src_items) == 1:
+                src = src_items[0]
+                src_path = chap_dir / src.relative_path
+                if src_path.is_file() and src_path.stat().st_size > 0:
+                    panel_id = f"panel_{seq:03d}"
+                    filename = f"{panel_id}.jpg"
+                    out_file = stage_panels / filename
+                    shutil.copy2(src_path, out_file)
+                    meta: Dict[str, Any] = {
+                        "classification_group": item.group.value,
+                        "repack_op": item.op.value,
+                        "source_raw_panels": list(item.source_panel_ids),
+                        "source_raw_sha256s": [src.sha256],
+                        "source_vcs_range": [v_top, v_bottom],
+                    }
+                    if item.tall_motion_hint:
+                        meta["tall_motion_hint"] = item.tall_motion_hint
+                    notes = item.reason or f"repack:{item.op.value}"
+                    if item.group == PanelStatus.CONTEXT_ONLY and "text_only" not in notes.lower():
+                        notes = f"text_only | {notes}"
+                    new_panels.append(
+                        PanelItem(
+                            panel_id=panel_id,
+                            sequence_number=seq,
+                            filename=filename,
+                            relative_path=f"panels/{filename}",
+                            source_image=src.source_image,
+                            crop_box=src.crop_box,
+                            vcs_start=src.vcs_start,
+                            vcs_end=src.vcs_end,
+                            width=src.width,
+                            height=src.height,
+                            aspect_ratio=src.aspect_ratio,
+                            sha256=src.sha256,
+                            status=item.group,
+                            evidence_metadata=meta,
+                            notes=notes,
+                        )
+                    )
+                    seq += 1
+                    continue
+
+            assert segmenter is not None and page_maps is not None
+            if item.op in (PanelPlanOp.SPLIT, PanelPlanOp.SPLIT_AT):
+                ratios = item.cut_ratios if item.cut_ratios is not None else item.split_ratios
+                sub_intervals = _compute_split_intervals(
+                    v_top, v_bottom, item.split_parts, ratios, row_vars
+                )
+            else:
+                ratios = None
+                sub_intervals = [(v_top, v_bottom)]
+
+            created_ids: List[str] = []
+            for sub_top, sub_bottom in sub_intervals:
+                extracted = segmenter.extract_vcs_crop(page_maps, sub_top, sub_bottom)
+                if extracted is None:
+                    continue
+                crop_img, source_name, crop_box = extracted
+                final_w, final_h = crop_img.size
+
+                panel_id = f"panel_{seq:03d}"
+                filename = f"{panel_id}.jpg"
+                out_file = stage_panels / filename
+                crop_img.save(out_file, "JPEG", quality=90, progressive=True)
+                crop_img.close()
+
+                meta = {
+                    "classification_group": item.group.value,
+                    "repack_op": item.op.value,
+                    "source_raw_panels": list(item.source_panel_ids),
+                    "source_raw_sha256s": [s.sha256 for s in src_items],
+                    "source_vcs_range": [v_top, v_bottom],
+                }
+                if item.tall_motion_hint:
+                    meta["tall_motion_hint"] = item.tall_motion_hint
+
+                notes = item.reason or f"repack:{item.op.value}"
+                if item.group == PanelStatus.CONTEXT_ONLY and "text_only" not in notes.lower():
+                    notes = f"text_only | {notes}"
+
+                new_panels.append(
+                    PanelItem(
+                        panel_id=panel_id,
+                        sequence_number=seq,
+                        filename=filename,
+                        relative_path=f"panels/{filename}",
+                        source_image=source_name,
+                        crop_box=crop_box,
+                        vcs_start=sub_top,
+                        vcs_end=sub_bottom,
+                        width=final_w,
+                        height=final_h,
+                        aspect_ratio=round(float(final_w) / float(final_h), 3) if final_h > 0 else 1.0,
+                        sha256=calculate_sha256(out_file),
+                        status=item.group,
+                        evidence_metadata=meta,
+                        notes=notes,
+                    )
+                )
+                created_ids.append(panel_id)
+                seq += 1
+
+            if item.op in (PanelPlanOp.SPLIT, PanelPlanOp.SPLIT_AT) and v_bottom > v_top:
+                applied_cuts = [
+                    round((sub_top - v_top) / float(v_bottom - v_top), 4)
+                    for sub_top, _ in sub_intervals[1:]
+                ]
+                split_diagnostics[item.source_panel_ids[0]] = {
+                    "predicted_cut_ratios": list(ratios or []),
+                    "applied_cut_ratios": applied_cuts,
+                    "child_panel_ids": created_ids,
+                }
+
+        if not new_panels:
+            raise ValueError("Repack produced 0 valid panels; aborting commit cleanly.")
+        for p in new_panels:
+            staged_file = stage_panels / p.filename
+            if not staged_file.is_file() or staged_file.stat().st_size == 0:
+                raise RuntimeError(f"Staged panel file missing or empty: {p.filename}")
+
+        contact_sheets = manifest.contact_sheets
+        stage_sheets = chap_dir / ".repack_stage_sheets"
+        if regenerate_sheets:
+            stage_sheets.mkdir(parents=True, exist_ok=True)
+            reviewable_panels = [p for p in new_panels if p.status != PanelStatus.SKIP]
+            sheet_gen = ContactSheetGenerator(cell_size=cell_size, columns=grid_cols, rows=grid_rows)
+            contact_sheets = sheet_gen.generate_sheets(reviewable_panels, stage_panels, stage_sheets)
+
+        backup_panels = chap_dir / ".repack_backup_panels"
+        backup_sheets = chap_dir / ".repack_backup_sheets"
+        try:
+            if panels_dir.exists():
+                panels_dir.replace(backup_panels)
+            stage_panels.replace(panels_dir)
+            if regenerate_sheets:
+                if sheets_dir.exists():
+                    sheets_dir.replace(backup_sheets)
+                stage_sheets.replace(sheets_dir)
+            updated_manifest = PanelManifest(
+                schema_version=manifest.schema_version,
+                project_slug=manifest.project_slug,
+                chapter_number=manifest.chapter_number,
+                source_url=manifest.source_url,
+                created_at=utc_iso_now(),
+                total_raw_images=manifest.total_raw_images,
+                total_panels=len(new_panels),
+                raw_images=manifest.raw_images,
+                panels=new_panels,
+                contact_sheets=contact_sheets,
+                panel_plan_applied=True,
+            )
+            atomic_write_json(chap_dir / "manifest.json", updated_manifest)
+        except Exception:
+            if backup_panels.exists():
+                if panels_dir.exists():
+                    shutil.rmtree(panels_dir, ignore_errors=True)
+                backup_panels.replace(panels_dir)
+            if regenerate_sheets and backup_sheets.exists():
+                if sheets_dir.exists():
+                    shutil.rmtree(sheets_dir, ignore_errors=True)
+                backup_sheets.replace(sheets_dir)
+            raise
+        finally:
+            shutil.rmtree(backup_panels, ignore_errors=True)
+            shutil.rmtree(backup_sheets, ignore_errors=True)
+    finally:
+        shutil.rmtree(stage_panels, ignore_errors=True)
+        shutil.rmtree(chap_dir / ".repack_stage_sheets", ignore_errors=True)
 
     counts = {
         "active": sum(1 for p in new_panels if p.status == PanelStatus.ACTIVE),
@@ -264,6 +468,8 @@ def apply_panel_plan(
         "counts_by_group": counts,
         "total_contact_sheets": len(contact_sheets),
         "panel_plan_applied": True,
+        "fast_path": "structural_staged",
+        "split_diagnostics": split_diagnostics,
     }
 
 
@@ -317,8 +523,12 @@ def inspect_panels_with_candidates(
                 ratio = round(cy / float(h), 3)
                 candidates.append({"index": idx, "y": cy, "ratio": ratio})
                 draw.line([(0, cy), (w, cy)], fill=(255, 60, 0), width=4)
-                draw.rectangle([(10, max(0, cy - 26)), (170, cy)], fill=(255, 60, 0))
-                draw.text((16, max(2, cy - 22)), f"CUT #{idx} ({ratio:.2f})", fill=(255, 255, 255))
+                # Alternate tag x-offset when adjacent cuts are close so labels never obscure content or collide
+                tag_w, tag_h = 164, 24
+                x_left = 10 if (idx % 2 == 1) else max(10, min(w - tag_w - 10, w // 3))
+                y_top = max(0, cy - tag_h) if cy >= tag_h else min(h - tag_h, cy + 4)
+                draw.rectangle([(x_left, y_top), (min(w - 1, x_left + tag_w), y_top + tag_h)], fill=(255, 60, 0))
+                draw.text((x_left + 6, y_top + 4), f"CUT #{idx} ({ratio:.2f})", fill=(255, 255, 255))
 
             out_img = inspect_dir / f"inspect_{norm_pid}.jpg"
             rgb.save(out_img, "JPEG", quality=88)

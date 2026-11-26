@@ -1,0 +1,222 @@
+{
+  "head_commit": "2caaad2bf2c6d9efbdd8cfb1ac443c0f918cdabe",
+  "working_tree_note": "On branch feat/kaggle-production-optimization with verified Phase 8 + batch_size edits cleanly isolated to cloud/, kaggle.py, visual_policy.py SKIP guard, README/SKILL/docs.",
+  "baseline_tests": {
+    "full_suite": "576 passed in 61.79s",
+    "ingest_and_media": "186 passed in 10.88s"
+  },
+  "live_api_smoke_2_panels": [
+    {
+      "label": "story_panel",
+      "panel": "panel_005.jpg",
+      "w": 1080,
+      "h": 2646,
+      "response": {
+        "answers": {
+          "center_crop_2d": {
+            "confidence": 0.3259981711880141,
+            "choice": "bottom_focus",
+            "probabilities": {
+              "full": 0.006576512453667574,
+              "center_2d_tight": 0.10029308921515896,
+              "left_focus_2d": 0.08278162155818673,
+              "top_left_2d": 0.07619948201638635,
+              "center_v80": 0.08657851204347233,
+              "bottom_focus": 0.3259981711880141,
+              "right_focus_2d": 0.07476970471142154,
+              "top_focus": 0.1922448506277815,
+              "top_right_2d": 0.054558056185911016
+            },
+            "type": "choice"
+          },
+          "panel_group": {
+            "confidence": 0.9809047247810532,
+            "choice": "group_1_story_art",
+            "probabilities": {
+              "group_3_skip": 0.00982186043776377,
+              "group_1_story_art": 0.9809047247810532,
+              "group_2_text_only": 0.009273414781183018
+            },
+            "type": "choice"
+          },
+          "motion_mode": {
+            "confidence": 0.948067922432162,
+            "choice": "slow_pan_down",
+            "probabilities": {
+              "slow_pan_down": 0.948067922432162,
+              "static": 0.05193207756783794
+            },
+            "type": "choice"
+          },
+          "structure_action": {
+            "confidence": 0.9036047090240654,
+            "choice": "ok_single",
+            "probabilities": {
+              "merge_with_prev": 0.015890989654879943,
+              "needs_split": 0.08050430132105456,
+              "ok_single": 0.9036047090240654
+            },
+            "type": "choice"
+          }
+        },
+        "usage": {
+          "total_tokens": 2110,
+          "total_input_tokens": 2110,
+          "input_tokens_by_modality": [
+            {
+              "modality": "text",
+              "tokens": 1018
+            },
+            {
+              "modality": "image",
+              "tokens": 1092
+            }
+          ],
+          "total_output_tokens": 0
+        }
+      }
+    },
+    {
+      "label": "skip_or_edge_panel",
+      "panel": "panel_004.jpg",
+      "w": 1080,
+      "h": 3335,
+      "response": {
+        "answers": {
+          "structure_action": {
+            "confidence": 0.9522880673532834,
+            "choice": "ok_single",
+            "probabilities": {
+              "ok_single": 0.9522880673532834,
+              "merge_with_prev": 0.007932062116204959,
+              "needs_split": 0.03977987053051153
+            },
+            "type": "choice"
+          },
+          "center_crop_2d": {
+            "confidence": 0.5230543429352307,
+            "choice": "bottom_focus",
+            "probabilities": {
+              "center_2d_tight": 0.12200194682847576,
+              "left_focus_2d": 0.013371839965819424,
+              "top_left_2d": 0.036739033845521595,
+              "full": 0.015915627171808,
+              "top_right_2d": 0.039171655031443105,
+              "bottom_focus": 0.5230543429352307,
+              "center_v80": 0.0690397200057335,
+              "top_focus": 0.1423257361044892,
+              "right_focus_2d": 0.03838009811147871
+            },
+            "type": "choice"
+          },
+          "panel_group": {
+            "confidence": 0.9816920627610848,
+            "choice": "group_1_story_art",
+            "probabilities": {
+              "group_3_skip": 0.005767475988501229,
+              "group_1_story_art": 0.9816920627610848,
+              "group_2_text_only": 0.012540461250413934
+            },
+            "type": "choice"
+          },
+          "motion_mode": {
+            "confidence": 0.9376757634129776,
+            "choice": "slow_pan_down",
+            "probabilities": {
+              "slow_pan_down": 0.9376757634129776,
+              "static": 0.06232423658702224
+            },
+            "type": "choice"
+          }
+        },
+        "usage": {
+          "total_tokens": 2120,
+          "total_input_tokens": 2120,
+          "input_tokens_by_modality": [
+            {
+              "modality": "text",
+              "tokens": 1018
+            },
+            {
+              "modality": "image",
+              "tokens": 1102
+            }
+          ],
+          "total_output_tokens": 0
+        }
+      }
+    }
+  ],
+  "historical_caches": {
+    "bac-si-hoi-quy-chi-muon-song-yen-binh": {
+      "entries": 188,
+      "groups": {
+        "group_3_skip": 57,
+        "group_2_text_only": 36,
+        "group_1_story_art": 95
+      },
+      "structs": {
+        "ok_single": 168,
+        "merge_with_prev": 11,
+        "needs_split": 9
+      },
+      "crops": {
+        "full": 99,
+        "center_v80": 19,
+        "right_focus_2d": 16,
+        "bottom_focus": 37,
+        "top_focus": 7,
+        "left_focus_2d": 3,
+        "center_2d_tight": 3,
+        "top_right_2d": 3,
+        "top_left_2d": 1
+      },
+      "motions": {
+        "static": 110,
+        "scroll": 78
+      },
+      "plan_ops": {
+        "drop": 54,
+        "keep": 115,
+        "split_at": 9,
+        "merge": 5
+      },
+      "pass1_tokens_sum": 392132,
+      "pass1_tokens_median": 2093
+    },
+    "tro-thanh-rong-nho": {
+      "entries": 118,
+      "groups": {
+        "group_3_skip": 23,
+        "group_1_story_art": 79,
+        "group_2_text_only": 16
+      },
+      "structs": {
+        "ok_single": 96,
+        "merge_with_prev": 16,
+        "needs_split": 6
+      },
+      "crops": {
+        "full": 45,
+        "bottom_focus": 29,
+        "top_focus": 12,
+        "center_v80": 13,
+        "right_focus_2d": 7,
+        "center_2d_tight": 11,
+        "left_focus_2d": 1
+      },
+      "motions": {
+        "static": 55,
+        "scroll": 63
+      },
+      "plan_ops": {
+        "drop": 14,
+        "keep": 76,
+        "merge": 10,
+        "split_at": 5
+      },
+      "pass1_tokens_sum": 247570,
+      "pass1_tokens_median": 2107
+    }
+  }
+}
