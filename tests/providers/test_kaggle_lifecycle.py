@@ -343,9 +343,15 @@ def test_worker_heartbeat_watchdog_and_disk_low_water(unit_project, tmp_path, mo
 
     fake_child = _FakeChild()
 
+    clock = [0.0]
+
     class _FakeQueue:
         def get(self, timeout=None):
+            clock[0] += 10.0
             raise queue.Empty()
+
+        def put_nowait(self, item):
+            pass
 
         def qsize(self):
             return 0
@@ -361,8 +367,7 @@ def test_worker_heartbeat_watchdog_and_disk_low_water(unit_project, tmp_path, mo
             return fake_child
 
     monkeypatch.setattr(worker.mp, "get_context", lambda *_args: _FakeCtx())
-    mono_vals = iter([0.0, 0.0, 100.0, 100.0])
-    monkeypatch.setattr(worker.time, "monotonic", lambda: next(mono_vals, 200.0))
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
 
     with pytest.raises(RuntimeError, match="heartbeat stalled"):
         worker.run_pipeline(

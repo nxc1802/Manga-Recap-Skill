@@ -112,8 +112,9 @@ manga-recap produce --project <slug> --chapters <range> --compile --json
 *(Compatibility equivalents: `render --quality final` for Chapter 1 promotion, `batch`, `cloud produce-series`, `cloud pull`, `compile`.)*
 
 **Resume & external monitoring:**
-- Check `manga-recap status --project <slug> --json` to inspect chapter states, `next_action`, and blockers after interruptions.
-- Monitor Kaggle jobs after **5 minutes** via `status` / `cloud pull`; report queue stalls or OAuth expirations promptly instead of looping blindly.
+- Check `manga-recap status --project <slug> --json` to inspect chapter states, `next_action`, blockers, resolved Kaggle policy/hardware telemetry, and chunked series resume receipts after interruptions.
+- Kaggle jobs persist pre-submit intent (`SUBMITTING`) and reconcile `SUBMIT_UNKNOWN` / `CLIENT_TIMEOUT` states cleanly before retrying; use `manga-recap cloud pull --project <slug> [--chapter <N>] --json` to resume running kernels or sync completed chunk outputs.
+- Monitor Kaggle jobs after **5 minutes** via `status` / `cloud pull`; report queue stalls or OAuth expirations promptly instead of looping blindly. (Note: live Kaggle Dual-T4 comparative policy benchmarks are unverified offline; `--cloud-policy auto` defaults safely to `baseline_split`.)
 
 ---
 

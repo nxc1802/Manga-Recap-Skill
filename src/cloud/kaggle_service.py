@@ -382,6 +382,7 @@ class KaggleCloudService:
             "input_hashes": self._dispatch_input_hashes,
             "host_timing": host_timing,
             "budget": budget.as_dict(),
+            "cloud_policy": cloud_policy or "auto",
         }
         persist_submit_intent(job_state_path, job_meta)
 

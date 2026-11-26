@@ -82,7 +82,8 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         require_series_setup(project_slug)
 
         gpu = not getattr(args, "no_gpu", False)
-        logger.info(f"Dispatching cloud production job for {project_slug} ch.{chapter_number} (GPU={gpu})...")
+        cloud_policy = getattr(args, "cloud_policy", "auto") or "auto"
+        logger.info(f"Dispatching cloud production job for {project_slug} ch.{chapter_number} (GPU={gpu}, policy={cloud_policy})...")
 
         try:
             res = service.dispatch_chapter_job_with_fallback(
@@ -90,6 +91,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 chapter_number=str(chapter_number),
                 gpu=gpu,
                 wait=True,
+                cloud_policy=cloud_policy,
             )
             return {
                 "status": "success",
@@ -173,21 +175,41 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         raw_burn = getattr(args, "burn_subtitles", False)
         burn_subtitles = True if raw_burn is True else None
         fps = getattr(args, "fps", None)
+        cloud_policy = getattr(args, "cloud_policy", "auto") or "auto"
+        chunked = bool(getattr(args, "chunked", False))
 
-        logger.info(f"Dispatching cloud series production for {project_slug} chapters={chapters} (GPU={gpu})...")
+        logger.info(
+            f"Dispatching cloud series production for {project_slug} chapters={chapters} "
+            f"(GPU={gpu}, policy={cloud_policy}, chunked={chunked})..."
+        )
         try:
-            res = service.dispatch_series_job_with_fallback(
-                project_slug=project_slug,
-                chapters=chapters,
-                gpu=gpu,
-                wait=True,
-                skip_preview=skip_preview,
-                compile_feature=compile_feature,
-                render_workers=render_workers,
-                video_mode=video_mode,
-                burn_subtitles=burn_subtitles,
-                fps=fps,
-            )
+            if chunked:
+                res = service.dispatch_series_chunks(
+                    project_slug=project_slug,
+                    chapters=chapters,
+                    gpu=gpu,
+                    skip_preview=skip_preview,
+                    compile_feature=compile_feature,
+                    render_workers=render_workers,
+                    video_mode=video_mode,
+                    burn_subtitles=burn_subtitles,
+                    fps=fps,
+                    cloud_policy=cloud_policy,
+                )
+            else:
+                res = service.dispatch_series_job_with_fallback(
+                    project_slug=project_slug,
+                    chapters=chapters,
+                    gpu=gpu,
+                    wait=True,
+                    skip_preview=skip_preview,
+                    compile_feature=compile_feature,
+                    render_workers=render_workers,
+                    video_mode=video_mode,
+                    burn_subtitles=burn_subtitles,
+                    fps=fps,
+                    cloud_policy=cloud_policy,
+                )
             return {
                 "status": "success",
                 "command": "cloud produce-series",

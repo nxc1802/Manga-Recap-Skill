@@ -266,6 +266,12 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_run.add_argument("--provider", choices=["kaggle"], default="kaggle", help="Cloud provider (default: kaggle)")
     p_cld_run.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
     p_cld_run.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
+    p_cld_run.add_argument(
+        "--cloud-policy",
+        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        default="auto",
+        help="Dual-GPU execution policy override (default: auto)",
+    )
 
     p_cld_info = cloud_subs.add_parser("info", help="Get cloud provider information and authentication status", parents=[common_parent])
     p_cld_info.add_argument("--provider", choices=["kaggle"], default="kaggle")
@@ -296,6 +302,18 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_series.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable camera motion animations")
     p_cld_series.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
     p_cld_series.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
+    p_cld_series.add_argument(
+        "--cloud-policy",
+        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        default="auto",
+        help="Dual-GPU execution policy override (default: auto)",
+    )
+    p_cld_series.add_argument(
+        "--chunked",
+        action="store_true",
+        default=False,
+        help="Split multi-chapter series into workload-sized chunks with verified incremental resume",
+    )
 
     # 15. review-pack
     p_rp = subparsers.add_parser("review-pack", aliases=["review_pack"], help="Generate lightweight static human review pack", parents=[common_parent])
@@ -362,6 +380,12 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
     p_prod.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
     p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
+    p_prod.add_argument(
+        "--cloud-policy",
+        choices=["auto", "baseline_split", "dual_tts_shared_encode", "dual_tts_then_dual_encode", "one_tts_dual_encode"],
+        default="auto",
+        help="Kaggle Dual-GPU execution policy override (default: auto)",
+    )
     p_prod.add_argument("--force", action="store_true", help="Force re-processing of completed chapters")
 
     # 23. publish (metadata, upload, and post-upload verification)
@@ -438,6 +462,7 @@ def _handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
         render_workers=getattr(args, "render_workers", 2),
         tts_workers=getattr(args, "tts_workers", 2),
         force=bool(getattr(args, "force", False)),
+        cloud_policy=str(getattr(args, "cloud_policy", "auto") or "auto"),
     )
 
 

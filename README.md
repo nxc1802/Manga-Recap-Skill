@@ -26,8 +26,10 @@ Optional credentials (see `.env.example`):
 4. **Preview Chapter 1:** Run `manga-recap preview --project <slug> --chapter 1 --json` to synthesize TTS, render `preview.mp4`, and build `review_pack.html` / `review_pack.json`.
 5. **Approve:** After human review of Chapter 1's video/pack, record approval bound to exact config and artifact hashes:
    `manga-recap approve --project <slug> --reviewer "<user>" --config-fingerprint "<hash>" --artifact-hash "<hash>" --json`
-6. **Produce:** Run `manga-recap produce --project <slug> --chapters <range> --compile --json` (routes to local machine or Kaggle Dual-T4 per confirmed `Q02`). Monitor progress via `manga-recap status --project <slug> --json`.
+6. **Produce:** Run `manga-recap produce --project <slug> --chapters <range> --compile --json` (routes to local machine or Kaggle Dual-T4 per confirmed `Q02`; optional `--cloud-policy auto|baseline_split|dual_tts_shared_encode|dual_tts_then_dual_encode|one_tts_dual_encode`). Monitor progress via `manga-recap status --project <slug> --json`, which also surfaces active Kaggle job state, resolved execution policy/hardware telemetry, and chunk resume progress.
 7. **Publish, Archive & Clean:** Generate a clean 16:9 thumbnail (`chapters/<N>/thumbnail.jpg`), confirm channel/visibility (`manga-recap youtube accounts --json`), publish with `manga-recap publish --project <slug> --chapter <N> --account <alias> --wait --json`, archive with `manga-recap archive push/verify`, and preview cleanup with `manga-recap clean --project <slug> --dry-run --json`.
+
+*(Note: Kaggle Dual-T4 comparative execution policies A–D, `SUBMIT_UNKNOWN` reconciliation, chunked series resume, and minimal pruned payloads are verified offline with mocked GPUs and local FFmpeg parity tests; live Kaggle Dual-T4 multi-session throughput benchmarks remain unverified until executed live.)*
 
 ## Compatibility Commands
 

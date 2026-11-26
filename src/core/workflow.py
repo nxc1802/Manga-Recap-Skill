@@ -582,6 +582,81 @@ def _derive_chapter_next_action(
     return "produce_chapter", artifact_error
 
 
+def _summarize_cloud_state(project_dir: Path, *, chapter_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """Collects non-secret Kaggle job lifecycle, policy, hardware telemetry, and chunk resume status."""
+    summary: Dict[str, Any] = {}
+    target_dir = chapter_dir if chapter_dir is not None else project_dir
+    job_path = target_dir / "cloud_job.json"
+    if not job_path.is_file() and chapter_dir is not None:
+        # Series jobs store cloud_job.json at project root.
+        job_path = project_dir / "cloud_job.json"
+    if job_path.is_file():
+        try:
+            job = read_json(job_path)
+            summary["job"] = {
+                "status": job.get("status"),
+                "kernel_ref": job.get("kernel_ref"),
+                "account_name": job.get("account_name"),
+                "job_type": job.get("job_type"),
+                "cloud_policy": job.get("cloud_policy") or "auto",
+                "queue_elapsed_sec": job.get("queue_elapsed_sec"),
+                "total_elapsed_sec": job.get("total_elapsed_sec"),
+                "last_remote_status": job.get("last_remote_status"),
+                "error": job.get("error"),
+                "updated_at": job.get("updated_at"),
+            }
+        except Exception as exc:
+            summary["job"] = {"status": "corrupt", "error": str(exc)}
+
+    plan_path = project_dir / "cloud_series_plan.json"
+    if plan_path.is_file():
+        try:
+            plan_data = read_json(plan_path)
+            chunks = list(plan_data.get("chunks") or [])
+            summary["series_plan"] = {
+                "status": plan_data.get("status"),
+                "total_chunks": len(chunks),
+                "completed_chunks": sum(1 for c in chunks if c.get("status") == "synced"),
+                "skipped_verified": list(plan_data.get("skipped_verified") or []),
+                "updated_at": plan_data.get("updated_at"),
+            }
+        except Exception:
+            pass
+
+    if chapter_dir is not None:
+        rec_path = chapter_dir / "cloud_receipt.json"
+        if rec_path.is_file():
+            try:
+                rec = read_json(rec_path)
+                summary["receipt"] = {
+                    "job_type": rec.get("job_type"),
+                    "quality": rec.get("quality"),
+                    "verified_at": rec.get("verified_at"),
+                }
+            except Exception:
+                pass
+
+    tel_path = target_dir / "cloud_telemetry.json"
+    if not tel_path.is_file() and chapter_dir is not None:
+        tel_path = project_dir / "cloud_telemetry.json"
+    if tel_path.is_file():
+        try:
+            tel = read_json(tel_path)
+            hw = tel.get("hardware") or {}
+            summary["telemetry"] = {
+                "policy": tel.get("policy"),
+                "scheduler_policy": hw.get("scheduler_policy"),
+                "devices": hw.get("devices"),
+                "usable_nvenc_devices": hw.get("usable_nvenc_devices"),
+                "timing": tel.get("timing"),
+                "resources": tel.get("resources"),
+            }
+        except Exception:
+            pass
+
+    return summary or None
+
+
 def get_project_status(project_slug: str, *, chapter: Optional[str] = None) -> Dict[str, Any]:
     """Derives authoritative project/chapter status from state + artifact evidence and reports next_action."""
     if not project_slug:
@@ -618,7 +693,7 @@ def get_project_status(project_slug: str, *, chapter: Optional[str] = None) -> D
         next_action, blocker = _derive_chapter_next_action(
             project_dir, chap_dir, str(chapter), resumable_stage, is_complete, artifact_error
         )
-        return {
+        out: Dict[str, Any] = {
             "artifact_valid": is_complete,
             "artifact_error": artifact_error,
             "project_slug": project_slug,
@@ -631,6 +706,10 @@ def get_project_status(project_slug: str, *, chapter: Optional[str] = None) -> D
             "blocker": blocker,
             "stages": stages_dict,
         }
+        cloud_info = _summarize_cloud_state(project_dir, chapter_dir=chap_dir)
+        if cloud_info is not None:
+            out["cloud"] = cloud_info
+        return out
 
     chapters_dir = project_dir / "chapters"
     chapter_summaries: List[Dict[str, Any]] = []
@@ -669,11 +748,15 @@ def get_project_status(project_slug: str, *, chapter: Optional[str] = None) -> D
                         "blocker": str(exc),
                     })
 
-    return {
+    out_proj: Dict[str, Any] = {
         "project_slug": project_slug,
         "total_chapters": len(chapter_summaries),
         "chapters": chapter_summaries,
     }
+    cloud_proj = _summarize_cloud_state(project_dir)
+    if cloud_proj is not None:
+        out_proj["cloud"] = cloud_proj
+    return out_proj
 
 
 # ==============================================================================
@@ -1919,6 +2002,7 @@ def produce_chapters(
     render_workers: int = 2,
     tts_workers: int = 2,
     force: bool = False,
+    cloud_policy: str = "auto",
 ) -> Dict[str, Any]:
     """
     Canonical Stage 6 (Produce): routes single/multi-chapter production via the confirmed
@@ -1965,6 +2049,7 @@ def produce_chapters(
             compile_feature=compile_after,
             render_workers=render_workers,
             encoder_preference=encoder or "auto",
+            cloud_policy=cloud_policy,
         )
         return {
             "project_slug": project_slug,
