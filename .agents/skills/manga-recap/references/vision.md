@@ -6,7 +6,7 @@
    - Visually inspect panel crops (`panels/panel_*.jpg`) and multi-panel contact sheets (`contact_sheets/sheet_*.jpg`).
    - Authoring `script.json` from panel filenames or metadata alone is prohibited.
 2. **Decision API vs. Agent Cognition:**
-   - `gemini-decision-1` handles closed-set panel routing only: classifying `active` / `context_only` / `skip`, flagging structural `needs_split` / `merge_with_prev` defects for VCS repack, choosing 1 of 9 safe 2D center crops, and picking `static` vs `slow_pan_down`.
+   - `gemini-decision-1` handles closed-set panel routing only: classifying `active` / `context_only` / `skip` (or `needs_review` on low-confidence/blocked edges), flagging structural `needs_split` / `merge_with_prev` candidates for VCS repack, and proposing guarded 4-sided edge trims (`{0, 10, 20, 30, 40}%` per edge); scroll vs static framing is computed deterministically from the accepted crop geometry.
    - The **coding agent** owns all semantic reading, OCR across languages (English, Korean/Hangul, Japanese, Chinese), bubble-tail speaker attribution, story continuity, and narrative emphasis.
 3. **Zero Automated Quality Benchmarks:**
    - The pipeline uses no automated OCR confidence gates or LLM-as-judge prompts. Visual and storytelling fidelity is verified directly by the human reviewer on `review_pack.html` / `video/preview.mp4`.

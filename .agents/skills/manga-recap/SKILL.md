@@ -42,14 +42,14 @@ Persist confirmed answers and narrator voice before running chapter commands:
 
 ## Stage 2 · Prepare Assets (`prepare`)
 
-Run deterministic ingestion, page-to-panel VCS segmentation, contact-sheet building, and closed-set `gemini-decision-1` classification (`active` story art, `context_only` text cards, `skip` ads/watermarks, `needs_split`/`merge_with_prev` repack, and 2D framing crops):
+Run deterministic ingestion, page-to-panel VCS segmentation, contact-sheet building, and closed-set `gemini-decision-1` classification (`active` story art, `context_only` text cards, `skip` ads/watermarks, guarded `needs_review` escalation, `needs_split`/`merge_with_prev` repack, and 4-sided safe framing trims with deterministic scroll geometry). `prepare` / `decide --json` reports group counts, `needs_review` panels, fast-path status, and estimated API token cost:
 
 ```bash
 manga-recap prepare --project <slug> --chapter <N> --json
 ```
-*(Compatibility granular equivalents: `crawl` → `segment` → `decide` → `inspect`. Use `--skip-decide` only when `GEMINI_API_KEY` is intentionally omitted for manual classification via `repack`.)*
+*(Compatibility granular equivalents: `crawl` → `segment` → `decide` → `inspect`. `decide` also supports `--dry-run`, `--reapply-policy`, `--refresh-decisions`, and `--decision-policy legacy_9preset` rollback; use `--skip-decide` on `prepare` only when `GEMINI_API_KEY` is intentionally omitted for manual classification via `repack`.)*
 
-**Output:** `raw/`, `panels/`, `contact_sheets/`, `manifest.json`, and updated `chapter.json`. `prepare` never writes `script.json`.
+**Output:** `raw/`, `panels/`, `contact_sheets/`, `manifest.json`, and updated `chapter.json`. Resolve any flagged `needs_review` panels before authoring/rendering; `prepare` never writes `script.json`.
 **Next check:** `manga-recap status --project <slug> --chapter <N> --json` reports `next_action: "author_script"`.
 
 ---
@@ -114,7 +114,7 @@ manga-recap produce --project <slug> --chapters <range> --compile --json
 **Resume & external monitoring:**
 - Check `manga-recap status --project <slug> --json` to inspect chapter states, `next_action`, blockers, resolved Kaggle policy/hardware telemetry, and chunked series resume receipts after interruptions.
 - Kaggle jobs persist pre-submit intent (`SUBMITTING`) and reconcile `SUBMIT_UNKNOWN` / `CLIENT_TIMEOUT` states cleanly before retrying; use `manga-recap cloud pull --project <slug> [--chapter <N>] --json` to resume running kernels or sync completed chunk outputs.
-- Monitor Kaggle jobs after **5 minutes** via `status` / `cloud pull`; report queue stalls or OAuth expirations promptly instead of looping blindly. (Note: live Kaggle Dual-T4 comparative policy benchmarks are unverified offline; `--cloud-policy auto` defaults safely to `baseline_split`.)
+- Monitor Kaggle jobs after **5 minutes** via `status` / `cloud pull`; report queue stalls or OAuth expirations promptly instead of looping blindly. (`--cloud-policy auto` selects verified `dual_tts_shared_encode` on Dual-T4 NVENC hardware with `batch_size=16` for `produce` / `32` for standalone `tts`, and falls back to `baseline_split` otherwise; pass `--cloud-policy baseline_split` for explicit single-producer rollback.)
 
 ---
 
