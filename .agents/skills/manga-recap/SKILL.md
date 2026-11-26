@@ -1,6 +1,6 @@
 ---
 name: manga-recap
-version: "6.0.0"
+version: "6.1.0"
 description: Create Vietnamese manga recap scripts, narration, thumbnails, and videos from online chapters or local panel images.
 ---
 
@@ -47,7 +47,7 @@ Run deterministic ingestion, page-to-panel VCS segmentation, contact-sheet build
 ```bash
 manga-recap prepare --project <slug> --chapter <N> --json
 ```
-*(Compatibility granular equivalents: `crawl` → `segment` → `decide` → `inspect`. `decide` also supports `--dry-run`, `--reapply-policy`, `--refresh-decisions`, and `--decision-policy legacy_9preset` rollback; use `--skip-decide` on `prepare` only when `GEMINI_API_KEY` is intentionally omitted for manual classification via `repack`.)*
+*(Granular steps: `crawl` → `segment` → `decide` → `inspect`. `decide` supports `--dry-run`, `--reapply-policy` offline threshold re-evaluation over validated caches, and `--refresh-decisions`; use `--skip-decide` on `prepare` only when `GEMINI_API_KEY` is intentionally omitted for manual `repack`.)*
 
 **Output:** `raw/`, `panels/`, `contact_sheets/`, `manifest.json`, and updated `chapter.json`. Resolve any flagged `needs_review` panels before authoring/rendering; `prepare` never writes `script.json`.
 **Next check:** `manga-recap status --project <slug> --chapter <N> --json` reports `next_action: "author_script"`.

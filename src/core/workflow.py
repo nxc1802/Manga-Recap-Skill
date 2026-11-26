@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import time
 import wave
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -25,7 +24,6 @@ from src.core.checkpoints import (
 from src.core.cleanup import clean_project_chapters
 from src.core.contact_sheet import ContactSheetGenerator
 from src.core.errors import (
-    DependencyNotFoundError,
     DomainValidationError,
     StorageCorruptError,
     StorageFileNotFoundError,
@@ -57,11 +55,8 @@ from src.core.project import (
 )
 from src.core.review_pack import create_review_pack
 from src.core.schemas import (
-    ChapterMarker,
     ChapterMetadata,
-    ChapterTimelineItem,
     CheckpointStatus,
-    FeatureTimeline,
     HumanReviewStatus,
     PanelManifest,
     PanelStatus,
@@ -83,10 +78,14 @@ from src.core.storage import (
 )
 from src.core.streaming_segmenter import StreamingSegmenter
 from src.core.utils import assert_file_nonempty
-from src.media.ffmpeg import get_wav_duration, probe_media_duration, run_ffmpeg
+from src.media.ffmpeg import get_wav_duration
 from src.crawler.errors import CrawlerError
 from src.crawler.verifier import ImageVerifier
-from src.render.chapter_renderer import render_chapter, validate_existing_chapter
+from src.render.chapter_renderer import (
+    compile_project_chapters,
+    render_chapter,
+    validate_existing_chapter,
+)
 from src.render.visual_policy import (
     generate_visual_plan,
     resolve_visual_plan,
@@ -94,7 +93,39 @@ from src.render.visual_policy import (
 )
 from src.tts.catalog import resolve_voice_id
 from src.tts.engine import EngineMode, get_tts_engine, get_wav_duration_seconds
-from src.youtube.metadata import format_seconds_to_timestamp
+
+
+def _find_existing_panel_path(chap_dir: Path, panels_dir: Path, *candidates: Optional[str]) -> Optional[Path]:
+    for cand_str in candidates:
+        if not cand_str:
+            continue
+        for base in (chap_dir, panels_dir):
+            cand = base / cand_str
+            if cand.exists() and cand.stat().st_size > 0:
+                return cand
+    return None
+
+
+def _reset_downstream_render_artifacts(chap_dir: Path, stages: Tuple[StageType, ...]) -> None:
+    for sub, pat in (("video", "*.mp4"), ("subtitles", "*.srt")):
+        target_dir = chap_dir / sub
+        if target_dir.exists():
+            for f in target_dir.glob(pat):
+                with contextlib.suppress(Exception):
+                    f.unlink()
+    (chap_dir / "visual_plan.json").unlink(missing_ok=True)
+    for stg in stages:
+        reset_stage_checkpoint(chap_dir, stg)
+
+
+def _resolve_chapter_final_paths(chap_dir: Path, chap_num: str) -> Tuple[Path, Path]:
+    vid = chap_dir / "video" / f"chapter_{chap_num}_final.mp4"
+    if not vid.exists():
+        vid = chap_dir / "video" / "final.mp4"
+    srt = chap_dir / "subtitles" / f"chapter_{chap_num}.srt"
+    if not srt.exists():
+        srt = chap_dir / "subtitles" / "final.srt"
+    return vid, srt
 
 
 def parse_chapter_list(chapters_arg: Optional[str]) -> List[str]:
@@ -384,20 +415,18 @@ def validate_project_or_chapter(
                         for key in (panel.relative_path, Path(panel.relative_path).name, Path(panel.relative_path).stem):
                             manifest_panel_ids.add(key)
                             panel_lookup[key] = panel.panel_id
-                    candidates = [
-                        chap_dir / panel.relative_path,
-                        panels_dir / panel.panel_id,
-                        panels_dir / Path(panel.relative_path).name,
-                        panels_dir / panel.filename if panel.filename else panels_dir / panel.panel_id,
-                    ]
-                    found = False
-                    for cand in candidates:
-                        if cand.exists() and cand.stat().st_size > 0:
-                            found = True
-                            panel_disk_paths[panel.panel_id] = cand
-                            break
+                    found = _find_existing_panel_path(
+                        chap_dir,
+                        panels_dir,
+                        panel.relative_path,
+                        panel.panel_id,
+                        Path(panel.relative_path).name if panel.relative_path else None,
+                        panel.filename,
+                    )
+                    if found is not None:
+                        panel_disk_paths[panel.panel_id] = found
                     check(
-                        found,
+                        found is not None,
                         f"panel:{panel.panel_id}",
                         f"Referenced panel image not found on disk: {panel.relative_path}",
                     )
@@ -435,12 +464,9 @@ def validate_project_or_chapter(
                                     f"segment:{seg.seq_id}:panel_skip:{pid}",
                                     f"Segment references Group 3 SKIP panel '{canon_pid}' (forbidden in script)",
                                 )
-                            disk_found = canon_pid in panel_disk_paths
-                            if not disk_found:
-                                for cand in (panels_dir / pid, panels_dir / Path(pid).name, chap_dir / pid, panels_dir / f"{pid}.jpg"):
-                                    if cand.exists() and cand.stat().st_size > 0:
-                                        disk_found = True
-                                        break
+                            disk_found = canon_pid in panel_disk_paths or (
+                                _find_existing_panel_path(chap_dir, panels_dir, pid, Path(pid).name, f"{pid}.jpg") is not None
+                            )
                             check(
                                 disk_found,
                                 f"segment:{seg.seq_id}:panel_disk:{pid}",
@@ -926,14 +952,15 @@ def segment_chapter_assets(
                 for f in d.glob("*"):
                     with contextlib.suppress(Exception):
                         f.unlink()
-            for sub, pat in (("audio/clips", "*.wav"), ("subtitles", "*.srt"), ("video", "*.mp4")):
-                target_d = chap_dir / sub
-                if target_d.exists():
-                    for f in target_d.glob(pat):
-                        with contextlib.suppress(Exception):
-                            f.unlink()
-            for stg in (StageType.SCRIPT, StageType.TTS, StageType.RENDER, StageType.FINALIZE):
-                reset_stage_checkpoint(chap_dir, stg)
+            clips_dir = chap_dir / "audio" / "clips"
+            if clips_dir.exists():
+                for f in clips_dir.glob("*.wav"):
+                    with contextlib.suppress(Exception):
+                        f.unlink()
+            _reset_downstream_render_artifacts(
+                chap_dir,
+                (StageType.SCRIPT, StageType.TTS, StageType.RENDER, StageType.FINALIZE),
+            )
 
         seg_factory = segmenter_cls or StreamingSegmenter
         cs_factory = contact_sheet_cls or ContactSheetGenerator
@@ -1357,15 +1384,7 @@ def synthesize_chapter_tts(
         atomic_write_json(script_path, script_obj)
 
         if synthesized_count > 0 or force_resynth:
-            for sub, pat in (("video", "*.mp4"), ("subtitles", "*.srt")):
-                d = chap_dir / sub
-                if d.exists():
-                    for f in d.glob(pat):
-                        with contextlib.suppress(Exception):
-                            f.unlink()
-            (chap_dir / "visual_plan.json").unlink(missing_ok=True)
-            reset_stage_checkpoint(chap_dir, StageType.RENDER)
-            reset_stage_checkpoint(chap_dir, StageType.FINALIZE)
+            _reset_downstream_render_artifacts(chap_dir, (StageType.RENDER, StageType.FINALIZE))
 
         if not script_obj.segments:
             raise DomainValidationError("Empty script cannot complete audio stage")
@@ -1526,227 +1545,6 @@ def approve_chapter_preview(
     ).model_dump(mode="json")
 
 
-def compile_project_chapters(
-    project_slug: str,
-    *,
-    chapters: Optional[str] = None,
-    output: Optional[str] = None,
-    extract_audio: bool = True,
-    approved: bool = False,
-) -> Dict[str, Any]:
-    """Concatenates final chapter videos into a continuous feature video + timeline."""
-    if not shutil.which("ffmpeg"):
-        raise DependencyNotFoundError("FFmpeg executable not found on system PATH. Please install FFmpeg.")
-    if not project_slug:
-        raise DomainValidationError("Project slug (--project) is required.")
-
-    project_dir = resolve_existing_project_dir(project_slug)
-    requested_chaps = [c.strip() for c in str(chapters).split(",") if c.strip()] if chapters else []
-
-    chapter_videos: Dict[int, Path] = {}
-    chapters_dir = project_dir / "chapters"
-    if chapters_dir.exists():
-        for c_entry in os.listdir(chapters_dir):
-            if not c_entry.isdigit():
-                continue
-            c_num = int(c_entry)
-            if requested_chaps and str(c_num) not in requested_chaps:
-                continue
-            c_video_dir = chapters_dir / c_entry / "video"
-            if c_video_dir.exists():
-                candidate_mp4s = [f for f in c_video_dir.glob("*.mp4") if not f.name.startswith(".")]
-                finals = sorted(
-                    f for f in candidate_mp4s
-                    if "final" in f.name.lower() and not f.name.startswith(("final.previous.", "final.stale."))
-                )
-                non_previews = sorted(
-                    f for f in candidate_mp4s
-                    if "preview" not in f.name.lower() and not f.name.startswith(("final.previous.", "final.stale."))
-                )
-                if finals:
-                    chapter_videos[c_num] = next((file for file in finals if file.name == "final.mp4"), finals[-1])
-                elif non_previews:
-                    chapter_videos[c_num] = non_previews[-1]
-                elif candidate_mp4s:
-                    raise StorageFileNotFoundError(
-                        f"Chapter {c_num} only has preview video ({candidate_mp4s[0].name}). "
-                        "Final rendered video is required for compilation; preview video cannot be used for final export."
-                    )
-
-    legacy_video_dir = project_dir / "video" / "chapters"
-    if legacy_video_dir.exists():
-        for f in os.listdir(legacy_video_dir):
-            if "_raw_temp" in f or not f.endswith(".mp4"):
-                continue
-            m = re.match(r"^chapter_(\d+)(?:_.*?)?_(?:v)?(\d+)\.mp4$", f)
-            if m:
-                c_num = int(m.group(1))
-                if requested_chaps and str(c_num) not in requested_chaps:
-                    continue
-                if "preview" in f.lower() and "final" not in f.lower():
-                    continue
-                if c_num not in chapter_videos:
-                    chapter_videos[c_num] = legacy_video_dir / f
-
-    if not chapter_videos:
-        raise StorageFileNotFoundError(f"No rendered chapter videos found to compile in {project_dir}")
-
-    if requested_chaps:
-        missing_chaps = [c for c in requested_chaps if int(c) not in chapter_videos]
-        if missing_chaps:
-            raise StorageFileNotFoundError(
-                f"Missing final rendered video for requested chapter(s): {', '.join(missing_chaps)} in {project_dir}"
-            )
-
-    for c_num, vid_path in chapter_videos.items():
-        validate_existing_chapter(project_dir, c_num, video_path=vid_path)
-        if "preview" in vid_path.name.lower() and "final" not in vid_path.name.lower():
-            raise StorageFileNotFoundError(
-                f"Chapter {c_num} video '{vid_path.name}' is a preview video. "
-                "Final rendered video is required for compilation; preview video cannot be used for final export."
-            )
-
-    if not approved:
-        require_voice_approval(project_dir)
-        require_preview_approval(project_dir)
-        for c_num in sorted(chapter_videos.keys()):
-            chap_json = chapters_dir / str(c_num) / "chapter.json"
-            if chap_json.exists():
-                try:
-                    c_meta = read_json(chap_json)
-                except Exception as e:
-                    raise DomainValidationError(f"Failed to read metadata for Chapter {c_num} from '{chap_json}': {e}") from e
-                if not isinstance(c_meta, dict):
-                    raise DomainValidationError(f"Invalid metadata format in '{chap_json}': expected JSON object.")
-                if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
-                    raise DomainValidationError(
-                        f"Chapter {c_num} requires human review before compilation. Supply --approved to bypass."
-                    )
-
-    sorted_chaps = sorted(chapter_videos.keys())
-    compile_list = [chapter_videos[c] for c in sorted_chaps]
-    out_dir = get_output_dir(project_slug)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    output_path = Path(output).resolve() if output else (project_dir / "video" / "final.mp4")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    concat_list_path = project_dir / "compile_concat_list.txt"
-    with open(concat_list_path, "w", encoding="utf-8") as f:
-        for p in compile_list:
-            f.write(f"file '{p.resolve()}'\n")
-
-    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list_path), "-c", "copy", str(output_path)]
-    try:
-        run_ffmpeg(cmd, description="Compile chapter video concatenation")
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise RuntimeError(f"Compiled video is missing or empty: {output_path}")
-    finally:
-        concat_list_path.unlink(missing_ok=True)
-
-    default_staged_path = out_dir / f"{project_slug}_full_recap.mp4"
-    if output_path.resolve() != default_staged_path.resolve():
-        with contextlib.suppress(Exception):
-            shutil.copy2(output_path, default_staged_path)
-
-    final_audio_path = None
-    default_staged_audio = None
-    if extract_audio:
-        final_audio_path = project_dir / "audio" / "final.wav"
-        final_audio_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd_audio = [
-            "ffmpeg", "-y", "-i", str(output_path),
-            "-vn", "-acodec", "pcm_s16le", "-ar", "48000", "-ac", "2",
-            str(final_audio_path),
-        ]
-        run_ffmpeg(cmd_audio, description="Extract master audio from compiled video")
-        if not final_audio_path.exists() or final_audio_path.stat().st_size == 0:
-            raise RuntimeError(f"Compiled audio is missing or empty: {final_audio_path}")
-        default_staged_audio = out_dir / f"{project_slug}_full_recap.wav"
-        if final_audio_path.resolve() != default_staged_audio.resolve():
-            with contextlib.suppress(Exception):
-                shutil.copy2(final_audio_path, default_staged_audio)
-
-    current_offset = 0.0
-    timeline_items: List[ChapterTimelineItem] = []
-    youtube_markers: List[ChapterMarker] = []
-    for c_num in sorted_chaps:
-        vid_p = chapter_videos[c_num]
-        dur = probe_media_duration(vid_p)
-        c_chap_dir = chapters_dir / str(c_num) if chapters_dir.exists() else None
-        c_title = f"Tập {c_num}"
-        sub_markers: List[ChapterMarker] = []
-
-        if c_chap_dir and c_chap_dir.exists():
-            c_json = c_chap_dir / "chapter.json"
-            if c_json.exists():
-                with contextlib.suppress(Exception):
-                    c_title = read_json(c_json).get("title") or c_title
-            s_json = c_chap_dir / "script.json"
-            if s_json.exists():
-                with contextlib.suppress(Exception):
-                    s_data = read_json(s_json)
-                    if dur <= 0:
-                        dur = float(s_data.get("total_duration_seconds", 0.0) or 0.0)
-                    scene_time = current_offset
-                    for s_idx, seg in enumerate(s_data.get("segments", [])):
-                        seg_dur = float(seg.get("duration", 0.0) or 4.0)
-                        txt = seg.get("narrator_text", "")
-                        lbl = f"{c_title}: {txt[:35].strip()}..." if txt else f"{c_title} - Cảnh {s_idx + 1}"
-                        sub_markers.append(ChapterMarker(
-                            time=format_seconds_to_timestamp(scene_time),
-                            label=lbl,
-                            seconds=round(scene_time, 2),
-                        ))
-                        scene_time += seg_dur
-
-        if dur <= 0:
-            dur = 10.0
-
-        start_sec, end_sec = current_offset, current_offset + dur
-        current_offset = end_sec
-        item = ChapterTimelineItem(
-            chapter_number=str(c_num),
-            title=c_title,
-            start_seconds=round(start_sec, 2),
-            end_seconds=round(end_sec, 2),
-            duration_seconds=round(dur, 2),
-            start_timestamp=format_seconds_to_timestamp(start_sec),
-            end_timestamp=format_seconds_to_timestamp(end_sec),
-            source_video_path=str(vid_p),
-            sub_markers=sub_markers,
-        )
-        timeline_items.append(item)
-        youtube_markers.append(ChapterMarker(
-            time=item.start_timestamp,
-            label=f"Tập {c_num}: {c_title}" if not c_title.startswith(f"Tập {c_num}") else c_title,
-            seconds=round(start_sec, 2),
-        ))
-
-    feature_timeline = FeatureTimeline(
-        project_slug=project_slug,
-        compiled_video_path=str(output_path),
-        total_duration_seconds=round(current_offset, 2),
-        chapters_count=len(sorted_chaps),
-        chapters=timeline_items,
-        youtube_chapter_markers=youtube_markers,
-    )
-    feature_timeline_path = project_dir / "feature_timeline.json"
-    atomic_write_json(feature_timeline_path, feature_timeline)
-    staged_timeline_path = out_dir / f"{project_slug}_timeline.json"
-    atomic_write_json(staged_timeline_path, feature_timeline)
-
-    return {
-        "project_slug": project_slug,
-        "compiled_video": str(output_path),
-        "compiled_audio": str(final_audio_path) if final_audio_path else None,
-        "export_video_path": str(default_staged_path if default_staged_path.exists() else output_path),
-        "export_audio_path": str(default_staged_audio if (default_staged_audio and default_staged_audio.exists()) else final_audio_path),
-        "chapters_compiled": [str(c) for c in sorted_chaps],
-        "timeline_path": str(staged_timeline_path),
-        "feature_timeline": str(feature_timeline_path),
-    }
-
-
 def batch_chapters(
     project_slug: str,
     *,
@@ -1830,12 +1628,7 @@ def batch_chapters(
                     if meta.overall_status == CheckpointStatus.COMPLETED:
                         validate_existing_chapter(project_dir, chap_num)
                         cached_chaps.append(str(chap_num))
-                        vid_path = chap_dir / "video" / f"chapter_{chap_num}_final.mp4"
-                        if not vid_path.exists():
-                            vid_path = chap_dir / "video" / "final.mp4"
-                        srt_path = chap_dir / "subtitles" / f"chapter_{chap_num}.srt"
-                        if not srt_path.exists():
-                            srt_path = chap_dir / "subtitles" / "final.srt"
+                        vid_path, srt_path = _resolve_chapter_final_paths(chap_dir, chap_num)
 
                         staged_padded = output_dir / format_chapter_filename(chap_num, ext="mp4", padded=True)
                         if vid_path.exists() and not staged_padded.exists():

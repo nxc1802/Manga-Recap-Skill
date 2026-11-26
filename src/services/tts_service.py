@@ -18,7 +18,6 @@ from src.core.storage import calculate_sha256, calculate_utterance_fingerprint
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
-# Backward-compatible voice model mapping (all local VieNeu presets)
 VOICE_MODELS = {
     vid: {
         "type": "vieneu",
@@ -30,16 +29,13 @@ VOICE_MODELS = {
     for vid, v in CATALOG_VOICES.items()
 }
 
-VOICE_ALIASES = {
-    "edge-tts-female": "Trúc Ly",
-    "edge-tts-male": "Hải Đăng",
-    "edge-tts-en-female": "Trúc Ly",
-    "edge-tts-en-male": "Hải Đăng",
-    "gemini-2.5-flash": "Trúc Ly",
-    "gemini-3.1-flash": "Trúc Ly",
-    "openai-tts-nova": "Trúc Ly",
-    "openai-tts-alloy": "Hải Đăng",
-}
+
+def _seq_sort_key(item: Dict[str, Any]) -> float:
+    val = str(item["sequence_id"]).replace("_", ".")
+    try:
+        return float(val)
+    except ValueError:
+        return float(item["sequence_number"])
 
 
 class TTSService:
@@ -135,13 +131,7 @@ class TTSService:
                             "crop_scale": 100
                         })
 
-                def get_sort_key(x):
-                    val = x["sequence_id"].replace("_", ".")
-                    try:
-                        return float(val)
-                    except ValueError:
-                        return float(x["sequence_number"])
-                results.sort(key=get_sort_key)
+                results.sort(key=_seq_sort_key)
                 return results
             except Exception as e:
                 logger.error(f"Error parsing script_text as JSON: {e}. Falling back to text regex.")
@@ -180,13 +170,7 @@ class TTSService:
                 "crop_scale": 100
             })
 
-        def get_sort_key(x):
-            val = x["sequence_id"].replace("_", ".")
-            try:
-                return float(val)
-            except ValueError:
-                return float(x["sequence_number"])
-        results.sort(key=get_sort_key)
+        results.sort(key=_seq_sort_key)
         return results
 
     async def generate_panel_audio(
