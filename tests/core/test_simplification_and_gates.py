@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.cli.batch_cmd import handle_batch, parse_chapter_list
+from src.core.workflow import parse_chapter_list
 from src.cli.compile_cmd import handle_compile
 from src.cli.exit_codes import CliValidationError
 from src.cli.render_cmd import handle_render

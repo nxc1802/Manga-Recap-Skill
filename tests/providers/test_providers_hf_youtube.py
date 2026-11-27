@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.archive.hf_archive import archive_push, archive_restore, archive_verify
+from scripts.restore_archive import archive_restore
+from src.archive.hf_archive import archive_push, archive_verify
 from src.core.cleanup import clean_project_chapters
 from src.core.errors import DomainValidationError, ProviderIntegrityError
 from src.core.storage import read_json

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -68,14 +67,7 @@ def resolve_upload_video_path(
     proj_dir: Path,
     chap_dir: Path,
     out_dir: Path,
-    video_override: Optional[str],
 ) -> Path:
-    if video_override:
-        p = Path(video_override)
-        if not p.is_file():
-            raise StorageFileNotFoundError(f"Video override not found: {video_override}")
-        return p.resolve()
-
     if is_feature_chapter(chapter_num):
         candidates = [
             proj_dir / "video" / "final.mp4",
@@ -111,14 +103,7 @@ def resolve_upload_subtitle_path(
     proj_dir: Path,
     chap_dir: Path,
     out_dir: Path,
-    subtitle_override: Optional[str],
 ) -> Optional[Path]:
-    if subtitle_override:
-        p = Path(subtitle_override)
-        if not p.is_file():
-            raise StorageFileNotFoundError(f"Subtitle override not found: {subtitle_override}")
-        return p.resolve()
-
     if is_feature_chapter(chapter_num):
         candidates = [
             proj_dir / "subtitles" / "final.srt",
@@ -145,14 +130,7 @@ def resolve_upload_thumbnail_path(
     proj_dir: Path,
     chap_dir: Path,
     out_dir: Path,
-    thumbnail_override: Optional[str],
 ) -> Optional[Path]:
-    if thumbnail_override:
-        p = Path(thumbnail_override)
-        if not p.is_file():
-            raise StorageFileNotFoundError(f"Thumbnail override not found: {thumbnail_override}")
-        return p.resolve()
-
     if is_feature_chapter(chapter_num):
         candidates = [
             out_dir / "feature_thumbnail.jpg",
@@ -268,7 +246,6 @@ def publish_chapter_video(
     *,
     account_mgr: YouTubeAccountManager,
     credentials_fn: Callable[..., Any],
-    interactive_prompt_fn: Callable[[YouTubeAccountManager], str],
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> Dict[str, Any]:
     """Uploads chapter/feature video with immediate video_id persistence and attachment guarantees."""
@@ -295,29 +272,18 @@ def publish_chapter_video(
     cli_account = cli_account_raw.strip() if isinstance(cli_account_raw, str) else None
     if cli_account == "":
         cli_account = None
-    is_interactive_flag = bool(getattr(args, "interactive", False))
-    is_json_mode = bool(getattr(args, "json", False) or getattr(args, "json_mode", False))
     gate_reconfirmed = bool(
         getattr(args, "confirm_channel", False)
         or getattr(args, "reconfirm_channel", False)
         or getattr(args, "gate_reconfirmed", False)
         or getattr(args, "confirm_gate", False)
     )
-
-    allow_oauth = is_interactive_flag and not is_json_mode and sys.stdin.isatty()
-    if is_interactive_flag and not allow_oauth:
-        raise DomainValidationError("Interactive channel selection requires a terminal without --json.")
-    if is_interactive_flag or (cli_account is None and not is_json_mode and sys.stdin.isatty()):
-        target_account = interactive_prompt_fn(account_mgr)
-        channel_reconfirmed = True
-    elif cli_account is not None:
-        target_account = cli_account
-        channel_reconfirmed = gate_reconfirmed
-    else:
+    if cli_account is None:
         raise DomainValidationError(
-            "Mandatory Channel Selection Gate: explicit --account is required in non-interactive/--json mode "
-            "(or pass -i/--interactive)."
+            "Mandatory Channel Selection Gate: explicit --account is required before YouTube upload."
         )
+    target_account = cli_account
+    channel_reconfirmed = gate_reconfirmed
 
     acc_info = account_mgr.get_account(target_account)
     if q08_account and not account_matches(target_account, q08_account, acc_info) and not channel_reconfirmed:
@@ -339,15 +305,9 @@ def publish_chapter_video(
                 "unless the gate is explicitly reconfirmed."
             )
 
-    video_path = resolve_upload_video_path(
-        project_slug, chapter_num, proj_dir, chap_dir, out_dir, getattr(args, "video", None)
-    )
-    subtitle_path = resolve_upload_subtitle_path(
-        project_slug, chapter_num, proj_dir, chap_dir, out_dir, getattr(args, "subtitles", None)
-    )
-    thumbnail_path = resolve_upload_thumbnail_path(
-        chapter_num, proj_dir, chap_dir, out_dir, getattr(args, "thumbnail", None)
-    )
+    video_path = resolve_upload_video_path(project_slug, chapter_num, proj_dir, chap_dir, out_dir)
+    subtitle_path = resolve_upload_subtitle_path(project_slug, chapter_num, proj_dir, chap_dir, out_dir)
+    thumbnail_path = resolve_upload_thumbnail_path(chapter_num, proj_dir, chap_dir, out_dir)
 
     validate_upload_readiness(project_slug, chapter_num, proj_dir, out_dir, video_path)
 
@@ -379,7 +339,7 @@ def publish_chapter_video(
     channel_title = acc_info.channel_title
     channel_id = acc_info.channel_id
 
-    creds = credentials_fn(account_name=target_account, allow_interactive=allow_oauth)
+    creds = credentials_fn(account_name=target_account, allow_interactive=False)
     yt_client = YouTubeDataClient(creds, sleep_fn=sleep_fn)
     if not channel_id:
         fetched_id, fetched_title = yt_client.fetch_mine_channel_info()

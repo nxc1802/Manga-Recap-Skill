@@ -5,8 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.restore_archive import archive_restore
 from src.archive.hf_archive import (
-    FALLBACK_HF_TOKEN, archive_push, archive_verify, archive_restore, is_whitelisted_archive_path, resolve_hf_token,
+    FALLBACK_HF_TOKEN, archive_push, archive_verify, is_whitelisted_archive_path, resolve_hf_token,
 )
 from src.cli.exit_codes import CliValidationError
 
@@ -163,3 +164,13 @@ def test_archive_push_verify_restore(tmp_path, monkeypatch):
     with pytest.raises(CliValidationError, match="integrity"):
         archive_restore("series", project_dir=project, target_dir=tmp_path / "damaged")
     assert not (tmp_path / "damaged").exists()
+
+
+def test_cli_archive_restore_removed_and_standalone_script_parses():
+    from scripts.restore_archive import main as restore_main
+    from src.cli.main import ExitCode, main as cli_main
+
+    assert cli_main(["archive", "restore", "-p", "series", "--json"]) == ExitCode.VALIDATION_ERROR
+    with pytest.raises(SystemExit) as exc:
+        restore_main(["--help"])
+    assert exc.value.code == 0

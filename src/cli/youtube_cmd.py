@@ -33,7 +33,6 @@ __all__ = [
     "format_seconds_to_timestamp",
     "generate_timestamps_from_script",
     "get_youtube_oauth_credentials",
-    "prompt_interactive_channel_selection",
     "handle_youtube_accounts",
     "handle_youtube_auth",
     "handle_youtube_metadata",
@@ -167,51 +166,12 @@ def handle_youtube_auth(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
-def prompt_interactive_channel_selection(manager: Optional[YouTubeAccountManager] = None) -> str:
-    """Displays an interactive numbered terminal prompt to select a YouTube channel."""
-    mgr = manager or account_manager
-    accounts = mgr.list_accounts()
-    if not accounts:
-        raise CliValidationError(
-            "No YouTube accounts registered.\n"
-            "Please run 'manga-recap youtube accounts --account-action add --account <name>' first."
-        )
-
-    reg = mgr.load_registry()
-    print("\n" + "=" * 64)
-    print("  CHỌN KÊNH YOUTUBE ĐỂ TẢI VIDEO LÊN (INTERACTIVE MODE)")
-    print("=" * 64)
-    for idx, acc in enumerate(accounts, start=1):
-        def_tag = " ⭐ [MẶC ĐỊNH]" if acc.get("is_default") else ""
-        c_title = acc.get("channel_title") or "(Chưa đặt tên)"
-        a_name = acc.get("account_name")
-        c_id = acc.get("channel_id") or "(Chưa có ID)"
-        print(f"  [{idx}] {c_title} (alias: '{a_name}') (ID: {c_id}){def_tag}")
-    print("  [0] Hủy bỏ tải lên")
-    print("=" * 64)
-
-    default_alias = reg.default_account or accounts[0]["account_name"]
-    while True:
-        try:
-            choice = input(f"Chọn kênh (1-{len(accounts)}) hoặc [0] để hủy [mặc định: {default_alias}]: ").strip()
-            if not choice:
-                return default_alias
-            if choice == "0":
-                raise CliValidationError("Người dùng đã hủy tiến trình upload.")
-            if choice.isdigit() and 1 <= int(choice) <= len(accounts):
-                return accounts[int(choice) - 1]["account_name"]
-            print(f"Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến {len(accounts)} (hoặc 0 để hủy).")
-        except (EOFError, KeyboardInterrupt):
-            raise CliValidationError("Upload bị hủy bởi người dùng.")
-
-
 def handle_youtube_upload(args: argparse.Namespace) -> Dict[str, Any]:
     """Uploads chapter or feature compilation video, captions, and custom thumbnail."""
     return publish_chapter_video(
         args,
         account_mgr=account_manager,
         credentials_fn=get_youtube_oauth_credentials,
-        interactive_prompt_fn=prompt_interactive_channel_selection,
         sleep_fn=time.sleep,
     )
 
@@ -232,7 +192,7 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
 
     enforce_execution_policy("youtube", args)
     yt_action = getattr(args, "youtube_action", "metadata")
-    if yt_action in ("metadata", "prepare"):
+    if yt_action == "metadata":
         return handle_youtube_metadata(args)
     if yt_action == "upload":
         return handle_youtube_upload(args)
@@ -240,7 +200,7 @@ def handle_youtube(args: argparse.Namespace) -> Dict[str, Any]:
         return handle_youtube_verify(args)
     if yt_action == "auth":
         return handle_youtube_auth(args)
-    if yt_action in ("accounts", "account"):
+    if yt_action == "accounts":
         return handle_youtube_accounts(args)
 
     raise CliValidationError(

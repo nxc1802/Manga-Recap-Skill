@@ -22,7 +22,6 @@ def handle_render(args: argparse.Namespace) -> Dict[str, Any]:
         str(chapter_num),
         quality=getattr(args, "quality", "final"),
         encoder=getattr(args, "encoder", None),
-        hw_accel=getattr(args, "hw_accel", None),
         workers=getattr(args, "workers", None) or 4,
         kaggle=bool(getattr(args, "kaggle", False)),
         cleanup=bool(getattr(args, "cleanup", False)),

@@ -24,7 +24,7 @@ Before attributing dialogue in overlapping panel batches, verify visible visual 
 
 ## 3. Single-Narrator Alignment
 
-Canonical V6 production uses **`single_narrator`** configured at Stage 1 (`voice_selection.json`). Every segment in `script.json` inherits that single confirmed narrator preset while distinguishing character voices through sentence rhythm, word choice, and explicit speaker phrasing in Vietnamese text. Track `"role"` (`protagonist`, `antagonist`, `supporting`) cleanly inside `characters.json` for editorial context without attaching conflicting per-character voice IDs.
+Canonical V7 production uses **`single_narrator`** configured at Stage 1 (`voice_selection.json`). Every segment in `script.json` inherits that single confirmed narrator preset while distinguishing character voices through sentence rhythm, word choice, and explicit speaker phrasing in Vietnamese text. Track `"role"` (`protagonist`, `antagonist`, `supporting`) cleanly inside `characters.json` for editorial context without attaching conflicting per-character voice IDs.
 
 ---
 

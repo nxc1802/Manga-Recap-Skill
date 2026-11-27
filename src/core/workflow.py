@@ -671,10 +671,8 @@ def _summarize_cloud_state(project_dir: Path, *, chapter_dir: Optional[Path] = N
             summary["telemetry"] = {
                 "policy": tel.get("policy"),
                 "scheduler_policy": hw.get("scheduler_policy"),
-                "devices": hw.get("devices"),
                 "usable_nvenc_devices": hw.get("usable_nvenc_devices"),
                 "timing": tel.get("timing"),
-                "resources": tel.get("resources"),
             }
         except Exception:
             pass
@@ -1388,14 +1386,11 @@ def render_chapter_workflow(
     *,
     quality: str = "final",
     encoder: Optional[str] = None,
-    hw_accel: Optional[str] = None,
     workers: Optional[int] = None,
     kaggle: bool = False,
     cleanup: bool = False,
 ) -> Dict[str, Any]:
     """Renders a chapter locally or on Kaggle using confirmed project settings."""
-    if encoder is None and hw_accel:
-        encoder = {"none": "libx264", "auto": "auto", "videotoolbox": "h264_videotoolbox"}[hw_accel]
     render_workers = workers or 4
     options = dict(
         quality=quality,
@@ -1505,13 +1500,12 @@ def batch_chapters(
     extract_audio: bool = True,
     force: bool = False,
     encoder: Optional[str] = None,
-    hw_accel: Optional[str] = None,
     tts_workers: int = 2,
     render_workers: int = 2,
     cleanup: bool = False,
     kaggle: bool = False,
 ) -> Dict[str, Any]:
-    """Sequential multi-chapter batch processing with caching and failure isolation."""
+    """Sequential multi-chapter processing with caching and failure isolation."""
     if not project_slug:
         raise DomainValidationError("Project slug (--project) is required for batch processing.")
 
@@ -1628,7 +1622,6 @@ def batch_chapters(
                     chap_num,
                     quality="final",
                     encoder=encoder,
-                    hw_accel=hw_accel,
                     workers=render_workers,
                 )
 

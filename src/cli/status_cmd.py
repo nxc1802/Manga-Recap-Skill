@@ -4,10 +4,7 @@ import argparse
 from typing import Any, Dict
 
 from src.cli.exit_codes import CliValidationError
-from src.core.workflow import get_project_status, verified_chapter_completion
-
-# Compatibility alias for callers inspecting completion verification directly.
-verified_completion = verified_chapter_completion
+from src.core.workflow import get_project_status
 
 
 def handle_status(args: argparse.Namespace) -> Dict[str, Any]:

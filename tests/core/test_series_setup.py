@@ -72,7 +72,7 @@ def test_reject_incomplete_or_unconfirmed_answers(tmp_path):
 
 
 @pytest.mark.parametrize("command", ["crawl", "segment", "decide", "tts", "render",
-                                     "batch", "compile", "visual-plan", "review-approve"])
+                                     "compile", "visual-plan", "approve"])
 def test_pipeline_blocks_unconfigured_series(command):
     with pytest.raises(CliValidationError, match="eight"):
         execute_subcommand(command, Namespace(project="unconfigured", chapter="1"))

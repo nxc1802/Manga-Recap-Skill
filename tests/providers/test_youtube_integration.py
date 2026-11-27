@@ -566,57 +566,37 @@ class TestYouTubeMultiAccountManagement:
             handle_youtube_upload(args_bad)
         assert "not found" in str(exc.value)
 
-    def test_interactive_channel_selection(self, account_setup, monkeypatch):
-        from src.cli.youtube_cmd import prompt_interactive_channel_selection
+    def test_upload_requires_explicit_account_and_rejects_removed_cli_flags(self, tmp_path, monkeypatch):
+        from src.cli.main import ExitCode, main
 
-        mgr = account_setup["manager"]
-        dummy_tok = account_setup["dir"] / "dummy.json"
-        dummy_tok.write_text("{}", encoding="utf-8")
-
-        monkeypatch.setattr(mgr, "get_credentials", lambda account_name, **kwargs: (MagicMock(), mgr.get_account(account_name)))
-        monkeypatch.setattr(mgr, "fetch_channel_info", lambda _: ("Test Channel", "UC_TEST"))
-        mgr.add_or_update_account("chan1", token_file=dummy_tok)
-        mgr.add_or_update_account("chan2", token_file=dummy_tok)
-
-        # 1. Select option 2
-        monkeypatch.setattr("builtins.input", lambda prompt="": "2")
-        selected = prompt_interactive_channel_selection(mgr)
-        assert selected == "chan2"
-
-        # 2. Select default (empty input)
-        monkeypatch.setattr("builtins.input", lambda prompt="": "")
-        selected_default = prompt_interactive_channel_selection(mgr)
-        assert selected_default == mgr.load_registry().default_account
-
-        # 3. Select 0 (cancel)
-        monkeypatch.setattr("builtins.input", lambda prompt="": "0")
-        with pytest.raises(CliValidationError) as exc:
-            prompt_interactive_channel_selection(mgr)
-        assert "hủy" in str(exc.value).lower()
-
-    def test_upload_interactive_mode(self, tmp_path, monkeypatch):
         proj = _build_ready_youtube_project(tmp_path, monkeypatch)
-        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        _install_mock_youtube(monkeypatch, video_id="yt_interactive_123")
-        monkeypatch.setattr("src.cli.youtube_cmd.prompt_interactive_channel_selection", lambda mgr: "kênh_review_vip")
+        _install_mock_youtube(monkeypatch, video_id="yt_explicit_123")
 
-        args = argparse.Namespace(
-            youtube_action="upload",
-            project=proj["slug"],
-            chapter=proj["chapter"],
-            account=None,
-            interactive=True,
-            title="Interactive Test",
-            description="Test Desc",
-            tags="Test",
-            privacy="unlisted",
-            thumbnail=None,
-            no_captions=True,
-        )
-        res = handle_youtube_upload(args)
-        assert res["status"] == "success"
-        assert res["account"] == "kênh_review_vip"
-        assert res["video_id"] == "yt_interactive_123"
+        # Missing --account fails closed cleanly even when stdin is interactive (G03).
+        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+        with pytest.raises(CliValidationError, match="explicit --account is required"):
+            handle_youtube_upload(
+                argparse.Namespace(
+                    youtube_action="upload",
+                    project=proj["slug"],
+                    chapter=proj["chapter"],
+                    account=None,
+                    title="Explicit Required",
+                    description="Desc",
+                    tags="Test",
+                    privacy="unlisted",
+                    no_captions=True,
+                )
+            )
+
+        # CLI parser strictly rejects removed -i, --video, --subtitles, --thumbnail flags (G03, G04, H04).
+        for bad_args in [
+            ["publish", "-p", proj["slug"], "-c", "1", "-i", "--json"],
+            ["publish", "-p", proj["slug"], "-c", "1", "--account", "kênh_review_vip", "--video", "x.mp4", "--json"],
+            ["youtube", "upload", "-p", proj["slug"], "-c", "1", "--account", "kênh_review_vip", "--subtitles", "x.srt", "--json"],
+            ["youtube", "upload", "-p", proj["slug"], "-c", "1", "--account", "kênh_review_vip", "--thumbnail", "x.jpg", "--json"],
+        ]:
+            assert main(bad_args) == ExitCode.VALIDATION_ERROR
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="FFmpeg/FFprobe required")

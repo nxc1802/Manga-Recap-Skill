@@ -125,16 +125,17 @@ def test_command_registry_exposes_canonical_and_compat_commands():
         "tts",
         "render",
         "compile",
-        "batch",
         "youtube",
         "clean",
         "cloud",
         "review-pack",
-        "review-approve",
         "archive",
     ):
         assert expected in registered_cmds
         assert expected in COMMAND_REGISTRY
+    for retired in ("batch", "review-approve", "review_pack", "tts_benchmark"):
+        assert retired not in registered_cmds
+        assert retired not in COMMAND_REGISTRY
 
 
 def test_prepare_creates_ingest_artifacts_never_script_and_reports_status(tmp_path, monkeypatch):

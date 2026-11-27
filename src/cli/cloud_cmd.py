@@ -108,7 +108,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 "error": str(e),
             }
 
-    if subaction in ("produce-series", "produce_series"):
+    if subaction == "produce-series":
         project_slug = getattr(args, "project", None)
         chapters_arg = getattr(args, "chapters", None) or getattr(args, "chapter", None)
         if not project_slug or not chapters_arg:
@@ -136,7 +136,7 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 "error": f"Strict Form Gate: {ve}",
             }
 
-        from src.cli.batch_cmd import parse_chapter_list
+        from src.core.workflow import parse_chapter_list
         if isinstance(chapters_arg, list):
             chapters = [str(c) for c in chapters_arg]
         else:

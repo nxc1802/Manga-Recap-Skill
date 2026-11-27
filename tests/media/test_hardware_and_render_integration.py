@@ -26,7 +26,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from src.cli.batch_cmd import handle_batch
 from src.cli.main import build_parser, execute_subcommand
 from src.cli.render_cmd import handle_render
 from src.cli.tts_cmd import handle_tts
@@ -378,11 +377,11 @@ class TestCliPhaseCIntegration:
         ])
         assert args.encoder == "libx264"
 
-    def test_cli_batch_encoder_forwarding(self):
-        """manga-recap batch accepts and forwards --encoder and worker flags."""
+    def test_cli_produce_encoder_forwarding_and_batch_rejected(self):
+        """manga-recap produce forwards --encoder and worker flags; removed batch command is rejected."""
         parser = build_parser()
         args = parser.parse_args([
-            "batch",
+            "produce",
             "-p", "test_proj",
             "-c", "1,2",
             "--encoder", "h264_videotoolbox",
@@ -392,6 +391,8 @@ class TestCliPhaseCIntegration:
         assert args.encoder == "h264_videotoolbox"
         assert args.tts_workers == 2
         assert args.render_workers == 2
+        with pytest.raises(SystemExit):
+            parser.parse_args(["batch", "-p", "test_proj"])
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.
     pass

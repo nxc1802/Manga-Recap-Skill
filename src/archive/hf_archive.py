@@ -1,4 +1,4 @@
-"""Archive project files into a private Hugging Face dataset and restore by commit."""
+"""Archive project files into a private Hugging Face dataset and verify integrity by commit."""
 from __future__ import annotations
 
 import fnmatch
@@ -266,64 +266,4 @@ def archive_verify(project_slug, repo_id=None, token=None, revision=None, projec
         commit_sha=revision,
         verified_file_count=len(files),
         receipt_path=str(path),
-    )
-
-
-def archive_restore(
-    project_slug,
-    revision=None,
-    repo_id=None,
-    token=None,
-    target_dir=None,
-    project_dir=None,
-    allow_non_empty=False,
-):
-    """Restores verified archived artifacts to ``target_dir`` without leaving partial corrupted files."""
-    project = Path(project_dir or get_project_dir(project_slug))
-    receipt_path = project / "archive_receipt.json"
-    receipt = ArchiveReceipt.model_validate(read_json(receipt_path)) if receipt_path.is_file() else None
-    repo = repo_id or (receipt.repo_id if receipt else DEFAULT_HF_REPO_ID)
-    revision = _require_revision(revision or (receipt.commit_sha if receipt else None))
-    target = Path(target_dir or project).absolute()
-    if target.is_symlink() or (target.exists() and not target.is_dir()):
-        raise DomainValidationError("Restore target must be a regular directory")
-    if target.exists() and any(target.iterdir()) and not allow_non_empty:
-        raise DomainValidationError("Choose an empty --target-dir or explicitly allow a nonempty target")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    remote_manifest = _remote_file(repo, revision, f"series/{project_slug}/archive_manifest.json", token)
-    manifest = read_json(remote_manifest)
-    if receipt and repo == receipt.repo_id and revision == receipt.commit_sha:
-        if compute_file_sha256(remote_manifest) != receipt.manifest_sha256:
-            raise DomainValidationError("Archive manifest differs from the local receipt")
-    files = list(_manifest_files(manifest, project_slug, repo))
-    restored = 0
-    with tempfile.TemporaryDirectory(prefix=".manga-restore-", dir=target.parent) as directory:
-        stage = Path(directory) / "project"
-        stage.mkdir()
-        shutil.copy2(remote_manifest, stage / "archive_manifest.json")
-        for relative, entry in files:
-            if not is_whitelisted_archive_path(relative, stage)[0]:
-                continue
-            dest = stage / relative
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(_checked_download(repo, revision, entry, token), dest)
-            restored += 1
-        if not target.exists() or not any(target.iterdir()):
-            stage.replace(target)
-        else:
-            for file in stage.rglob("*"):
-                if file.is_file() and _has_symlink_component(target, file.relative_to(stage)):
-                    raise DomainValidationError(f"Symlink in restore destination: {file.relative_to(stage)}")
-            for file in stage.rglob("*"):
-                if file.is_file():
-                    dest = target / file.relative_to(stage)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    file.replace(dest)
-    return dict(
-        status="success",
-        project_slug=project_slug,
-        repo_id=repo,
-        revision=revision,
-        target_dir=str(target),
-        restored_files=restored,
     )
