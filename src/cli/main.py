@@ -221,19 +221,11 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld = subparsers.add_parser("cloud", help="Kaggle/Remote Cloud GPU runner for extreme speed", parents=[common_parent])
     cloud_subs = p_cld.add_subparsers(dest="cloud_action", title="cloud actions")
 
-    p_cld_run = cloud_subs.add_parser("run", help="Run cloud production for a single chapter", parents=[common_parent])
+    p_cld_run = cloud_subs.add_parser("run", help="Run cloud production for a single chapter (Dual-T4 Policy B)", parents=[common_parent])
     p_cld_run.add_argument("-p", "--project", default=None, help="Project slug")
     p_cld_run.add_argument("-c", "--chapter", default=None, help="Chapter number")
     p_cld_run.add_argument("--chapters", default=None, help="Comma-separated or range list of chapters")
     p_cld_run.add_argument("--provider", choices=["kaggle"], default="kaggle", help="Cloud provider (default: kaggle)")
-    p_cld_run.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
-    p_cld_run.add_argument("--extreme", action="store_true", default=True, help="Enable extreme speed optimizations")
-    p_cld_run.add_argument(
-        "--cloud-policy",
-        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
-        default="auto",
-        help="Dual-GPU execution policy override (default: auto)",
-    )
 
     p_cld_info = cloud_subs.add_parser("info", help="Get cloud provider information and authentication status", parents=[common_parent])
     p_cld_info.add_argument("--provider", choices=["kaggle"], default="kaggle")
@@ -247,6 +239,10 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_pull.add_argument("-p", "--project", default=None)
     p_cld_pull.add_argument("-c", "--chapter", default=None)
 
+    p_cld_rec = cloud_subs.add_parser("reconcile", help="Reconcile persisted Kaggle cloud job status using its original account", parents=[common_parent])
+    p_cld_rec.add_argument("-p", "--project", required=True, help="Project slug")
+    p_cld_rec.add_argument("-c", "--chapter", default=None, help="Optional chapter number for chapter-scoped jobs")
+
     p_cld_series = cloud_subs.add_parser(
         "produce-series",
         aliases=["produce_series"],
@@ -256,14 +252,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_cld_series.add_argument("-p", "--project", required=True, help="Project slug")
     p_cld_series.add_argument("-c", "--chapters", required=True, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
     p_cld_series.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
-    p_cld_series.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
     p_cld_series.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
-    p_cld_series.add_argument(
-        "--cloud-policy",
-        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
-        default="auto",
-        help="Dual-GPU execution policy override (default: auto)",
-    )
     p_cld_series.add_argument(
         "--chunked",
         action="store_true",
@@ -335,12 +324,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
     p_prod.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
     p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
-    p_prod.add_argument(
-        "--cloud-policy",
-        choices=["auto", "dual_tts_shared_encode", "baseline_split"],
-        default="auto",
-        help="Kaggle Dual-GPU execution policy override (default: auto)",
-    )
     p_prod.add_argument("--force", action="store_true", help="Force re-processing of completed chapters")
 
     # 23. publish (metadata, upload, and post-upload verification)
@@ -416,7 +399,6 @@ def _handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
         render_workers=getattr(args, "render_workers", 2),
         tts_workers=getattr(args, "tts_workers", 2),
         force=bool(getattr(args, "force", False)),
-        cloud_policy=str(getattr(args, "cloud_policy", "auto") or "auto"),
     )
 
 

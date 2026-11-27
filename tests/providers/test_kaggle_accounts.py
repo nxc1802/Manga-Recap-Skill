@@ -1,5 +1,4 @@
-"""No live API calls: exercise sequential fallback and private credential storage."""
-import argparse
+"""No live API calls: exercise explicit single-account selection and private credential storage."""
 import json
 import os
 import sys
@@ -10,8 +9,9 @@ import pytest
 
 from src.cli.exit_codes import CliValidationError
 from src.cloud.account_manager import KaggleAccountManager
-from src.cloud.account_fallback import with_account_fallback
 from src.cloud.kaggle_service import KaggleCloudService
+from src.providers.kaggle import KaggleAuthError
+from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401
 
 
 @pytest.fixture
@@ -46,51 +46,32 @@ def test_legacy_token_kept_once_and_default_respected(accounts,monkeypatch):
     assert accounts.candidates()[0][0]=='account_3'
 
 
-@pytest.mark.parametrize('outcome', [
-    False,
-    None,
-    {},
-    {'status': 'error'},
-    {'success': False},
-    RuntimeError('quota exceeded KGAT_test_1'),
-    RuntimeError('2 sessions running'),
-    CliValidationError('G6 missing'),
-    ValueError('Artifact hash mismatch'),
-])
-def test_fallback_fails_closed_on_ambiguous_or_unclassified_outcomes(accounts, monkeypatch, outcome, caplog):
-    def auth(self): self._api = object(); self._username = self.account_name
-    monkeypatch.setattr(KaggleCloudService, '_authenticate', auth)
-    service = KaggleCloudService()
-    calls = []
+def test_auth_failure_does_not_rotate_accounts_and_explicit_account_binds(accounts, monkeypatch):
+    seen = []
 
-    @with_account_fallback
-    def dispatch(self):
-        calls.append(self.account_name)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    if isinstance(outcome, Exception):
-        with pytest.raises(type(outcome)):
-            dispatch(service)
-    else:
-        assert dispatch(service) == outcome
-    assert calls == ['account_1']
-    assert 'KGAT_' not in caplog.text
-
-
-def test_auth_failure_moves_to_next_and_explicit_token_is_pinned(accounts,monkeypatch):
-    seen=[]
     def auth(self):
         seen.append(self.api_token)
-        self._api=object() if self.api_token=='KGAT_test_2' else None
-    monkeypatch.setattr(KaggleCloudService,'_authenticate',auth)
-    service=KaggleCloudService()
-    assert service.account_name=='account_2' and len(seen)==2
-    assert service.is_authenticated
+        self._api = object() if self.api_token == 'KGAT_test_2' else None
+
+    monkeypatch.setattr(KaggleCloudService, '_authenticate', auth)
+    # Default is account_1; failing auth MUST NOT silently rotate to account_2 (E05)
+    service = KaggleCloudService()
+    assert service.account_name == 'account_1'
+    assert seen == ['KGAT_test_1']
+    assert not service.is_authenticated
+
+    # Explicit account selection binds only that configured account
     seen.clear()
-    service=KaggleCloudService(api_token='KGAT_explicit')
-    assert seen==['KGAT_explicit'] and not service.is_authenticated
+    explicit_acct = KaggleCloudService(account_name='account_2')
+    assert explicit_acct.account_name == 'account_2' and explicit_acct.is_authenticated
+    assert seen == ['KGAT_test_2']
+
+    with pytest.raises(KaggleAuthError, match='missing_account'):
+        KaggleCloudService(account_name='missing_account')
+
+    seen.clear()
+    explicit_tok = KaggleCloudService(api_token='KGAT_explicit')
+    assert seen == ['KGAT_explicit'] and not explicit_tok.is_authenticated
 
 
 def test_sdk_credentials_are_bound_and_environment_restored(accounts,monkeypatch):
@@ -143,36 +124,9 @@ def test_first_add_preserves_existing_and_remove_is_effective(tmp_path,monkeypat
     assert manager.candidates()==[]
 
 
-def test_reused_service_rotates_only_on_explicit_safe_pre_submit_errors(accounts, monkeypatch):
-    from src.cloud.kaggle_service import KaggleExecutionError
-    from src.providers.kaggle import KaggleAuthError
-
-    monkeypatch.setattr(KaggleCloudService, '_authenticate', lambda self: setattr(self, '_api', object()))
-    service = KaggleCloudService()
-    service._select_account(2)
-    seen = []
-
-    @with_account_fallback
-    def operation(self):
-        seen.append(self.account_name)
-        if self.account_name == 'account_3':
-            raise KaggleAuthError('stale token on account_3', category='auth_failed', provider='kaggle')
-        if self.account_name == 'account_1':
-            raise KaggleExecutionError('slug locked pre-submit', category='submission_rejected', provider='kaggle')
-        return {'status': 'success'}
-
-    assert operation(service)['status'] == 'success'
-    assert seen == ['account_3', 'account_1', 'account_2']
-    assert set(json.loads(accounts.registry_file.read_text())) == {'accounts', 'default_account'}
-
-
-# The canonical fixture contains isolated image/PCM inputs, not live production evidence.
-from tests.workflow.test_canonical_workflow import unit_project
-
-
-def test_real_dispatch_blocks_quota_rotation_and_falls_back_only_on_safe_rejection(accounts, unit_project, monkeypatch):
+def test_dispatch_pins_single_account_and_rejects_without_rotation(accounts, unit_project, monkeypatch):
     import tarfile
-    from src.cloud.kaggle_service import KaggleQuotaExhaustedError
+    from src.cloud.kaggle_service import KaggleExecutionError, KaggleQuotaExhaustedError
 
     root, chapter = unit_project
     pushes = []
@@ -198,11 +152,9 @@ def test_real_dispatch_blocks_quota_rotation_and_falls_back_only_on_safe_rejecti
             with tarfile.open(Path(folder) / 'payload.tar.gz') as archive:
                 assert not any('kaggle_accounts' in name for name in archive.getnames())
             pushes.append(self.name)
-            if self.name == 'account_1':
-                if quota_mode['quota_for_acct_1']:
-                    return SimpleNamespace(error='GPU quota exceeded')
-                return SimpleNamespace(error='kernel slug conflict pre-submit')
-            return SimpleNamespace(ref=self.name + '/accepted', error='')
+            if quota_mode['quota_for_acct_1']:
+                return SimpleNamespace(error='GPU quota exceeded')
+            return SimpleNamespace(error='kernel slug conflict pre-submit')
 
     def auth(self): self._username = self.account_name; self._api = Api(self.account_name)
     monkeypatch.setattr(KaggleCloudService, '_authenticate', auth)
@@ -210,16 +162,16 @@ def test_real_dispatch_blocks_quota_rotation_and_falls_back_only_on_safe_rejecti
     service = KaggleCloudService()
     before = (chapter / 'chapter.json').read_bytes()
 
-    # Quota rejection NEVER rotates to another account (prevents limit evasion) and rolls back reservation cleanly.
+    # Quota rejection stays pinned to account_1 (E05) and rolls back reservation cleanly.
     with pytest.raises(KaggleQuotaExhaustedError, match='quota'):
-        service.dispatch_chapter_job_with_fallback('unit', '1', job_type='render', wait=False)
+        service.dispatch_chapter_job('unit', '1', job_type='render', wait=False)
     assert pushes == ['account_1']
     assert not (chapter / 'cloud_job.json').exists()
 
-    # Explicit non-quota pre-submit rejection rotates safely to account_2 without leaving stale state.
+    # Non-quota pre-submit rejection ALSO fails cleanly on account_1 without rotating to account_2 (E05).
     quota_mode['quota_for_acct_1'] = False
-    service2 = KaggleCloudService()
-    result = service2.dispatch_chapter_job_with_fallback('unit', '1', job_type='render', wait=False)
-    assert pushes == ['account_1', 'account_1', 'account_2']
-    assert result['status'] == 'dispatched' and result['kernel_ref'] == 'account_2/accepted'
+    with pytest.raises(KaggleExecutionError, match='submission'):
+        service.dispatch_chapter_job('unit', '1', job_type='render', wait=False)
+    assert pushes == ['account_1', 'account_1']
+    assert not (chapter / 'cloud_job.json').exists()
     assert (chapter / 'chapter.json').read_bytes() == before

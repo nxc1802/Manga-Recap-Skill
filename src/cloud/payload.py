@@ -40,8 +40,6 @@ def package_payload(
     job_type,
     *,
     series=False,
-    cloud_policy=None,
-    cloud_batch_size=None,
 ):
     from src.core.human_review import require_preview_approval, require_voice_approval
     from src.core.series_setup import require_series_setup
@@ -175,10 +173,6 @@ def package_payload(
             job_type=job_type,
             files={relative: calculate_sha256(stage / relative) for relative in sorted(files)},
         )
-        if cloud_policy:
-            manifest["cloud_policy"] = str(cloud_policy)
-        if cloud_batch_size is not None:
-            manifest["cloud_batch_size"] = int(cloud_batch_size)
         atomic_write_json(stage / "payload_manifest.json", manifest)
         digest = calculate_sha256(stage / "payload_manifest.json")
         verify_payload_manifest(stage, digest)

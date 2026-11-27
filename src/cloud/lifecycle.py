@@ -44,6 +44,8 @@ ACTIVE_JOB_STATES = {
     LifecycleState.QUEUED,
     LifecycleState.RUNNING,
     "DISPATCHED",
+    "COMPLETE",
+    "COMPLETED",
     LifecycleState.REMOTE_COMPLETE,
     LifecycleState.QUEUE_TIMEOUT,
     LifecycleState.CLIENT_TIMEOUT,
@@ -55,24 +57,6 @@ TERMINAL_REMOTE_FAILURE_STATES = {
     "CANCEL",
     "CANCELLED",
     "CANCEL_ACKNOWLEDGED",
-}
-
-SAFE_PRE_SUBMIT_FALLBACK_CATEGORIES = {
-    "auth_failed",
-    "submission_rejected",
-}
-
-NON_RETRYABLE_FALLBACK_CATEGORIES = {
-    "remote_failed",
-    "submit_unknown",
-    "active_job_exists",
-    "client_poll_timeout",
-    "queue_timeout",
-    "quota_exhausted",
-    "invalid_response",
-    "dataset_failed",
-    "manifest_mismatch",
-    "corrupt_artifact",
 }
 
 MAX_KAGGLE_GPU_SESSION_SEC = 32400  # 9h Kaggle interactive/batch GPU session ceiling
@@ -195,9 +179,11 @@ def reconcile_submit_unknown(
         ) from exc
 
     mapped = normalize_remote_status(norm or raw_status)
+    persisted_status = LifecycleState.REMOTE_COMPLETE if mapped == "COMPLETE" else mapped
     updated = {
         **state_payload,
-        "status": mapped,
+        "status": persisted_status,
+        "last_remote_status": mapped,
         "updated_at": _utc_iso_now(),
     }
     if mapped == "FAILED":

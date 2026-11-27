@@ -1,4 +1,4 @@
-"""Overlap native VieNeu micro-batches with encoding on a second GPU."""
+"""Dual-T4 Policy B parallel VieNeu TTS and NVENC shot-encoding worker."""
 from __future__ import annotations
 
 import multiprocessing as mp
@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from src.cloud.lifecycle import check_disk_low_water
 from src.cloud.payload import verify_payload_manifest
 from src.cloud.scheduler import (
-    ExecutionPolicy,
     MAX_CLOUD_TTS_BATCH_SIZE,
     UtteranceDispatcher,
     UtteranceItem,
@@ -24,7 +23,6 @@ from src.cloud.scheduler import (
     resolve_execution_policy,
 )
 from src.cloud.telemetry import (
-    ResourceSampler,
     TelemetryRecorder,
     probe_worker_hardware,
     save_telemetry_report,
@@ -45,50 +43,6 @@ from src.render.fast_renderer import (
 from src.render.subtitle import SubtitleGenerator
 from src.render.visual_policy import assemble_visual_plan, iter_segment_shots, resolve_visual_plan
 from src.tts.catalog import resolve_voice_id
-
-
-def _synthesize_batch(worker, chapter, segments, voice, speed, batch_size):
-    tasks = []
-    for segment in segments:
-        fingerprint = calculate_utterance_fingerprint(
-            text=segment.narrator_text, voice=voice, speed=speed, emotion=segment.emotion,
-            emotion_cue=segment.emotion_cue, engine_mode="neural",
-        )
-        output = chapter / "audio" / "clips" / f"audio_{chapter.name}_{segment.seq_id}.wav"
-        if not output.resolve().is_relative_to(chapter / "audio" / "clips"):
-            raise ValueError(f"Unsafe segment sequence ID: {segment.seq_id}")
-        if segment.voice_id and segment.is_manual_voice() and resolve_voice_id(segment.voice_id) != voice:
-            raise ValueError("Segment voice conflicts with the confirmed narrator")
-        if segment.status == "synthesized" and segment.fingerprint == fingerprint and segment.checksum:
-            try:
-                if calculate_sha256(output) == segment.checksum:
-                    segment.duration = get_wav_duration(output)
-                    segment.audio_path = output.relative_to(chapter).as_posix()
-                    continue
-            except (OSError, ValueError):
-                pass
-        tasks.append(dict(seq_id=segment.seq_id, text=segment.narrator_text, voice=voice, speed=speed,
-                          emotion=segment.emotion, emotion_cue=segment.emotion_cue,
-                          output_path=output, fingerprint=fingerprint))
-
-    if not tasks:
-        return
-    results = worker.synthesize_batch_tasks(tasks, batch_size=batch_size, cpu_workers=2)
-    by_id = {result["seq_id"]: result for result in results}
-    pending = {task["seq_id"]: task for task in tasks}
-    for segment in segments:
-        task = pending.get(segment.seq_id)
-        if task is None:
-            continue
-        result = by_id[segment.seq_id]
-        segment.duration = result["duration"]
-        segment.checksum = result["sha256"]
-        segment.audio_path = task["output_path"].relative_to(chapter).as_posix()
-        segment.fingerprint = task["fingerprint"]
-        segment.voice_id = segment.synthesized_voice = voice
-        if segment.voice_source != "manual":
-            segment.voice_source = "tts"
-        segment.status = "synthesized"
 
 
 def _subtitle_generator(settings):
@@ -209,97 +163,6 @@ class _ChapterShotPrep:
         return ready_tasks, len(self.shots)
 
 
-def _prepare_chapter(project, number, work, job, quality, settings, encoder, worker, approval, jobs, events, batch_size):
-    chapter = project / "chapters" / number
-    script = load_recap_script(chapter)
-    manifest = load_manifest(chapter)
-    render = job != "tts"
-    produce = job != "render"
-    if render and quality == "final" and number == "1":
-        from src.render.chapter_renderer import render_chapter
-
-        render_chapter(project, number, quality="final", encoder=encoder)
-        events.put(("ready", number, 0, False))
-        return
-
-    subtitle = _subtitle_generator(settings)
-    watermark, watermark_xy = (None, None)
-    if render:
-        work.mkdir(parents=True, exist_ok=True)
-        watermark, watermark_xy = prepare_shot_watermark(
-            chapter, work, settings["target_width"], settings["target_height"])
-        update_checkpoint(chapter, StageType.RENDER, CheckpointStatus.RUNNING)
-    if produce:
-        update_checkpoint(chapter, StageType.TTS, CheckpointStatus.RUNNING)
-    voice = resolve_voice_id(approval.primary_voice)
-    prep = (
-        _ChapterShotPrep(chapter, manifest, script, work, settings, encoder, quality, subtitle, watermark, watermark_xy)
-        if render
-        else None
-    )
-    if prep is not None and not produce:
-        prep.input_script = None
-    for start in range(0, len(script.segments), batch_size):
-        segments = script.segments[start:start + batch_size]
-        if produce:
-            t_tts = time.monotonic()
-            _synthesize_batch(worker, chapter, segments, voice, approval.speed, batch_size)
-            events.put((
-                "span",
-                "tts",
-                t_tts,
-                time.monotonic(),
-                number,
-                f"gpu:{getattr(worker, 'gpu_id', 0)}",
-                {"segments": len(segments)},
-            ))
-            if start + batch_size >= len(script.segments):
-                script.total_duration_seconds = round(sum(s.duration for s in script.segments), 3)
-            atomic_write_json(chapter / "script.json", script)
-        else:
-            for segment in segments:
-                duration = get_wav_duration(resolve_audio(chapter, segment))
-                if segment.duration is None or abs(segment.duration - duration) > 0.001:
-                    raise ValueError(f"Audio duration changed for {segment.seq_id}")
-        if render and not prep.authored:
-            t_prep = time.monotonic()
-            for item in prep.advance_segments(segments):
-                jobs.put(item)
-            events.put(("span", "shot_prep", t_prep, time.monotonic(), number, "cpu", {"shots": len(segments)}))
-
-    if produce:
-        update_checkpoint(chapter, StageType.TTS, CheckpointStatus.COMPLETED,
-                          artifacts=[s.audio_path for s in script.segments])
-    total_shots = 0
-    if render:
-        final_tasks, total_shots = prep.finalize()
-        for item in final_tasks:
-            jobs.put(item)
-    events.put(("ready", number, total_shots, render))
-
-
-class _InProcessQueue:
-    """Lock-free single-process FIFO queue avoiding OS pipe deadlocks on single GPU."""
-
-    def __init__(self):
-        self._buf = deque()
-
-    def put(self, item):
-        self._buf.append(item)
-
-    def get(self):
-        return self._buf.popleft()
-
-    def qsize(self):
-        return len(self._buf)
-
-    def empty(self):
-        return not self._buf
-
-    def close(self):
-        self._buf.clear()
-
-
 class _HeartbeatEmitter:
     """Daemon heartbeat emitter that never blocks full event queues."""
 
@@ -398,36 +261,6 @@ def _encode_queue(jobs, events, gpu_id, workers):
                     raise local_errors.get()
     finally:
         hb.stop()
-
-
-def _audio_then_encode(project, chapters, work, job, single_preview, config, encoder, gpu_id,
-                       process_count, workers, jobs, events, batch_size):
-    from src.tts.cuda_worker import VieNeuCUDAWorker
-
-    local_jobs = _InProcessQueue() if jobs is None else jobs
-    hb = _HeartbeatEmitter(events, f"gpu:{gpu_id}")
-    hb.start()
-    try:
-        approval = require_voice_approval(project)
-        model = VieNeuCUDAWorker(gpu_id=gpu_id) if job != "render" else None
-        try:
-            for number in chapters:
-                quality = "preview" if single_preview and number == "1" else "final"
-                _prepare_chapter(project, number, work / number, job, quality, config["render_settings"],
-                                 encoder, model, approval, local_jobs, events, batch_size)
-        finally:
-            if model is not None:
-                model.unload()
-
-        if job == "tts":
-            return
-        for _ in range(process_count * workers):
-            local_jobs.put(None)
-        _encode_queue(local_jobs, events, gpu_id, workers)
-    finally:
-        hb.stop()
-        if jobs is None:
-            local_jobs.close()
 
 
 def _safe_qsize(q):
@@ -849,17 +682,6 @@ def _run_coordinator_stage(
     encode_jobs = ctx.Queue(maxsize=max(32, encode_capacity * 2)) if has_enc else None
     events = ctx.Queue(maxsize=512)
 
-    sampler = ResourceSampler(
-        work_root=work,
-        interval_sec=1.5,
-        queue_depth_fn=lambda: {
-            "tts_qsize": _safe_qsize(tts_jobs),
-            "encode_qsize": _safe_qsize(encode_jobs),
-            "events_qsize": _safe_qsize(events),
-        },
-    )
-    sampler.start()
-
     children = []
     enc_set = set(enc_devs)
     tts_set = set(tts_devs)
@@ -1049,8 +871,6 @@ def _run_coordinator_stage(
             if child.exitcode != 0:
                 raise RuntimeError(f"Worker failed to exit cleanly: {child.exitcode}")
     finally:
-        sampler.stop()
-        recorder.set_sampler_summary(sampler.summarize())
         for child in started:
             _terminate_process_tree(child)
         if tts_jobs is not None:
@@ -1060,28 +880,55 @@ def _run_coordinator_stage(
         events.close()
 
 
+def _validate_worker_hardware(hardware: dict, *, job_type: str, encoder: str) -> tuple[list[int], list[int]]:
+    """Enforces V7 Dual-T4 hardware preflight: 2 Tesla T4 CUDA devices and dual h264_nvenc for render/produce."""
+    raw_devices = hardware.get("devices") or []
+    devices = [int(d["index"]) for d in raw_devices][:2]
+    if len(devices) < 2:
+        raise RuntimeError(
+            f"Kaggle V7 hardware preflight failed: requires 2 Tesla T4 GPUs, found {len(devices)} CUDA device(s)."
+        )
+    for dev in raw_devices[:2]:
+        name = str(dev.get("name") or "").strip()
+        if name and "T4" not in name.upper():
+            raise RuntimeError(
+                f"Kaggle V7 hardware preflight failed: expected Tesla T4 GPU, got '{name}'."
+            )
+    if job_type == "tts":
+        return devices, []
+    if encoder != "h264_nvenc":
+        raise RuntimeError(
+            f"Kaggle V7 hardware preflight failed: unsupported encoder '{encoder}'; 'h264_nvenc' is required."
+        )
+    usable_nvenc = sorted(int(x) for x in (hardware.get("usable_nvenc_devices") or []))
+    if len(usable_nvenc) < 2 or not set(devices).issubset(set(usable_nvenc)):
+        raise RuntimeError(
+            f"Kaggle V7 hardware preflight failed: usable h264_nvenc required on both GPUs {devices}, "
+            f"found usable_nvenc_devices={usable_nvenc}."
+        )
+    return devices, usable_nvenc[:2]
+
+
 def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=2,
-                 batch_size=None, single_preview=True, telemetry=None,
+                 single_preview=True, telemetry=None,
                  worker_heartbeat_timeout_sec=1800.0, min_free_disk_mb=256,
-                 policy="auto", usable_nvenc_devices=None):
-    """Run scheduled single- or dual-GPU TTS and shot encoding pipeline cleanly."""
+                 usable_nvenc_devices=None):
+    """Run canonical V7 Dual-T4 Policy B TTS and NVENC shot-encoding pipeline."""
     project = Path(project).resolve()
     config = read_json(project / "project.json")
     workers = max(1, min(4, int(render_workers)))
-    eff_batch_size = int(default_cloud_batch_size(job) if batch_size is None else batch_size)
+    eff_batch_size = int(default_cloud_batch_size(job))
     if job not in {"tts", "render", "produce"} or not chapters or eff_batch_size < 1:
         raise ValueError("Invalid worker job")
     if not single_preview or any(number != "1" for number in chapters):
         require_preview_approval(project)
-    raw_devices = list(gpu_ids)[:2] or [0]
+    raw_devices = list(gpu_ids)[:2]
     plan = resolve_execution_policy(
-        policy,
         job=job,
         encoder=encoder,
         cuda_devices=raw_devices,
         usable_nvenc_devices=usable_nvenc_devices,
     )
-    eff_encoder = plan.encoder
 
     recorder = telemetry or TelemetryRecorder(project_slug=project.name, policy=plan.policy, chapters=list(chapters))
     recorder.policy = plan.policy
@@ -1089,177 +936,54 @@ def run_pipeline(project, chapters, job, *, encoder="h264_nvenc", gpu_ids=(0, 1)
         {**(recorder._hardware or {}), "scheduler_policy": plan.as_dict(), "batch_size": eff_batch_size}
     )
 
-    if job in {"tts", "render"} or plan.policy != ExecutionPolicy.BASELINE_SPLIT:
-        return _run_scheduled_pipeline(
-            project,
-            chapters,
-            job,
-            plan=plan,
-            workers=workers,
-            batch_size=eff_batch_size,
-            single_preview=single_preview,
-            config=config,
-            recorder=recorder,
-            worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
-            min_free_disk_mb=min_free_disk_mb,
-        )
-
-    devices = list(plan.encode_devices if eff_encoder == "h264_nvenc" else plan.tts_devices)[:2] or [0]
-    if len(plan.tts_devices) >= 1 and len(plan.encode_devices) >= 2 and eff_encoder == "h264_nvenc":
-        ordered = [plan.tts_devices[0]]
-        for d in plan.encode_devices:
-            if d not in ordered:
-                ordered.append(d)
-        devices = ordered[:2]
-
-    with tempfile.TemporaryDirectory(prefix="manga-shots-") as directory:
-        work = Path(directory)
-        check_disk_low_water(work, min_free_mb=min_free_disk_mb)
-        ctx = mp.get_context("spawn")
-        # Only bind a cross-process job queue when a secondary encode consumer runs concurrently.
-        jobs = ctx.Queue(maxsize=max(32, workers * 16)) if len(devices) == 2 else None
-        events = ctx.Queue(maxsize=512)
-        sampler = ResourceSampler(
-            work_root=work,
-            interval_sec=1.5,
-            queue_depth_fn=lambda: {
-                "jobs_qsize": _safe_qsize(jobs),
-                "events_qsize": _safe_qsize(events),
-            },
-        )
-        sampler.start()
-        children = [ctx.Process(target=_audio_then_encode, args=(
-            project, chapters, work, job, single_preview, config, eff_encoder, devices[0], len(devices),
-            workers, jobs, events, eff_batch_size,
-        ))]
-        if len(devices) == 2:
-            children.append(ctx.Process(target=_encode_queue, args=(jobs, events, devices[1], workers)))
-
-        expected = {}
-        clips = {number: {} for number in chapters}
-        completed = set()
-        started = []
-        last_activity = time.monotonic()
-        heartbeats = {}
-        finalizer = _AsyncChapterFinalizer(project, config, recorder, max_workers=1, min_free_disk_mb=min_free_disk_mb)
-        finished_ok = False
-        try:
-            for child in children:
-                child.start()
-                started.append(child)
-            while len(completed) < len(chapters):
-                finalizer.poll_completed()
-                try:
-                    event = events.get(timeout=0.5)
-                except queue.Empty:
-                    finalizer.poll_completed()
-                    if any(child.exitcode not in (None, 0) for child in started):
-                        raise RuntimeError("Audio or visual process failed. See worker traceback.")
-                    if all(child.exitcode is not None for child in started):
-                        raise RuntimeError("Worker exited before reporting all chapters")
-                    if (
-                        worker_heartbeat_timeout_sec is not None
-                        and float(worker_heartbeat_timeout_sec) > 0
-                        and (time.monotonic() - last_activity) > float(worker_heartbeat_timeout_sec)
-                    ):
-                        raise RuntimeError(
-                            f"Worker heartbeat stalled for >{int(worker_heartbeat_timeout_sec)}s"
-                        )
-                    continue
-                last_activity = time.monotonic()
-                kind, *rest = event
-                if kind == "heartbeat":
-                    worker_label, ts, _ = rest
-                    heartbeats[worker_label] = ts
-                    continue
-                if kind == "error":
-                    raise RuntimeError(f"Shot encoding failed: {rest[0]}")
-                if kind == "span":
-                    stage, s_t0, s_t1, ch_num, dev_id, meta = rest
-                    recorder.record_stage(
-                        stage,
-                        s_t0,
-                        s_t1,
-                        chapter_id=str(ch_num),
-                        device_id=str(dev_id),
-                        metadata=meta,
-                    )
-                    continue
-                number = rest[0]
-                if kind == "ready":
-                    expected[number] = tuple(rest[1:])
-                else:
-                    index, path = rest[1:]
-                    clips[number][index] = Path(path)
-                if number in expected and len(clips[number]) == expected[number][0]:
-                    if expected[number][1]:
-                        quality = "preview" if single_preview and number == "1" else "final"
-                        finalizer.submit(
-                            number,
-                            work / number,
-                            [clips[number][i] for i in range(len(clips[number]))],
-                            quality,
-                        )
-                    completed.add(number)
-            for child in started:
-                child.join(timeout=30)
-                if child.exitcode != 0:
-                    raise RuntimeError(f"Worker failed to exit cleanly: {child.exitcode}")
-            finalizer.wait_ordered(canonical_order=chapters)
-            finished_ok = True
-        finally:
-            finalizer.close(cancel_pending=not finished_ok)
-            sampler.stop()
-            recorder.set_sampler_summary(sampler.summarize())
-            for child in started:
-                _terminate_process_tree(child)
-            if jobs is not None:
-                jobs.close()
-            events.close()
+    return _run_scheduled_pipeline(
+        project,
+        chapters,
+        job,
+        plan=plan,
+        workers=workers,
+        batch_size=eff_batch_size,
+        single_preview=single_preview,
+        config=config,
+        recorder=recorder,
+        worker_heartbeat_timeout_sec=worker_heartbeat_timeout_sec,
+        min_free_disk_mb=min_free_disk_mb,
+    )
 
 
-def run(root, manifest_hash, output_dir, encoder="h264_nvenc", render_workers=2, compile_feature=False,
-        policy="auto"):
+def run(root, manifest_hash, output_dir, encoder="h264_nvenc", render_workers=2, compile_feature=False):
     """Kaggle entry point. The bootstrap calls this exclusively from __main__."""
     recorder = TelemetryRecorder(job_id=f"kaggle-{manifest_hash[:12]}")
     with recorder.span("bootstrap_verify"):
         manifest = verify_payload_manifest(root, manifest_hash)
         recorder.project_slug = manifest["project_slug"]
         recorder.chapters = list(manifest["chapters"])
-        runtime_data = root / "data"
-        project = runtime_data / "projects" / manifest["project_slug"]
-        shutil.copytree(root / "project", project)
-        os.environ["MANGA_RECAP_DATA_DIR"] = str(runtime_data)
-        os.environ["MANGA_RECAP_OUTPUT_DIR"] = str(root / "exports")
 
     from src.cloud.payload import export_results
-    from src.production.hardware import smoke_test_encoder
 
-    hardware = probe_worker_hardware(root, probe_nvenc_devices=True)
+    job_type = manifest["job_type"]
+    hardware = probe_worker_hardware(root, probe_nvenc_devices=(job_type != "tts"))
     recorder.set_hardware(hardware)
+    devices, usable_nvenc = _validate_worker_hardware(hardware, job_type=job_type, encoder=encoder)
 
-    devices = [int(d["index"]) for d in hardware.get("devices") or []][:2]
-    usable_nvenc = sorted(int(x) for x in (hardware.get("usable_nvenc_devices") or []))
-    if encoder == "h264_nvenc" and (not devices or not usable_nvenc and not smoke_test_encoder("h264_nvenc")):
-        encoder = "libx264"
+    runtime_data = root / "data"
+    project = runtime_data / "projects" / manifest["project_slug"]
+    shutil.copytree(root / "project", project)
+    os.environ["MANGA_RECAP_DATA_DIR"] = str(runtime_data)
+    os.environ["MANGA_RECAP_OUTPUT_DIR"] = str(root / "exports")
 
     chapters = manifest["chapters"]
     single_preview = not manifest.get("series")
-    effective_policy = manifest.get("cloud_policy") or policy
-    raw_batch_size = manifest.get("cloud_batch_size")
-    effective_batch_size = int(raw_batch_size) if raw_batch_size is not None else None
     run_pipeline(
         project,
         chapters,
-        manifest["job_type"],
+        job_type,
         encoder=encoder,
         gpu_ids=devices,
         render_workers=render_workers,
-        batch_size=effective_batch_size,
         single_preview=single_preview,
         telemetry=recorder,
-        policy=effective_policy,
-        usable_nvenc_devices=usable_nvenc if encoder == "h264_nvenc" else (),
+        usable_nvenc_devices=usable_nvenc if job_type != "tts" else (),
     )
     out_path = Path(output_dir)
     with recorder.span("export_and_compile"):

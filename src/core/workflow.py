@@ -624,7 +624,6 @@ def _summarize_cloud_state(project_dir: Path, *, chapter_dir: Optional[Path] = N
                 "kernel_ref": job.get("kernel_ref"),
                 "account_name": job.get("account_name"),
                 "job_type": job.get("job_type"),
-                "cloud_policy": job.get("cloud_policy") or "auto",
                 "queue_elapsed_sec": job.get("queue_elapsed_sec"),
                 "total_elapsed_sec": job.get("total_elapsed_sec"),
                 "last_remote_status": job.get("last_remote_status"),
@@ -1218,7 +1217,7 @@ def synthesize_chapter_tts(
                 "Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token."
             )
         update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.RUNNING)
-        cloud_res = service.dispatch_chapter_job_with_fallback(
+        cloud_res = service.dispatch_chapter_job(
             project_slug=project_slug,
             chapter_number=str(chapter_num),
             gpu=True,
@@ -1410,7 +1409,7 @@ def render_chapter_workflow(
                 "Cloud renders chapter 1 preview and later chapters final. Promote reviewed chapter 1 locally."
             )
         from src.cloud.kaggle_service import KaggleCloudService
-        result = KaggleCloudService().dispatch_chapter_job_with_fallback(
+        result = KaggleCloudService().dispatch_chapter_job(
             project_slug,
             str(chapter_num),
             job_type="render",
@@ -1596,7 +1595,7 @@ def batch_chapters(
                     raise DomainValidationError(
                         "Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token."
                     )
-                cloud_res = service.dispatch_chapter_job_with_fallback(
+                cloud_res = service.dispatch_chapter_job(
                     project_slug=project_slug,
                     chapter_number=str(chap_num),
                     gpu=True,
@@ -1721,7 +1720,6 @@ def produce_chapters(
     render_workers: int = 2,
     tts_workers: int = 2,
     force: bool = False,
-    cloud_policy: str = "auto",
 ) -> Dict[str, Any]:
     """
     Canonical Stage 6 (Produce): routes single/multi-chapter production via the confirmed
@@ -1760,7 +1758,7 @@ def produce_chapters(
         service = KaggleCloudService()
         if not service.is_authenticated:
             raise DomainValidationError("Kaggle API authentication failed.")
-        cloud_res = service.dispatch_series_job_with_fallback(
+        cloud_res = service.dispatch_series_job(
             project_slug=project_slug,
             chapters=target_chapters,
             gpu=True,
@@ -1768,7 +1766,6 @@ def produce_chapters(
             compile_feature=compile_after,
             render_workers=render_workers,
             encoder_preference=encoder or "auto",
-            cloud_policy=cloud_policy,
         )
         return {
             "project_slug": project_slug,

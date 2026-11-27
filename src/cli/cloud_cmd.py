@@ -64,6 +64,9 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
     if subaction == "pull":
         return service.pull(args.project, getattr(args, "chapter", None))
 
+    if subaction == "reconcile":
+        return service.reconcile_job(args.project, getattr(args, "chapter", None))
+
     if subaction == "run" and getattr(args, "chapters", None) and not getattr(args, "chapter", None):
         subaction = "produce-series"
 
@@ -81,17 +84,14 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         from src.core.series_setup import require_series_setup
         require_series_setup(project_slug)
 
-        gpu = not getattr(args, "no_gpu", False)
-        cloud_policy = getattr(args, "cloud_policy", "auto") or "auto"
-        logger.info(f"Dispatching cloud production job for {project_slug} ch.{chapter_number} (GPU={gpu}, policy={cloud_policy})...")
+        logger.info(f"Dispatching cloud production job for {project_slug} ch.{chapter_number} (Dual-T4 Policy B)...")
 
         try:
-            res = service.dispatch_chapter_job_with_fallback(
+            res = service.dispatch_chapter_job(
                 project_slug=project_slug,
                 chapter_number=str(chapter_number),
-                gpu=gpu,
+                gpu=True,
                 wait=True,
-                cloud_policy=cloud_policy,
             )
             return {
                 "status": "success",
@@ -162,35 +162,31 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 "error": preview_err or "Chapter 1 preview has not been approved.",
             }
 
-        gpu = not getattr(args, "no_gpu", False)
         compile_feature = bool(getattr(args, "compile", False) or getattr(args, "compile_feature", False))
         render_workers = int(getattr(args, "render_workers", 2))
-        cloud_policy = getattr(args, "cloud_policy", "auto") or "auto"
         chunked = bool(getattr(args, "chunked", False))
 
         logger.info(
             f"Dispatching cloud series production for {project_slug} chapters={chapters} "
-            f"(GPU={gpu}, policy={cloud_policy}, chunked={chunked})..."
+            f"(Dual-T4 Policy B, chunked={chunked})..."
         )
         try:
             if chunked:
                 res = service.dispatch_series_chunks(
                     project_slug=project_slug,
                     chapters=chapters,
-                    gpu=gpu,
+                    gpu=True,
                     compile_feature=compile_feature,
                     render_workers=render_workers,
-                    cloud_policy=cloud_policy,
                 )
             else:
-                res = service.dispatch_series_job_with_fallback(
+                res = service.dispatch_series_job(
                     project_slug=project_slug,
                     chapters=chapters,
-                    gpu=gpu,
+                    gpu=True,
                     wait=True,
                     compile_feature=compile_feature,
                     render_workers=render_workers,
-                    cloud_policy=cloud_policy,
                 )
             return {
                 "status": "success",

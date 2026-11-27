@@ -168,6 +168,85 @@ def authenticate_kaggle_token(
                 os.environ["KAGGLE_API_TOKEN"] = previous
 
 
+def _extract_http_status_and_body(exc: BaseException) -> Tuple[Optional[int], str]:
+    """Extracts best-effort HTTP status code and truncated response text from SDK/transport exceptions."""
+    resp = getattr(exc, "response", None)
+    status = getattr(resp, "status_code", None) or getattr(resp, "status", None)
+    body = getattr(resp, "text", None) or getattr(resp, "body", None) or ""
+    if status is None:
+        raw_status = getattr(exc, "status", None) or getattr(exc, "status_code", None)
+        if isinstance(raw_status, int) and not isinstance(raw_status, bool):
+            status = raw_status
+    if not body:
+        body = getattr(exc, "body", None) or getattr(exc, "reason", None) or str(exc) or ""
+    if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599:
+        return status, str(body)[:400]
+    return None, str(body)[:400]
+
+
+def _classify_push_exception(
+    exc: BaseException,
+) -> KaggleExecutionError | KaggleAuthError | KaggleQuotaExhaustedError | KaggleSubmitAmbiguousError:
+    """Classifies SDK kernels_push transport/HTTP exceptions without hiding ambiguity."""
+    if isinstance(exc, (KaggleAuthError, KaggleQuotaExhaustedError, KaggleExecutionError, KaggleSubmitAmbiguousError)):
+        return exc
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return KaggleSubmitAmbiguousError(
+            f"Kaggle kernel submission transport failed ambiguously ({type(exc).__name__}): {exc}",
+            category="submit_unknown",
+            provider=PROVIDER_NAME,
+        )
+    status, body = _extract_http_status_and_body(exc)
+    low = body.lower()
+    if status in {401, 403}:
+        if "quota" in low:
+            return KaggleQuotaExhaustedError(
+                f"Kaggle rejected kernel submission (HTTP {status} quota): {body}",
+                category="quota_exhausted",
+                provider=PROVIDER_NAME,
+            )
+        return KaggleAuthError(
+            f"Kaggle rejected kernel submission (HTTP {status} auth/permission): {body}",
+            category="auth_failed",
+            provider=PROVIDER_NAME,
+        )
+    if status == 429 or "rate limit" in low or "too many requests" in low:
+        return KaggleQuotaExhaustedError(
+            f"Kaggle rate/quota limited kernel submission (HTTP {status or 429}): {body}",
+            category="rate_limited",
+            provider=PROVIDER_NAME,
+        )
+    if status == 404 or (status == 400 and ("dataset" in low or "source" in low or "not found" in low)):
+        return KaggleExecutionError(
+            f"Kaggle kernel dataset sources still propagating (HTTP {status}): {body}",
+            category="dataset_propagating",
+            provider=PROVIDER_NAME,
+        )
+    if status is not None and 400 <= status < 500:
+        if "quota" in low:
+            return KaggleQuotaExhaustedError(
+                f"Kaggle rejected kernel submission (HTTP {status} quota): {body}",
+                category="quota_exhausted",
+                provider=PROVIDER_NAME,
+            )
+        return KaggleExecutionError(
+            f"Kaggle rejected kernel submission (HTTP {status}): {body}",
+            category="submission_rejected",
+            provider=PROVIDER_NAME,
+        )
+    if status is not None and status >= 500:
+        return KaggleSubmitAmbiguousError(
+            f"Kaggle server error during submission (HTTP {status}); remote state unknown: {body}",
+            category="submit_unknown",
+            provider=PROVIDER_NAME,
+        )
+    return KaggleSubmitAmbiguousError(
+        f"Kaggle kernel submission outcome ambiguous ({type(exc).__name__}): {body}",
+        category="submit_unknown",
+        provider=PROVIDER_NAME,
+    )
+
+
 class KaggleClient:
     """Thin SDK wrapper around an authenticated KaggleApi instance."""
 
@@ -267,28 +346,37 @@ class KaggleClient:
         try:
             push_res = self.api.kernels_push(str(staging_dir))
         except Exception as exc:
-            resp = getattr(exc, "response", None)
-            status = getattr(resp, "status_code", None)
-            if isinstance(status, int) and 400 <= status < 500:
-                body = (getattr(resp, "text", "") or "")[:300]
-                category = "dataset_propagating" if status in {400, 404} else "submission_rejected"
-                raise KaggleExecutionError(
-                    f"Kaggle rejected kernel submission (HTTP {status}): {body}",
-                    category=category,
-                    provider=PROVIDER_NAME,
-                ) from exc
-            raise
+            raise _classify_push_exception(exc) from exc
+        if push_res is None:
+            raise KaggleSubmitAmbiguousError(
+                "Kaggle kernel submission returned no response; remote state unknown",
+                category="submit_unknown",
+                provider=PROVIDER_NAME,
+            )
         error = push_res.get("error") if isinstance(push_res, dict) else getattr(push_res, "error", None)
-        if not push_res or (isinstance(error, (str, bool)) and error):
+        if isinstance(error, (str, bool)) and error:
             err_text = str(error or "").strip()
-            if "quota" in err_text.lower():
+            low_err = err_text.lower()
+            if "quota" in low_err:
                 raise KaggleQuotaExhaustedError(
                     f"Kaggle rejected kernel submission (quota): {err_text}",
                     category="quota_exhausted",
                     provider=PROVIDER_NAME,
                 )
+            if "rate limit" in low_err or "too many requests" in low_err:
+                raise KaggleQuotaExhaustedError(
+                    f"Kaggle rate/quota limited kernel submission: {err_text}",
+                    category="rate_limited",
+                    provider=PROVIDER_NAME,
+                )
+            if "unauthoriz" in low_err or "forbidden" in low_err or "permission" in low_err or "auth" in low_err:
+                raise KaggleAuthError(
+                    f"Kaggle rejected kernel submission (auth): {err_text}",
+                    category="auth_failed",
+                    provider=PROVIDER_NAME,
+                )
             raise KaggleExecutionError(
-                f"Kaggle rejected kernel submission: {err_text}" if err_text else "Kaggle rejected kernel submission",
+                f"Kaggle rejected kernel submission: {err_text}",
                 category="submission_rejected",
                 provider=PROVIDER_NAME,
             )
@@ -308,6 +396,12 @@ class KaggleClient:
             assigned_ref = push_res.get("ref")
         if assigned_ref:
             return str(assigned_ref).replace("/code/", "").strip()
+        if isinstance(push_res, dict) and not push_res:
+            raise KaggleSubmitAmbiguousError(
+                "Kaggle kernel submission returned an empty response; remote state unknown",
+                category="submit_unknown",
+                provider=PROVIDER_NAME,
+            )
         return default_ref
 
     def get_kernel_status(self, kernel_ref: str) -> Tuple[str, str, Optional[str]]:
@@ -331,25 +425,3 @@ class KaggleClient:
             raise KaggleAuthError("Kaggle API is not authenticated", category="auth_failed", provider=PROVIDER_NAME)
         dest_dir.mkdir(parents=True, exist_ok=True)
         self.api.kernels_output(kernel_ref, str(dest_dir))
-
-    def cancel_kernel(self, kernel_ref: str) -> bool:
-        """Best-effort kernel cancellation when supported by Kaggle SDK client."""
-        if not self.api:
-            return False
-        if hasattr(self.api, "kernels_cancel"):
-            try:
-                self.api.kernels_cancel(kernel_ref)
-                return True
-            except Exception as exc:
-                logger.warning("Failed cancelling Kaggle kernel %s: %s", kernel_ref, exc)
-                return False
-        if hasattr(self.api, "build_kaggle_client"):
-            try:
-                with self.api.build_kaggle_client() as client:
-                    cancel_fn = getattr(getattr(client, "kernels", None), "cancel_kernel", None)
-                    if callable(cancel_fn):
-                        cancel_fn(kernel_ref)
-                        return True
-            except Exception as exc:
-                logger.warning("Failed cancelling Kaggle kernel %s via client: %s", kernel_ref, exc)
-        return False

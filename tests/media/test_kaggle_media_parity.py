@@ -224,19 +224,29 @@ def test_multichapter_cloud_produce_media_parity_with_bgm_watermark_and_subtitle
 
     monkeypatch.setattr(worker.mp, "get_context", lambda *_: _ThreadCtx())
     monkeypatch.setattr("src.tts.cuda_worker.VieNeuCUDAWorker", _RealWavFakeTTS)
+    real_render_clip = worker.render_shot_clip
+    monkeypatch.setattr(
+        worker,
+        "render_shot_clip",
+        lambda task, *, canvas_cache=None, gpu_index=0: real_render_clip(
+            {**task, "encoder": "libx264"},
+            canvas_cache=canvas_cache,
+            gpu_index=gpu_index,
+        ),
+    )
+    monkeypatch.setattr(worker, "default_cloud_batch_size", lambda _job: 4)
 
     telemetry = worker.TelemetryRecorder(project_slug="unit", chapters=["1", "2", "3"])
     worker.run_pipeline(
         project,
         ["1", "2", "3"],
         "produce",
-        encoder="libx264",
-        gpu_ids=(0,),
+        encoder="h264_nvenc",
+        gpu_ids=(0, 1),
         render_workers=1,
-        batch_size=4,
         single_preview=False,
         telemetry=telemetry,
-        policy=ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
+        usable_nvenc_devices=(0, 1),
     )
 
     # Verify Chapter 1 preview -> final byte preservation

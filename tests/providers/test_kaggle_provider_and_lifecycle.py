@@ -125,14 +125,14 @@ def test_dispatch_fails_fast_on_exhausted_quota_and_remote_failure(unit_project,
     svc_fail._api = api_fail
 
     with pytest.raises(KaggleExecutionError, match="OOM on T4"):
-        svc_fail.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, poll_interval=0)
+        svc_fail.dispatch_chapter_job("unit", "1", job_type="render", gpu=True, poll_interval=0)
 
     state = load_cloud_job_state(chapter / "cloud_job.json")
     assert state.status == "FAILED"
     assert "OOM on T4" in (state.error or "")
 
 
-def test_cancel_reconcile_pull_resume_stale_and_result_mismatch(unit_project, tmp_path, monkeypatch):
+def test_reconcile_pull_resume_stale_result_mismatch_and_push_classification(unit_project, tmp_path, monkeypatch):
     project, chapter = unit_project
     monkeypatch.setattr("src.cloud.kaggle_service.time.sleep", lambda *_: None)
 
@@ -146,19 +146,18 @@ def test_cancel_reconcile_pull_resume_stale_and_result_mismatch(unit_project, tm
     mock_api.kernels_push.return_value = SimpleNamespace(ref="/code/u1/run-job", error=None)
     svc._api = mock_api
 
-    dispatched = svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+    with pytest.raises(ValueError, match="CPU-only Kaggle execution was removed"):
+        svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+
+    dispatched = svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=True, wait=False)
     assert dispatched["status"] == "dispatched"
     assert dispatched["kernel_ref"] == "u1/run-job"
 
-    # Reconciliation updates local cloud_job.json from remote RUNNING state
+    # Reconciliation updates local cloud_job.json from remote RUNNING state without cancellation method
+    assert not hasattr(svc, "cancel_job")
     mock_api.kernels_status.return_value = SimpleNamespace(status="KernelWorkerStatus.RUNNING", failureMessage=None)
     reconciled = svc.reconcile_job("unit", "1")
     assert reconciled["status"] == "RUNNING"
-
-    # Cancellation updates cloud_job.json
-    cancelled = svc.cancel_job("unit", "1")
-    mock_api.kernels_cancel.assert_called_once_with("u1/run-job")
-    assert cancelled["status"] == "CANCELLED"
 
     # Reset dispatched state and verify result mismatch & stale input fail closed on pull()
     state_path = chapter / "cloud_job.json"
@@ -282,7 +281,59 @@ def test_push_kernel_retries_transient_dataset_propagation_404(unit_project, mon
     ]
     svc._api = mock_api
 
-    res = svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=False, wait=False)
+    res = svc.dispatch_chapter_job("unit", "1", job_type="render", gpu=True, wait=False)
     assert res["status"] == "dispatched"
     assert res["kernel_ref"] == "u1/propagated-ok"
     assert mock_api.kernels_push.call_count == 3
+
+
+def test_push_kernel_http_and_ambiguous_response_classification(tmp_path):
+    from src.providers.kaggle import (
+        KaggleAuthError,
+        KaggleSubmitAmbiguousError,
+    )
+
+    class _FakeRespErr(Exception):
+        def __init__(self, status_code: int, text: str):
+            super().__init__(f"HTTP {status_code}: {text}")
+            self.response = SimpleNamespace(status_code=status_code, text=text)
+
+    api = MagicMock()
+    client = KaggleClient(api=api, username="u1", account_name="primary")
+
+    api.kernels_push.side_effect = _FakeRespErr(401, "Unauthorized")
+    with pytest.raises(KaggleAuthError) as exc_401:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_401.value.category == "auth_failed"
+
+    api.kernels_push.side_effect = _FakeRespErr(403, "Weekly GPU quota exhausted")
+    with pytest.raises(KaggleQuotaExhaustedError) as exc_403q:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_403q.value.category == "quota_exhausted"
+
+    api.kernels_push.side_effect = _FakeRespErr(429, "Too Many Requests rate limit")
+    with pytest.raises(KaggleQuotaExhaustedError) as exc_429:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_429.value.category == "rate_limited"
+
+    api.kernels_push.side_effect = _FakeRespErr(400, "Invalid dataset source u1/ds")
+    with pytest.raises(KaggleExecutionError) as exc_400d:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_400d.value.category == "dataset_propagating"
+
+    api.kernels_push.side_effect = _FakeRespErr(422, "Validation failed for slug")
+    with pytest.raises(KaggleExecutionError) as exc_422:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_422.value.category == "submission_rejected"
+
+    api.kernels_push.side_effect = _FakeRespErr(503, "Service Unavailable")
+    with pytest.raises(KaggleSubmitAmbiguousError) as exc_503:
+        client.push_kernel(tmp_path, "u1/slug")
+    assert exc_503.value.category == "submit_unknown"
+
+    for empty_res in (None, {}):
+        api.kernels_push.side_effect = None
+        api.kernels_push.return_value = empty_res
+        with pytest.raises(KaggleSubmitAmbiguousError) as exc_empty:
+            client.push_kernel(tmp_path, "u1/slug")
+        assert exc_empty.value.category == "submit_unknown"

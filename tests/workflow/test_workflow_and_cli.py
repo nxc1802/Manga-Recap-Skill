@@ -281,12 +281,12 @@ def test_approve_and_produce_gate_and_compute_routing(tmp_path, monkeypatch):
     )
     fake_cloud_svc = MagicMock()
     fake_cloud_svc.is_authenticated = True
-    fake_cloud_svc.dispatch_series_job_with_fallback.return_value = {"status": "completed"}
+    fake_cloud_svc.dispatch_series_job.return_value = {"status": "completed"}
     monkeypatch.setattr("src.cloud.kaggle_service.KaggleCloudService", lambda: fake_cloud_svc)
 
     res_cloud = produce_chapters("wf-series", chapters="1")
     assert res_cloud["compute"] == "kaggle"
-    fake_cloud_svc.dispatch_series_job_with_fallback.assert_called_once()
+    fake_cloud_svc.dispatch_series_job.assert_called_once()
 
 
 def test_publish_command_enforces_approval_and_delegates_to_youtube(tmp_path, monkeypatch):

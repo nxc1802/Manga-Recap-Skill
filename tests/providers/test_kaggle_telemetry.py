@@ -1,4 +1,4 @@
-"""Tests for Phase K0 Kaggle hardware probe, resource sampling, and overlap telemetry."""
+"""Tests for Phase K0 Kaggle hardware probe, resource sampling (devtools), and telemetry."""
 
 import subprocess
 from types import SimpleNamespace
@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from scripts.devtools.cloud_policy_benchmark import ResourceSampler
 from src.cloud.telemetry import (
-    ResourceSampler,
     TelemetryRecorder,
     merge_interval_duration,
     probe_worker_hardware,

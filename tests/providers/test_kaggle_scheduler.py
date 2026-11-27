@@ -30,53 +30,46 @@ from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401
 
 
 def test_policy_normalization_and_device_isolation():
-    for alias, canonical in [
-        ("A", ExecutionPolicy.BASELINE_SPLIT),
-        ("policy_a", ExecutionPolicy.BASELINE_SPLIT),
-        ("B", ExecutionPolicy.DUAL_TTS_SHARED_ENCODE),
-        ("dual_tts_shared_encode", ExecutionPolicy.DUAL_TTS_SHARED_ENCODE),
-        ("auto", ExecutionPolicy.AUTO),
-    ]:
-        assert normalize_policy(alias) == canonical
+    for alias in (None, "", "dual_tts_shared_encode", "DUAL_TTS_SHARED_ENCODE"):
+        assert normalize_policy(alias) == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
 
-    with pytest.raises(ValueError, match="Unsupported cloud execution policy"):
-        normalize_policy("unknown_policy")
+    for unsupported in ("baseline_split", "auto", "A", "unknown_policy"):
+        with pytest.raises(ValueError, match="Unsupported cloud execution policy"):
+            normalize_policy(unsupported)
 
-    # Render-only skips TTS devices and scales across all usable NVENC GPUs
-    r_plan = resolve_execution_policy("auto", job="render", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0, 1])
+    # Render-only skips TTS devices and scales across both usable NVENC GPUs
+    r_plan = resolve_execution_policy(None, job="render", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0, 1])
+    assert r_plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
     assert r_plan.tts_devices == ()
     assert r_plan.encode_devices == (0, 1)
 
-    # TTS-only auto uses both CUDA GPUs
-    t_plan = resolve_execution_policy("auto", job="tts", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[])
+    # TTS-only scales across both CUDA GPUs and does NOT require NVENC
+    t_plan = resolve_execution_policy(None, job="tts", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[])
+    assert t_plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
     assert t_plan.tts_devices == (0, 1)
     assert t_plan.encode_devices == ()
 
-    # NVENC failure on GPU 0 isolates encoding to GPU 1 WITHOUT dropping healthy CUDA TTS device 0 or 1
-    mixed_plan = resolve_execution_policy(
+    # Produce uses Policy B across dual CUDA + dual NVENC
+    dual_plan = resolve_execution_policy(
         "dual_tts_shared_encode",
         job="produce",
         encoder="h264_nvenc",
         cuda_devices=[0, 1],
-        usable_nvenc_devices=[1],
+        usable_nvenc_devices=[0, 1],
     )
-    assert mixed_plan.tts_devices == (0, 1)
-    assert mixed_plan.encode_devices == (1,)
-    assert mixed_plan.encoder == "h264_nvenc"
+    assert dual_plan.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
+    assert dual_plan.tts_devices == (0, 1)
+    assert dual_plan.encode_devices == (0, 1)
 
-    # Full produce `auto` selects Policy B (dual_tts_shared_encode) on verified Dual-GPU + Dual-NVENC,
-    # while single-GPU or degraded single-NVENC cleanly falls back to baseline_split.
-    auto_dual = resolve_execution_policy(
-        "auto", job="produce", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0, 1]
-    )
-    assert auto_dual.policy == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
-    assert auto_dual.tts_devices == (0, 1)
-    assert auto_dual.encode_devices == (0, 1)
-
-    auto_degraded = resolve_execution_policy(
-        "auto", job="produce", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0]
-    )
-    assert auto_degraded.policy == ExecutionPolicy.BASELINE_SPLIT
+    # Single-GPU, CPU encoder fallback, and single-NVENC fail loudly (E02, E03, E04)
+    with pytest.raises(RuntimeError, match="requires dual Tesla T4 CUDA devices"):
+        resolve_execution_policy(None, job="produce", encoder="h264_nvenc", cuda_devices=[0], usable_nvenc_devices=[0])
+    with pytest.raises(RuntimeError, match="requires encoder='h264_nvenc'"):
+        resolve_execution_policy(None, job="produce", encoder="libx264", cuda_devices=[0, 1])
+    with pytest.raises(RuntimeError, match="requires usable h264_nvenc on both GPUs"):
+        resolve_execution_policy(None, job="produce", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[0])
+    with pytest.raises(RuntimeError, match="requires usable h264_nvenc on both GPUs"):
+        resolve_execution_policy(None, job="render", encoder="h264_nvenc", cuda_devices=[0, 1], usable_nvenc_devices=[1])
 
 
 def test_cost_aware_dispatcher_composite_keys_batching_and_oom_backoff(tmp_path):
@@ -218,14 +211,7 @@ class _DummyCtx:
         return _ThreadProc()
 
 
-@pytest.mark.parametrize(
-    "policy_name",
-    [
-        ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-        ExecutionPolicy.BASELINE_SPLIT,
-    ],
-)
-def test_policies_b_and_a_preserve_ch1_and_chapter_order(unit_project, monkeypatch, policy_name):
+def test_policy_b_preserves_ch1_and_chapter_order(unit_project, monkeypatch):
     project, ch1_preview_hash = _setup_two_chapter_project(unit_project)
     tts_calls = []
     encode_calls = []
@@ -299,10 +285,8 @@ def test_policies_b_and_a_preserve_ch1_and_chapter_order(unit_project, monkeypat
         encoder="h264_nvenc",
         gpu_ids=(0, 1),
         render_workers=1,
-        batch_size=4,
         single_preview=False,
         telemetry=telemetry,
-        policy=policy_name,
         usable_nvenc_devices=(0, 1),
     )
 
@@ -318,13 +302,9 @@ def test_policies_b_and_a_preserve_ch1_and_chapter_order(unit_project, monkeypat
         plan = VisualPlan.load(ch_dir / "visual_plan.json")
         assert len(plan.shots) == 2
 
-    if policy_name == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE:
-        assert set(unloaded_gpus) == {0, 1}
-    else:
-        assert unloaded_gpus == [0]
-
+    assert set(unloaded_gpus) == {0, 1}
     report = telemetry.build_report()
-    assert report["hardware"]["scheduler_policy"]["policy"] == policy_name
+    assert report["hardware"]["scheduler_policy"]["policy"] == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
 
 
 def test_tts_only_uses_dual_gpus_and_render_only_skips_tts(unit_project, monkeypatch):
@@ -363,21 +343,22 @@ def test_tts_only_uses_dual_gpus_and_render_only_skips_tts(unit_project, monkeyp
             pass
 
     monkeypatch.setattr("src.tts.cuda_worker.VieNeuCUDAWorker", FakeTTS)
-    # Run TTS-only across chapters 2 and 3 on 2 GPUs with small batch size so multiple batches distribute
+    orig_default = worker.default_cloud_batch_size
+    monkeypatch.setattr(worker, "default_cloud_batch_size", lambda _job: 1)
+    # Run TTS-only across chapters 2 and 3 on 2 GPUs with small test batch size so multiple batches distribute
     worker.run_pipeline(
         project,
         ["2", "3"],
         "tts",
         encoder="h264_nvenc",
         gpu_ids=(0, 1),
-        batch_size=1,
         single_preview=False,
-        policy="auto",
     )
     assert tts_gpus == {0, 1}
     for ch_num in ("2", "3"):
         s = load_recap_script(project / "chapters" / ch_num)
         assert all(seg.status == "synthesized" for seg in s.segments)
+    monkeypatch.setattr(worker, "default_cloud_batch_size", orig_default)
 
     # Render-only across both usable NVENC GPUs must never touch VieNeuCUDAWorker
     monkeypatch.setattr(
@@ -408,14 +389,13 @@ def test_tts_only_uses_dual_gpus_and_render_only_skips_tts(unit_project, monkeyp
         gpu_ids=(0, 1),
         render_workers=1,
         single_preview=False,
-        policy="auto",
         usable_nvenc_devices=(0, 1),
     )
     assert set(rendered_on).issubset({0, 1})
     assert len(rendered_on) == 4
 
 
-def test_authored_visual_plan_waits_for_full_tts_and_policy_a_baseline(unit_project, monkeypatch):
+def test_authored_visual_plan_waits_for_full_tts_on_policy_b(unit_project, monkeypatch):
     from src.core.storage import load_manifest
     from src.render.visual_policy import assemble_visual_plan, iter_segment_shots
 
@@ -493,9 +473,7 @@ def test_authored_visual_plan_waits_for_full_tts_and_policy_a_baseline(unit_proj
         encoder="h264_nvenc",
         gpu_ids=(0, 1),
         render_workers=1,
-        batch_size=1,
         single_preview=False,
-        policy=ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
         usable_nvenc_devices=(0, 1),
     )
     ch2_tts = [i for i, e in enumerate(events_order) if e[0] == "tts"]
@@ -505,7 +483,7 @@ def test_authored_visual_plan_waits_for_full_tts_and_policy_a_baseline(unit_proj
     assert max(ch2_tts) < min(ch2_enc)
 
 
-def test_default_cloud_batch_size_and_pipeline_override(unit_project, monkeypatch):
+def test_default_cloud_batch_size_fixed_per_job(unit_project, monkeypatch):
     from src.cloud.telemetry import TelemetryRecorder
 
     assert SUPPORTED_BATCH_CAPS == (4, 8, 12, 16, 24, 32)
@@ -515,7 +493,7 @@ def test_default_cloud_batch_size_and_pipeline_override(unit_project, monkeypatc
     assert default_cloud_batch_size("render") == 16
     assert UtteranceDispatcher().max_batch_size == 16
 
-    project, ch1 = unit_project
+    project, _ = unit_project
     recorded_batch_sizes = []
     monkeypatch.setattr(
         worker,
@@ -523,11 +501,7 @@ def test_default_cloud_batch_size_and_pipeline_override(unit_project, monkeypatc
         lambda project, chapters, job, **kwargs: recorded_batch_sizes.append((job, kwargs["batch_size"])) or {"chapters": list(chapters)},
     )
 
-    for job, override, expected in [
-        ("produce", None, 16),
-        ("tts", None, 32),
-        ("produce", 24, 24),
-    ]:
+    for job, expected in [("produce", 16), ("tts", 32)]:
         rec = TelemetryRecorder(project_slug="unit", chapters=["1"])
         worker.run_pipeline(
             project,
@@ -536,10 +510,8 @@ def test_default_cloud_batch_size_and_pipeline_override(unit_project, monkeypatc
             encoder="h264_nvenc",
             gpu_ids=(0, 1),
             render_workers=2,
-            batch_size=override,
             single_preview=True,
             telemetry=rec,
-            policy="auto",
             usable_nvenc_devices=(0, 1),
         )
         assert rec._hardware["batch_size"] == expected

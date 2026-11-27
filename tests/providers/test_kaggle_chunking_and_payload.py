@@ -97,12 +97,13 @@ def test_minimal_payload_pruning_by_job_type_and_worker_import_preflight(unit_pr
 
     # 1. Produce series tarball skips raw/, contact_sheets/, orphan panels, cli/archive src, unrelated watermarks
     prod_tar, prod_hash = package_payload(
-        project, ["1", "2"], tmp_path / "prod.tar.gz", "produce", series=True, cloud_policy="dual_tts_shared_encode"
+        project, ["1", "2"], tmp_path / "prod.tar.gz", "produce", series=True
     )
     with tarfile.open(prod_tar) as archive:
         names = set(archive.getnames())
         manifest = json.load(archive.extractfile("payload_manifest.json"))
-        assert manifest["cloud_policy"] == "dual_tts_shared_encode"
+        assert "cloud_policy" not in manifest
+        assert "cloud_batch_size" not in manifest
 
     assert not any("/raw/" in n for n in names)
     assert not any("/contact_sheets/" in n for n in names)
@@ -160,7 +161,7 @@ def test_minimal_payload_pruning_by_job_type_and_worker_import_preflight(unit_pr
     )
     atomic_write_json(ch2_dir / "manifest.json", m2)
     prod_skip_tar, _ = package_payload(
-        project, ["1", "2"], tmp_path / "prod_skip.tar.gz", "produce", series=True, cloud_policy="baseline_split"
+        project, ["1", "2"], tmp_path / "prod_skip.tar.gz", "produce", series=True
     )
     extracted_skip = tmp_path / "preflight_skip"
     with tarfile.open(prod_skip_tar) as archive:
@@ -328,7 +329,7 @@ def test_contiguous_chunk_planning_and_incremental_series_resume(unit_project, m
             published[c] = {"chapter_number": c, "status": "success"}
         return {"status": "success", "published": published}
 
-    monkeypatch.setattr(KaggleCloudService, "dispatch_chapter_job_with_fallback", fake_dispatch)
+    monkeypatch.setattr(KaggleCloudService, "dispatch_chapter_job", fake_dispatch)
     monkeypatch.setattr(
         "src.core.workflow.compile_project_chapters",
         lambda slug, chapters=None, output=None: compile_calls.append(chapters) or {"compiled_video": "/tmp/full.mp4"},
@@ -355,51 +356,65 @@ def test_contiguous_chunk_planning_and_incremental_series_resume(unit_project, m
     assert resumed["compiled_video"] == "/tmp/full.mp4"
 
 
-def test_payload_and_worker_forward_cloud_batch_size(unit_project, tmp_path, monkeypatch):
+def test_payload_and_worker_enforce_dual_t4_preflight_and_fixed_batches(unit_project, tmp_path, monkeypatch):
     from src.cloud import dual_gpu_worker as worker
 
     project = _build_series_project(unit_project, num_chapters=2)
 
-    default_tar, _ = package_payload(project, "2", tmp_path / "default.tar.gz", "produce", series=True)
+    default_tar, manifest_hash = package_payload(project, "2", tmp_path / "default.tar.gz", "produce", series=True)
     with tarfile.open(default_tar) as ar:
         default_manifest = json.load(ar.extractfile("payload_manifest.json"))
     assert "cloud_batch_size" not in default_manifest
-
-    override_tar, manifest_hash = package_payload(
-        project,
-        "2",
-        tmp_path / "override.tar.gz",
-        "produce",
-        series=True,
-        cloud_policy="dual_tts_shared_encode",
-        cloud_batch_size=16,
-    )
-    with tarfile.open(override_tar) as ar:
-        override_manifest = json.load(ar.extractfile("payload_manifest.json"))
-    assert override_manifest["cloud_batch_size"] == 16
+    assert "cloud_policy" not in default_manifest
 
     root = tmp_path / "worker_root"
     root.mkdir()
-    with tarfile.open(override_tar) as ar:
+    with tarfile.open(default_tar) as ar:
         ar.extractall(root, filter="data")
 
     captured = []
-    monkeypatch.setattr(
-        worker,
-        "probe_worker_hardware",
-        lambda *_a, **_kw: {"devices": [{"index": 0}, {"index": 1}], "usable_nvenc_devices": [0, 1]},
-    )
+    out_dir = tmp_path / "worker_out"
+    out_dir.mkdir()
+    monkeypatch.setattr("src.cloud.payload.export_results", lambda *a, **kw: None)
     monkeypatch.setattr(
         worker,
         "run_pipeline",
         lambda project_dir, chapters, job, **kwargs: captured.append(
-            (job, kwargs["batch_size"], kwargs["policy"])
+            (job, kwargs["gpu_ids"], kwargs["usable_nvenc_devices"])
         )
         or {"chapters": list(chapters)},
     )
-    monkeypatch.setattr("src.cloud.payload.export_results", lambda *a, **kw: None)
 
-    out_dir = tmp_path / "worker_out"
-    out_dir.mkdir()
+    # Unsupported hardware (single T4, non-T4 GPU, CPU libx264, single NVENC) fails preflight before running
+    for bad_hw, encoder, match in [
+        ({"devices": [{"index": 0, "name": "Tesla T4"}], "usable_nvenc_devices": [0]}, "h264_nvenc", "requires 2 Tesla T4 GPUs"),
+        ({"devices": [{"index": 0, "name": "Tesla P100"}, {"index": 1, "name": "Tesla P100"}], "usable_nvenc_devices": [0, 1]}, "h264_nvenc", "expected Tesla T4"),
+        ({"devices": [{"index": 0, "name": "Tesla T4"}, {"index": 1, "name": "Tesla T4"}], "usable_nvenc_devices": [0]}, "h264_nvenc", "usable h264_nvenc required"),
+        ({"devices": [{"index": 0, "name": "Tesla T4"}, {"index": 1, "name": "Tesla T4"}], "usable_nvenc_devices": [0, 1]}, "libx264", "unsupported encoder"),
+    ]:
+        monkeypatch.setattr(worker, "probe_worker_hardware", lambda *_a, hw=bad_hw, **_kw: hw)
+        with pytest.raises(RuntimeError, match=match):
+            worker.run(root, manifest_hash, out_dir, encoder=encoder, render_workers=2)
+
+    # Valid dual T4 + dual NVENC executes cleanly without policy/batch overrides
+    monkeypatch.setattr(
+        worker,
+        "probe_worker_hardware",
+        lambda *_a, **_kw: {"devices": [{"index": 0, "name": "Tesla T4"}, {"index": 1, "name": "Tesla T4"}], "usable_nvenc_devices": [0, 1]},
+    )
     worker.run(root, manifest_hash, out_dir, encoder="h264_nvenc", render_workers=2)
-    assert captured == [("produce", 16, "dual_tts_shared_encode")]
+    assert captured == [("produce", [0, 1], [0, 1])]
+
+    # TTS-only succeeds on Dual-T4 even when usable_nvenc_devices is empty
+    tts_tar, tts_hash = package_payload(project, "2", tmp_path / "tts.tar.gz", "tts", series=True)
+    tts_root = tmp_path / "worker_tts"
+    tts_root.mkdir()
+    with tarfile.open(tts_tar) as ar:
+        ar.extractall(tts_root, filter="data")
+    monkeypatch.setattr(
+        worker,
+        "probe_worker_hardware",
+        lambda *_a, **_kw: {"devices": [{"index": 0, "name": "Tesla T4"}, {"index": 1, "name": "Tesla T4"}], "usable_nvenc_devices": []},
+    )
+    worker.run(tts_root, tts_hash, out_dir, encoder="h264_nvenc", render_workers=2)
+    assert captured[-1] == ("tts", [0, 1], ())

@@ -10,50 +10,37 @@ from src.tts.cuda_worker import MAX_LONG_TEXT_BATCH_SIZE, get_length_bucket
 
 
 class ExecutionPolicy:
-    """Production Kaggle GPU execution modes: Policy B default and Policy A safe fallback."""
+    """Canonical V7 Kaggle Dual-T4 GPU execution policy (Policy B only)."""
 
-    AUTO = "auto"
-    BASELINE_SPLIT = "baseline_split"
     DUAL_TTS_SHARED_ENCODE = "dual_tts_shared_encode"
 
 
-SUPPORTED_POLICIES = (
-    ExecutionPolicy.AUTO,
-    ExecutionPolicy.BASELINE_SPLIT,
-    ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-)
-
-POLICY_ALIASES: Dict[str, str] = {
-    "auto": ExecutionPolicy.AUTO,
-    "a": ExecutionPolicy.BASELINE_SPLIT,
-    "policy_a": ExecutionPolicy.BASELINE_SPLIT,
-    "baseline": ExecutionPolicy.BASELINE_SPLIT,
-    "baseline_split": ExecutionPolicy.BASELINE_SPLIT,
-    "b": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-    "policy_b": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-    "dual_tts_shared_encode": ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-}
+CANONICAL_POLICY = ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
+SUPPORTED_POLICIES = (ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,)
 
 MAX_CLOUD_TTS_BATCH_SIZE = 32
+DEFAULT_PRODUCE_BATCH_SIZE = 16
 SUPPORTED_BATCH_CAPS = (4, 8, 12, 16, 24, 32)
 DEFAULT_LONG_UTTERANCE_CAP = 4
 
 
 def default_cloud_batch_size(job: str = "produce") -> int:
-    """Returns the verified default VieNeu CUDA micro-batch size for a cloud job type."""
+    """Returns canonical V7 VieNeu CUDA batch size: 32 for TTS-only, 16 for produce/render."""
     if str(job).strip().lower() == "tts":
         return MAX_CLOUD_TTS_BATCH_SIZE
-    return 16
+    return DEFAULT_PRODUCE_BATCH_SIZE
 
 
 def normalize_policy(policy: Optional[str]) -> str:
-    """Normalizes cloud policy slug or alias (`auto`, `A`/`baseline_split`, `B`/`dual_tts_shared_encode`)."""
-    raw = str(policy or ExecutionPolicy.AUTO).strip().lower()
-    if raw not in POLICY_ALIASES:
-        raise ValueError(
-            f"Unsupported cloud execution policy '{policy}'. Expected one of {SUPPORTED_POLICIES} or A/B aliases."
-        )
-    return POLICY_ALIASES[raw]
+    """Validates that cloud policy is either omitted or canonical dual_tts_shared_encode (Policy B)."""
+    if policy is None or not str(policy).strip():
+        return CANONICAL_POLICY
+    raw = str(policy).strip().lower()
+    if raw == CANONICAL_POLICY:
+        return CANONICAL_POLICY
+    raise ValueError(
+        f"Unsupported cloud execution policy '{policy}'. V7 runs canonical Policy B ('{CANONICAL_POLICY}') only."
+    )
 
 
 @dataclass(frozen=True)
@@ -87,109 +74,65 @@ class DeviceRolePlan:
 
 
 def resolve_execution_policy(
-    policy: Optional[str],
+    policy: Optional[str] = None,
     *,
     job: str,
     encoder: str,
     cuda_devices: Sequence[int],
     usable_nvenc_devices: Optional[Sequence[int]] = None,
-    default_auto_produce_policy: str = ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
 ) -> DeviceRolePlan:
-    """
-    Resolves policy A-D and isolates TTS CUDA devices from usable NVENC devices.
-
-    Guarantees:
-    - Render-only never creates a TTS barrier and uses all usable NVENC devices.
-    - TTS-only scales across up to all usable CUDA devices.
-    - Failed NVENC on one GPU isolates ``encode_devices`` without dropping healthy CUDA TTS devices.
-    """
+    """Resolves canonical V7 Policy B and rejects single-GPU, CPU-only, or unusable-NVENC hardware."""
     canonical = normalize_policy(policy)
-    cuda_list = tuple(dict.fromkeys(int(d) for d in cuda_devices)) or (0,)
-    if encoder == "h264_nvenc":
-        if usable_nvenc_devices is not None:
-            nvenc_list = tuple(dict.fromkeys(int(d) for d in usable_nvenc_devices))
-        else:
-            nvenc_list = cuda_list
-        eff_encoder = encoder if nvenc_list else "libx264"
-        encode_pool = nvenc_list if nvenc_list else (cuda_list[0],)
-    else:
-        eff_encoder = encoder
-        encode_pool = (cuda_list[0],)
+    job_norm = str(job).strip().lower()
+    if job_norm not in {"tts", "render", "produce"}:
+        raise ValueError(f"Unknown cloud job type: {job}")
 
-    if job == "tts":
-        # TTS-only scales across all available CUDA GPUs using Policy B dual-GPU TTS pool.
-        chosen = (
-            ExecutionPolicy.DUAL_TTS_SHARED_ENCODE
-            if (canonical == ExecutionPolicy.AUTO and len(cuda_list) >= 2)
-            else (ExecutionPolicy.BASELINE_SPLIT if canonical == ExecutionPolicy.AUTO else canonical)
+    cuda_list = tuple(dict.fromkeys(int(d) for d in cuda_devices))
+    if len(cuda_list) < 2:
+        raise RuntimeError(
+            f"Kaggle V7 requires dual Tesla T4 CUDA devices (>=2), got {list(cuda_list)}. "
+            "Single-GPU and CPU fallbacks were removed in V7."
         )
-        tts_devs = cuda_list[:2] if (len(cuda_list) >= 2 and chosen == ExecutionPolicy.DUAL_TTS_SHARED_ENCODE) else cuda_list[:1]
+
+    if job_norm == "tts":
         return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=tts_devs,
+            policy=canonical,
+            job="tts",
+            encoder=encoder,
+            tts_devices=cuda_list[:2],
             encode_devices=(),
-            selection_reason=f"tts-only mapped across {len(tts_devs)} CUDA device(s)",
+            selection_reason="Policy B: dual CUDA T4 TTS pool (no NVENC required for tts-only)",
         )
 
-    if job == "render":
-        # Render-only encodes directly across all usable NVENC GPUs without TTS overhead.
-        enc_devs = encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],)
-        chosen = canonical if canonical != ExecutionPolicy.AUTO else ExecutionPolicy.BASELINE_SPLIT
+    if encoder != "h264_nvenc":
+        raise RuntimeError(
+            f"Kaggle V7 requires encoder='h264_nvenc' for '{job_norm}' (got '{encoder}'). "
+            "CPU libx264 fallback was removed in V7."
+        )
+    nvenc_list = tuple(dict.fromkeys(int(d) for d in usable_nvenc_devices)) if usable_nvenc_devices is not None else cuda_list
+    if len(nvenc_list) < 2:
+        raise RuntimeError(
+            f"Kaggle V7 requires usable h264_nvenc on both GPUs for '{job_norm}' "
+            f"(usable_nvenc={list(nvenc_list)}, cuda={list(cuda_list)})."
+        )
+
+    if job_norm == "render":
         return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
+            policy=canonical,
+            job="render",
+            encoder="h264_nvenc",
             tts_devices=(),
-            encode_devices=enc_devs,
-            selection_reason=f"render-only mapped across {len(enc_devs)} encode device(s) ({eff_encoder})",
-        )
-
-    # Full `produce` mode: map Policy B default or Policy A conservative fallback.
-    if len(cuda_list) < 2 and eff_encoder != "h264_nvenc":
-        return DeviceRolePlan(
-            policy=ExecutionPolicy.BASELINE_SPLIT,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=(cuda_list[0],),
-            encode_devices=(cuda_list[0],),
-            selection_reason="single-device CPU encode fallback",
-        )
-
-    if canonical == ExecutionPolicy.AUTO:
-        dual_nvenc_ready = len(cuda_list) >= 2 and eff_encoder == "h264_nvenc" and len(encode_pool) >= 2
-        chosen = default_auto_produce_policy if dual_nvenc_ready else ExecutionPolicy.BASELINE_SPLIT
-    else:
-        chosen = canonical
-
-    if len(cuda_list) == 1:
-        return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=(cuda_list[0],),
-            encode_devices=(encode_pool[0],),
-            selection_reason=f"single GPU mapped cleanly under policy {chosen}",
-        )
-
-    if chosen == ExecutionPolicy.BASELINE_SPLIT:
-        return DeviceRolePlan(
-            policy=chosen,
-            job=job,
-            encoder=eff_encoder,
-            tts_devices=(cuda_list[0],),
-            encode_devices=encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],),
-            selection_reason="Policy A baseline: GPU0 TTS + shared NVENC encode",
+            encode_devices=nvenc_list[:2],
+            selection_reason="Policy B: shared dual-NVENC render pool",
         )
 
     return DeviceRolePlan(
-        policy=ExecutionPolicy.DUAL_TTS_SHARED_ENCODE,
-        job=job,
-        encoder=eff_encoder,
+        policy=canonical,
+        job="produce",
+        encoder="h264_nvenc",
         tts_devices=cuda_list[:2],
-        encode_devices=encode_pool[:2] if eff_encoder == "h264_nvenc" else (cuda_list[0],),
-        selection_reason="Policy B: dual GPU TTS with concurrent shared encode",
+        encode_devices=nvenc_list[:2],
+        selection_reason="Policy B: dual CUDA TTS with concurrent shared NVENC encode",
     )
 
 

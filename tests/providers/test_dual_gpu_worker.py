@@ -1,87 +1,121 @@
 from pathlib import Path
-from queue import Queue
-from threading import Event, Thread
+
+import pytest
 
 from src.cloud import dual_gpu_worker as worker
-from src.core.storage import atomic_write_json, load_recap_script
-from src.core.visual_contract import VisualPlan
-from src.render.fast_renderer import frame_schedule
+from src.core.storage import atomic_write_json
 from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401 — pytest fixture
 
 
-def test_sound_and_visual_overlap_before_model_unloads(unit_project, monkeypatch, tmp_path):
+def test_dual_gpu_preflight_rejects_single_gpu_and_cpu_encoder(unit_project):
+    project, _ = unit_project
+    with pytest.raises(RuntimeError, match="requires dual Tesla T4"):
+        worker.run_pipeline(project, ["1"], "render", encoder="h264_nvenc", gpu_ids=(0,))
+    with pytest.raises(RuntimeError, match="requires encoder='h264_nvenc'"):
+        worker.run_pipeline(project, ["1"], "render", encoder="libx264", gpu_ids=(0, 1))
+    with pytest.raises(RuntimeError, match="usable h264_nvenc on both GPUs"):
+        worker.run_pipeline(
+            project, ["1"], "produce", encoder="h264_nvenc", gpu_ids=(0, 1), usable_nvenc_devices=(0,)
+        )
+
+
+def _thread_mp_context():
+    import queue
+    import threading
+
+    class _ThreadCtx:
+        def Queue(self, maxsize=0):
+            class _ClosableQueue(queue.Queue):
+                def close(self):
+                    pass
+
+            return _ClosableQueue(maxsize=maxsize)
+
+        def Process(self, target=None, args=()):
+            class _Proc:
+                def __init__(self):
+                    self.exitcode = None
+                    self._t = threading.Thread(target=self._run, daemon=True)
+
+                def _run(self):
+                    try:
+                        target(*args)
+                        self.exitcode = 0
+                    except Exception:
+                        self.exitcode = 1
+
+                def start(self):
+                    self._t.start()
+
+                def is_alive(self):
+                    return self._t.is_alive()
+
+                def join(self, timeout=None):
+                    self._t.join(timeout=timeout)
+
+                def terminate(self):
+                    pass
+
+                def kill(self):
+                    pass
+
+            return _Proc()
+
+    return _ThreadCtx()
+
+
+def test_spawn_context_ipc_and_picklable_render_tasks(unit_project, tmp_path):
+    import multiprocessing as mp
+    import pickle
+
+    from src.core.storage import load_manifest, load_recap_script
+    from src.render.fast_renderer import build_shot_render_tasks
+    from src.render.visual_policy import assemble_visual_plan, iter_segment_shots
+
     project, chapter = unit_project
+    manifest = load_manifest(chapter)
     script = load_recap_script(chapter)
-    script.segments.extend([
-        script.segments[0].model_copy(update={"seq_id": "b"}),
-        script.segments[0].model_copy(update={"seq_id": "c"}),
-    ])
-    for segment in script.segments:
-        segment.duration = None
-    atomic_write_json(chapter / "script.json", script)
+    for seg in script.segments:
+        seg.duration = 0.5
+    shots = [sh for grp in iter_segment_shots(chapter, manifest, script, 1280, 720, False) for sh in grp]
+    plan = assemble_visual_plan(manifest, script, shots, target_width=1280, target_height=720, fps=30, motion_enabled=False)
+    tasks = build_shot_render_tasks(chapter, plan, manifest, work_dir=tmp_path, encoder="h264_nvenc")
+    assert len(pickle.dumps(tasks)) > 0
 
-    rendered = Event()
-    released = Event()
-    second_on_gpu_one = Event()
-    tail_on_gpu_zero = Event()
-    assignments = []
-    jobs, events = Queue(), Queue()
-    config = worker.read_json(project / "project.json")
-
-    class Model:
-        def __init__(self, gpu_id):
-            assert gpu_id == 0
-
-        def unload(self):
-            released.set()
-
-    def fake_synthesis(model, chapter, segments, voice, speed, batch_size):
-        for segment in segments:
-            if segment.seq_id == "b":
-                assert rendered.wait(timeout=5), "GPU 1 must encode while TTS is active"
-            if segment.seq_id == "c":
-                assert second_on_gpu_one.wait(timeout=5)
-            segment.duration = 0.51
-
-    def fake_encode(task, canvas_cache, gpu_index):
-        if gpu_index == 1:
-            if task["shot_index"] == 0:
-                rendered.set()
-            else:
-                second_on_gpu_one.set()
-                assert released.wait(timeout=5)
-                assert tail_on_gpu_zero.wait(timeout=5), "GPU 0 must drain remaining render work"
-        else:
-            assert released.is_set()
-            tail_on_gpu_zero.set()
-        assignments.append((task["shot_index"], task["frame_count"], gpu_index))
-        path = Path(task["output_clip_path"])
-        path.write_bytes(b"encoded fixture")
-        return path
-
-    monkeypatch.setattr("src.tts.cuda_worker.VieNeuCUDAWorker", Model)
-    monkeypatch.setattr(worker, "_synthesize_batch", fake_synthesis)
-    monkeypatch.setattr(worker, "render_shot_clip", fake_encode)
-    visual = Thread(target=worker._encode_queue, args=(jobs, events, 1, 1), daemon=True)
-    visual.start()
-    worker._audio_then_encode(project, ["1"], tmp_path / "work", "produce", True,
-                              config, "h264_nvenc", 0, 2, 1, jobs, events, 1)
-    visual.join(timeout=5)
-    assert not visual.is_alive()
-    assert any(index == 0 and gpu == 1 for index, _, gpu in assignments)
-    assert {(i, gpu) for i, _, gpu in assignments} == {(0, 1), (1, 1), (2, 0)}
-    plan = VisualPlan.load(chapter / "visual_plan.json")
-    assert [frames for _, frames, _ in sorted(assignments)] == [frames for _, frames in frame_schedule(plan)]
+    ctx = mp.get_context("spawn")
+    jobs = ctx.Queue(maxsize=8)
+    events = ctx.Queue(maxsize=16)
+    proc = ctx.Process(target=worker._encode_queue, args=(jobs, events, 0, 1))
+    proc.start()
+    try:
+        jobs.put(None)
+        proc.join(timeout=15)
+        assert proc.exitcode == 0
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+        jobs.close()
+        events.close()
 
 
-def test_single_device_render_runs_through_spawn_and_mux(unit_project):
+def test_scheduled_dual_gpu_render_runs_through_mux(unit_project, monkeypatch):
     import shutil
 
     if not shutil.which("ffmpeg"):
-        import pytest
         pytest.skip("FFmpeg required")
+    real_render = worker.render_shot_clip
+    monkeypatch.setattr(worker.mp, "get_context", lambda *_: _thread_mp_context())
+    monkeypatch.setattr(
+        worker,
+        "render_shot_clip",
+        lambda task, *, canvas_cache=None, gpu_index=0: real_render(
+            {**task, "encoder": "libx264"},
+            canvas_cache=canvas_cache,
+            gpu_index=gpu_index,
+        ),
+    )
     project, chapter = unit_project
-    worker.run_pipeline(project, ["1"], "render", encoder="libx264", gpu_ids=[0], render_workers=1)
+    worker.run_pipeline(project, ["1"], "render", encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=1)
     assert (chapter / "video" / "preview.mp4").stat().st_size > 0
     assert (chapter / "subtitles" / "preview.srt").stat().st_size > 0
 
@@ -109,12 +143,10 @@ def test_kaggle_payload_includes_watermark_and_generates_spawn_safe_script(unit_
     assert "__name__ == '__main__'" in script
 
 
-def test_cloud_sync_publishes_only_nonempty_outputs(unit_project, tmp_path):
+def test_cloud_sync_publishes_only_nonempty_outputs(unit_project, tmp_path, monkeypatch):
     import json
     import shutil
     import tarfile
-
-    import pytest
 
     from src.cloud import payload
     from src.cloud.kaggle_service import KaggleCloudService
@@ -122,6 +154,17 @@ def test_cloud_sync_publishes_only_nonempty_outputs(unit_project, tmp_path):
 
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg required")
+    real_render = worker.render_shot_clip
+    monkeypatch.setattr(worker.mp, "get_context", lambda *_: _thread_mp_context())
+    monkeypatch.setattr(
+        worker,
+        "render_shot_clip",
+        lambda task, *, canvas_cache=None, gpu_index=0: real_render(
+            {**task, "encoder": "libx264"},
+            canvas_cache=canvas_cache,
+            gpu_index=gpu_index,
+        ),
+    )
     project, chapter = unit_project
     service = object.__new__(KaggleCloudService)
     archive = service.package_chapter_payload("unit", "1", tmp_path / "payload.tar.gz", job_type="render")
@@ -129,7 +172,7 @@ def test_cloud_sync_publishes_only_nonempty_outputs(unit_project, tmp_path):
         manifest = json.load(tar.extractfile("payload_manifest.json"))
     runtime = tmp_path / "runtime_project"
     shutil.copytree(project, runtime)
-    worker.run_pipeline(runtime, ["1"], "render", encoder="libx264", gpu_ids=[0], render_workers=1)
+    worker.run_pipeline(runtime, ["1"], "render", encoder="h264_nvenc", gpu_ids=(0, 1), render_workers=1)
     output = tmp_path / "cloud_result"
     payload.export_results(runtime, manifest, service._payload_manifest_hash, output)
     video = output / "chapters" / "1" / "video" / "preview.mp4"

@@ -1,4 +1,4 @@
-"""Tests for K6 CLI `--cloud-policy`, `--chunked`, and rich `status` hardware/policy/telemetry reporting."""
+"""Tests for V7 CLI cloud commands, `--chunked`, and `status` hardware/telemetry reporting."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from src.core.storage import atomic_write_json, read_json
 from tests.workflow.test_canonical_workflow import unit_project  # noqa: F401
 
 
-def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch, capsys):
+def test_cli_cloud_dispatch_reconcile_and_chunked_options(unit_project, monkeypatch, capsys):
     project, _ = unit_project
     calls = []
 
@@ -23,9 +23,10 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
         calls.append((kind, kwargs))
         return {"status": "success"}
 
-    fake_svc.dispatch_chapter_job_with_fallback.side_effect = lambda **kw: _rec("run", **kw)
-    fake_svc.dispatch_series_job_with_fallback.side_effect = lambda **kw: _rec("series", **kw)
+    fake_svc.dispatch_chapter_job.side_effect = lambda **kw: _rec("run", **kw)
+    fake_svc.dispatch_series_job.side_effect = lambda **kw: _rec("series", **kw)
     fake_svc.dispatch_series_chunks.side_effect = lambda **kw: _rec("chunks", **kw)
+    fake_svc.reconcile_job.return_value = {"status": "RUNNING", "kernel_ref": "u1/job"}
     monkeypatch.setattr("src.cli.cloud_cmd.KaggleCloudService", lambda: fake_svc)
 
     assert (
@@ -36,15 +37,13 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
             "unit",
             "--chapter",
             "1",
-            "--cloud-policy",
-            "baseline_split",
             "--json",
         ])
         == 0
     )
     capsys.readouterr()
     assert calls[-1][0] == "run"
-    assert calls[-1][1]["cloud_policy"] == "baseline_split"
+    assert calls[-1][1]["gpu"] is True
 
     # Set Q02="kaggle" BEFORE approving Chapter 1 preview so Gate G6 fingerprint stays valid across cloud & produce
     saved = read_json(project / "series_setup_answers.json")["answers"]
@@ -80,8 +79,6 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
             "unit",
             "--chapters",
             "1",
-            "--cloud-policy",
-            "dual_tts_shared_encode",
             "--chunked",
             "--json",
         ])
@@ -89,7 +86,7 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
     )
     capsys.readouterr()
     assert calls[-1][0] == "chunks"
-    assert calls[-1][1]["cloud_policy"] == "dual_tts_shared_encode"
+    assert calls[-1][1]["gpu"] is True
 
     monkeypatch.setattr("src.cloud.kaggle_service.KaggleCloudService", lambda: fake_svc)
     assert (
@@ -99,15 +96,17 @@ def test_cli_forwards_cloud_policy_and_chunked_options(unit_project, monkeypatch
             "unit",
             "--chapters",
             "1",
-            "--cloud-policy",
-            "baseline_split",
             "--json",
         ])
         == 0
     )
     capsys.readouterr()
     assert calls[-1][0] == "series"
-    assert calls[-1][1]["cloud_policy"] == "baseline_split"
+
+    assert main(["cloud", "reconcile", "--project", "unit", "--chapter", "1", "--json"]) == 0
+    rec_payload = json.loads(capsys.readouterr().out)
+    assert rec_payload["data"]["status"] == "RUNNING"
+    fake_svc.reconcile_job.assert_called_once_with("unit", "1")
 
 
 def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_project, capsys):
@@ -120,7 +119,6 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
             "job_type": "produce",
             "kernel_ref": "u1/mr-unit-c1",
             "account_name": "acct_1",
-            "cloud_policy": "dual_tts_shared_encode",
             "status": "RUNNING",
             "total_elapsed_sec": 124.5,
         },
@@ -147,7 +145,6 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
                 "scheduler_policy": {"policy": "dual_tts_shared_encode", "tts_devices": [0, 1], "encode_devices": [0, 1]},
             },
             "timing": {"wall_makespan_sec": 45.2, "stages": {}},
-            "resources": {"sample_count": 5, "peak_load_1m": 2.4},
         },
     )
     atomic_write_json(
@@ -158,7 +155,6 @@ def test_status_reports_cloud_lifecycle_hardware_policy_and_chunk_progress(unit_
     assert main(["status", "--project", "unit", "--json"]) == 0
     proj_payload = json.loads(capsys.readouterr().out)["data"]
     assert proj_payload["cloud"]["job"]["status"] == "RUNNING"
-    assert proj_payload["cloud"]["job"]["cloud_policy"] == "dual_tts_shared_encode"
     assert proj_payload["cloud"]["series_plan"]["completed_chunks"] == 1
     assert proj_payload["cloud"]["series_plan"]["total_chunks"] == 2
     assert proj_payload["cloud"]["telemetry"]["usable_nvenc_devices"] == [0, 1]

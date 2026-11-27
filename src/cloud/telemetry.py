@@ -1,4 +1,4 @@
-"""Lightweight structured telemetry, hardware probing, and resource sampling for Kaggle runs."""
+"""Lightweight structured telemetry and hardware probing for Kaggle Dual-T4 runs."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from src.core.storage import atomic_write_json
 from src.production.hardware import probe_available_encoders, smoke_test_encoder
@@ -253,104 +253,6 @@ def merge_interval_duration(intervals: List[Tuple[float, float]]) -> float:
     return round(total, 4)
 
 
-class ResourceSampler:
-    """Low-overhead periodic sampler tracking CPU load, threads, disk, queues, and GPU util."""
-
-    def __init__(
-        self,
-        *,
-        work_root: Optional[Path] = None,
-        interval_sec: float = 1.5,
-        queue_depth_fn: Optional[Callable[[], Dict[str, int]]] = None,
-        gpu_query_fn: Callable[[], List[Dict[str, Any]]] = query_nvidia_smi,
-    ) -> None:
-        self.work_root = Path(work_root or ".").resolve()
-        self.interval_sec = max(0.2, float(interval_sec))
-        self._queue_depth_fn = queue_depth_fn
-        self._gpu_query_fn = gpu_query_fn
-        self._samples: List[Dict[str, Any]] = []
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-    def sample_once(self) -> Dict[str, Any]:
-        """Captures one point-in-time resource snapshot."""
-        load_1m = None
-        if hasattr(os, "getloadavg"):
-            with contextlib.suppress(OSError):
-                load_1m = round(os.getloadavg()[0], 2)
-        disk_free_mb = None
-        disk_target = self.work_root if self.work_root.exists() else self.work_root.parent
-        with contextlib.suppress(Exception):
-            disk_free_mb = round(shutil.disk_usage(disk_target).free / (1024.0 * 1024.0), 1)
-        sample: Dict[str, Any] = {
-            "ts": _utc_now_iso(),
-            "mono": round(time.monotonic(), 4),
-            "load_1m": load_1m,
-            "active_threads": threading.active_count(),
-            "disk_free_mb": disk_free_mb,
-            "gpus": self._gpu_query_fn(),
-        }
-        if self._queue_depth_fn is not None:
-            with contextlib.suppress(Exception):
-                sample["queues"] = dict(self._queue_depth_fn())
-        with self._lock:
-            self._samples.append(sample)
-        return sample
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-
-        def _loop() -> None:
-            self.sample_once()
-            while not self._stop.wait(self.interval_sec):
-                self.sample_once()
-
-        self._thread = threading.Thread(target=_loop, name="telemetry-sampler", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-
-    def summarize(self) -> Dict[str, Any]:
-        with self._lock:
-            samples = list(self._samples)
-        if not samples:
-            return {"sample_count": 0}
-        loads = [s["load_1m"] for s in samples if s.get("load_1m") is not None]
-        disks = [s["disk_free_mb"] for s in samples if s.get("disk_free_mb") is not None]
-        per_gpu_sm: Dict[int, List[float]] = {}
-        per_gpu_enc: Dict[int, List[float]] = {}
-        per_gpu_vram: Dict[int, List[float]] = {}
-        for s in samples:
-            for g in s.get("gpus") or []:
-                idx = int(g.get("index", 0))
-                if g.get("sm_util_pct") is not None:
-                    per_gpu_sm.setdefault(idx, []).append(float(g["sm_util_pct"]))
-                if g.get("nvenc_util_pct") is not None:
-                    per_gpu_enc.setdefault(idx, []).append(float(g["nvenc_util_pct"]))
-                if g.get("vram_used_mb") is not None:
-                    per_gpu_vram.setdefault(idx, []).append(float(g["vram_used_mb"]))
-        gpu_peaks = {
-            str(idx): {
-                "peak_sm_util_pct": max(per_gpu_sm.get(idx, [0.0])),
-                "peak_nvenc_util_pct": max(per_gpu_enc.get(idx, [0.0])),
-                "peak_vram_used_mb": max(per_gpu_vram.get(idx, [0.0])),
-            }
-            for idx in sorted(set(per_gpu_sm) | set(per_gpu_enc) | set(per_gpu_vram))
-        }
-        return {
-            "sample_count": len(samples),
-            "peak_load_1m": max(loads) if loads else None,
-            "min_disk_free_mb": min(disks) if disks else None,
-            "gpu_peaks": gpu_peaks,
-        }
-
-
 class TelemetryRecorder:
     """Thread-safe structured telemetry collector with overlap-aware stage summaries."""
 
@@ -359,7 +261,7 @@ class TelemetryRecorder:
         *,
         job_id: Optional[str] = None,
         project_slug: str = "",
-        policy: str = "baseline_split",
+        policy: str = "dual_tts_shared_encode",
         chapters: Optional[List[str]] = None,
     ) -> None:
         self.job_id = job_id or f"job-{uuid.uuid4().hex[:12]}"
@@ -372,15 +274,10 @@ class TelemetryRecorder:
         self._spans: List[Dict[str, Any]] = []
         self._counters: Dict[str, float] = {}
         self._hardware: Optional[Dict[str, Any]] = None
-        self._sampler_summary: Optional[Dict[str, Any]] = None
 
     def set_hardware(self, hardware: Dict[str, Any]) -> None:
         with self._lock:
             self._hardware = sanitize_telemetry_value(hardware)
-
-    def set_sampler_summary(self, summary: Dict[str, Any]) -> None:
-        with self._lock:
-            self._sampler_summary = sanitize_telemetry_value(summary)
 
     def increment(self, metric: str, value: float = 1.0) -> None:
         with self._lock:
@@ -485,7 +382,6 @@ class TelemetryRecorder:
             counters = {k: round(v, 4) for k, v in self._counters.items()}
             events = list(self._spans) if include_events else []
             hardware = self._hardware
-            sampler = self._sampler_summary
 
         summary = self.compute_stage_summary()
         return {
@@ -497,7 +393,6 @@ class TelemetryRecorder:
             "started_at": self.started_at,
             "finished_at": _utc_now_iso(),
             "hardware": hardware,
-            "resources": sampler,
             "counters": counters,
             "timing": summary,
             "events": events,
