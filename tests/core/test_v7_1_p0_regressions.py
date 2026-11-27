@@ -463,3 +463,37 @@ def test_bug08_cli_version_matches_skill_and_pyproject():
     assert APP_VERSION == "7.1.0"
     assert 'version = "7.1.0"' in (repo / "pyproject.toml").read_text(encoding="utf-8")
     assert 'version: "7.1.0"' in (repo / ".agents/skills/manga-recap/SKILL.md").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# BUG-09 (found live during V7.1 P4 Kaggle preview):
+# sync_outputs marks StageType.TTS COMPLETED; synthesize_chapter_tts must not
+# fail with Illegal transition 'completed' -> 'completed'.
+# ---------------------------------------------------------------------------
+
+
+def test_bug09_kaggle_tts_does_not_fail_when_sync_already_completed_checkpoint(tmp_path, monkeypatch):
+    from src.core.storage import load_chapter_metadata, update_checkpoint
+    from src.core.schemas import CheckpointStatus, StageType
+    from src.core.workflow import synthesize_chapter_tts
+
+    monkeypatch.setenv("DATA_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("DATA_OUTPUT_DIR", str(tmp_path / "output"))
+    _make_project(tmp_path, slug="bug09-proj", compute="kaggle")
+    chap_dir = init_chapter_layout("bug09-proj", "1")
+    _write_chapter_evidence(chap_dir, slug="bug09-proj", ch="1")
+
+    def _fake_dispatch(**kwargs):
+        # Emulate sync_outputs marking TTS COMPLETED before returning
+        update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.COMPLETED)
+        return {"status": "success", "telemetry": {"worker_sec": 12.3}}
+
+    fake_svc = MagicMock()
+    fake_svc.is_authenticated = True
+    fake_svc.dispatch_chapter_job.side_effect = _fake_dispatch
+    monkeypatch.setattr("src.cloud.kaggle_service.KaggleCloudService", lambda: fake_svc)
+
+    res = synthesize_chapter_tts("bug09-proj", "1", kaggle=True)
+    assert res["status"] == "success"
+    assert res["provider"] == "kaggle"
+    assert load_chapter_metadata(chap_dir).stages[StageType.TTS].status == CheckpointStatus.COMPLETED

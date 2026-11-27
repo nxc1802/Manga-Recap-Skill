@@ -1215,14 +1215,21 @@ def synthesize_chapter_tts(
                 "Kaggle API authentication failed. Ensure KAGGLE_API_TOKEN is configured in ~/.kaggle/access_token."
             )
         update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.RUNNING)
-        cloud_res = service.dispatch_chapter_job(
-            project_slug=project_slug,
-            chapter_number=str(chapter_num),
-            gpu=True,
-            wait=True,
-            job_type="tts",
-        )
-        update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.COMPLETED)
+        try:
+            cloud_res = service.dispatch_chapter_job(
+                project_slug=project_slug,
+                chapter_number=str(chapter_num),
+                gpu=True,
+                wait=True,
+                job_type="tts",
+            )
+        except Exception as e:
+            update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.FAILED, error=str(e))
+            raise
+        cur_meta = load_chapter_metadata(chap_dir)
+        tts_cp = cur_meta.stages.get(StageType.TTS)
+        if tts_cp is None or tts_cp.status != CheckpointStatus.COMPLETED:
+            update_checkpoint(chap_dir, StageType.TTS, CheckpointStatus.COMPLETED)
         return {
             "status": "success",
             "command": "tts",
