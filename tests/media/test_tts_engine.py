@@ -8,12 +8,12 @@ import wave
 import pytest
 
 from src.tts.engine import (
-    EngineMode,
-    MockTTSBackend,
+    NeuralTTSBackend,
     VieNeuEngine,
     get_tts_engine,
     get_wav_duration_seconds,
 )
+from tests.fixtures.mock_tts import MockTTSBackend, MockVieNeuEngine
 
 
 def test_mock_backend_speech_cadence():
@@ -68,33 +68,34 @@ def test_get_wav_duration_seconds(tmp_path):
         get_wav_duration_seconds(tmp_path / "non_existent.wav")
 
 
-def test_vieneu_engine_singleton_and_mock_mode():
-    engine = get_tts_engine(force_mode=EngineMode.MOCK)
-    assert engine.mode == "mock"
-    assert isinstance(engine.backend, MockTTSBackend)
-
-    engine2 = get_tts_engine()
-    assert engine is engine2
-
-
-def test_vieneu_engine_force_neural_precedence_over_mock_env(monkeypatch):
-    monkeypatch.setenv("VIENEU_MOCK", "1")
-    # Even if VIENEU_MOCK=1 is in environment, force_mode=EngineMode.NEURAL MUST attempt neural
-    # and fail loudly rather than silently returning MockTTSBackend.
+def test_vieneu_engine_neural_fails_without_mock_fallback(monkeypatch):
     import src.tts.engine as eng
+
+    monkeypatch.setenv("VIENEU_MOCK", "1")
+    VieNeuEngine.reset_instance()
 
     def failing_neural_init(self):
         raise ImportError("Simulated missing vieneu package")
 
     monkeypatch.setattr(eng.NeuralTTSBackend, "__init__", failing_neural_init)
 
-    with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
-        get_tts_engine(force_mode=EngineMode.NEURAL)
+    with pytest.raises(RuntimeError, match="Neural TTS backend failed to initialize"):
+        get_tts_engine()
+
+    monkeypatch.setattr(
+        eng.NeuralTTSBackend,
+        "__init__",
+        lambda self: setattr(self, "_sdk", None),
+    )
+    e1 = get_tts_engine()
+    e2 = get_tts_engine()
+    assert e1 is e2
+    assert e1.mode == "neural"
 
 
 def test_synthesize_utterance_atomic_write_and_sha256(tmp_path):
     from src.core.storage import calculate_sha256
-    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    engine = MockVieNeuEngine()
     dest = tmp_path / "atomic_clip.wav"
 
     dur, checksum, was_cached = engine.synthesize_utterance(
@@ -114,7 +115,7 @@ def test_synthesize_utterance_atomic_write_and_sha256(tmp_path):
 
 
 def test_synthesize_utterance_atomic_failure_resilience(tmp_path, monkeypatch):
-    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    engine = MockVieNeuEngine()
     dest = tmp_path / "original_clip.wav"
 
     # Create original valid file
@@ -148,7 +149,7 @@ def test_synthesize_utterance_atomic_failure_resilience(tmp_path, monkeypatch):
 
 def test_vieneu_engine_synthesize_batch(tmp_path):
     """Verifies synthesize_batch processes multiple utterances with accurate durations and checksums."""
-    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    engine = MockVieNeuEngine()
     tasks = [
         {
             "text": "Câu thứ nhất trong loạt xử lý hàng loạt.",

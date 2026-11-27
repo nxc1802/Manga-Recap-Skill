@@ -34,8 +34,7 @@ class TTSService:
     @property
     def engine(self):
         if self._engine is None:
-            from src.tts.engine import EngineMode
-            self._engine = get_tts_engine(force_mode=EngineMode.NEURAL)
+            self._engine = get_tts_engine()
         return self._engine
 
     @engine.setter

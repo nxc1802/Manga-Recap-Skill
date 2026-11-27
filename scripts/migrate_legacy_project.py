@@ -340,6 +340,15 @@ def migrate_project_artifacts(
         if raw_proj["render_settings"].get("render_pan_mode") != migrated_pan_mode:
             raw_proj["render_settings"]["render_pan_mode"] = migrated_pan_mode
             proj_changed = True
+    if isinstance(raw_proj.get("render_settings"), dict):
+        rs = raw_proj["render_settings"]
+        if rs.get("video_mode", "landscape_fit") != "landscape_fit":
+            rs["video_mode"] = "landscape_fit"
+            proj_changed = True
+        sub = rs.get("subtitle")
+        if isinstance(sub, dict) and sub.get("chunking") == "fixed-chars":
+            sub["chunking"] = "sentence-aware"
+            proj_changed = True
     if isinstance(raw_proj.get("audio_settings"), dict):
         old_v = raw_proj["audio_settings"].get("default_voice")
         if old_v:

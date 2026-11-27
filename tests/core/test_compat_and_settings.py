@@ -108,9 +108,10 @@ def test_legacy_normalization_and_idempotent_migration(tmp_path, monkeypatch):
     assert norm_ch["custom_note"] == "keep_me"
     assert norm_ch["stages"]["ingest"]["status"] == "completed"
 
-    # Legacy project voice alias + legacy memory/script.csv + memory/character_dictionary.json
+    # Legacy project voice alias + auto video_mode + legacy memory/script.csv + memory/character_dictionary.json
     p_cfg = read_json(proj / "project.json")
     p_cfg["audio_settings"]["default_voice"] = "edge-tts-female"
+    p_cfg["render_settings"]["video_mode"] = "auto"
     atomic_write_json(proj / "project.json", p_cfg)
 
     mem_dir = proj / "memory"
@@ -135,6 +136,7 @@ def test_legacy_normalization_and_idempotent_migration(tmp_path, monkeypatch):
     assert (proj / "characters.json").is_file()
     assert (chap / "script.json").is_file()
     assert read_json(proj / "project.json")["audio_settings"]["default_voice"] == "Trúc Ly"
+    assert read_json(proj / "project.json")["render_settings"]["video_mode"] == "landscape_fit"
 
     # Idempotent second run
     second = migrate_project_artifacts(proj, dry_run=False)

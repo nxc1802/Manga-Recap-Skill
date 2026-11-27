@@ -132,11 +132,17 @@ class TestRecapScript:
             seq_id="001",
             panel_ids=["panel_001.jpg"],
             narrator_text="Trong đêm tối...",
-            camera_motion=CameraMotionType.PAN_LEFT,
+            camera_motion=CameraMotionType.SLOW_PAN_DOWN,
             duration=3.45
         )
         assert seg.seq_id == "001"
-        assert seg.camera_motion == CameraMotionType.PAN_LEFT
+        assert seg.camera_motion == CameraMotionType.SLOW_PAN_DOWN
+        with pytest.raises(ValidationError):
+            ScriptSegment(seq_id="002", panel_ids=["panel_001.jpg"], narrator_text="Bad", camera_motion="pan_left")
+        with pytest.raises(ValidationError):
+            RenderSettings(video_mode="portrait_padded")
+        with pytest.raises(ValidationError):
+            RenderSettings(video_mode="auto")
 
     def test_opaque_string_seq_id_support(self):
         seg1 = ScriptSegment(seq_id="002_1", panel_ids=["panel_001.jpg"], narrator_text="Phần 1")

@@ -156,7 +156,7 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
             known.add(key)
             panel_by_key[key] = panel
     for segment in script.segments:
-        ProductionMotion(segment.camera_motion.value)
+        ProductionMotion(getattr(segment.camera_motion, "value", segment.camera_motion))
         if segment.panel_ids != segment.evidence_panel_ids:
             raise ValueError("Narration evidence aliases conflict")
         if segment.status == "needs_review" or "[CAN_XAC_MINH" in segment.narrator_text:

@@ -78,64 +78,40 @@ class TestP1CameraMotionBounds:
         custom_high_cam = CameraMotionGenerator(max_zoom=1.50)
         assert custom_high_cam.max_zoom == 1.15
 
-    def test_zoom_in_bounds_strictly_clamp_to_115(self):
-        """ZOOM_IN zoompan expression strictly bounds maximum zoom to 1.15."""
-        filter_str, is_zp = self.cam.build_filterchain(
-            img_w=1280, img_h=720, duration_sec=2.0, motion_type=CameraMotionType.ZOOM_IN
-        )
-        assert is_zp
-        assert "1.15" in filter_str
-        assert "1.25" not in filter_str
-        assert "1.0+(1.15-1.0)" in filter_str or "1.15" in filter_str
-
-    def test_zoom_out_bounds_strictly_clamp_to_115(self):
-        """ZOOM_OUT zoompan expression strictly bounds start zoom to 1.15 (or aliases to STATIC in V4)."""
-        filter_str, is_zp = self.cam.build_filterchain(
-            img_w=1280, img_h=720, duration_sec=2.0, motion_type=CameraMotionType.ZOOM_OUT
-        )
-        assert not is_zp or "1.15" in filter_str
-
-    def test_focus_crop_bounds_strictly_enforce_min_045(self):
-        """FOCUS_CROP clamps scale_ratio to >= 0.45 even when smaller focus box is requested."""
-        tiny_box = FocusBox(x_min=0.45, y_min=0.45, x_max=0.55, y_max=0.55)  # Scale ~0.10
+    def test_static_focus_bounds_strictly_enforce_min_045(self):
+        """STATIC_FOCUS clamps scale_ratio to >= 0.45 even when smaller focus box is requested."""
+        tiny_box = FocusBox(x_min=0.45, y_min=0.45, x_max=0.55, y_max=0.55)
         filter_str, is_zp = self.cam.build_filterchain(
             img_w=1920,
             img_h=1080,
             duration_sec=3.0,
-            motion_type=CameraMotionType.FOCUS_CROP,
+            motion_type=CameraMotionType.STATIC_FOCUS,
             focus_box=tiny_box,
         )
         assert not is_zp
-        assert "crop=" in filter_str
-        # 1080 * 0.45 = 486 (even: 486)
-        # 486 * (16/9) = 864
         assert "crop=864:486:" in filter_str
 
-    def test_tall_continuous_webtoon_panel_diverts_to_static(self):
-        """For tall continuous webtoon panels (H > 2W), zoom and horizontal pan divert to STATIC."""
-        tall_w, tall_h = 600, 1800  # H = 3W > 2W
+    def test_tall_continuous_webtoon_panel_slow_pan_down_and_legacy_rejection(self):
+        """SLOW_PAN_DOWN handles tall panels while removed legacy motions fail cleanly."""
+        tall_w, tall_h = 600, 1800
 
-        # ZOOM_IN diverts to STATIC (is_zoompan is False)
-        f_zoom, is_zp = self.cam.build_filterchain(
-            img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type=CameraMotionType.ZOOM_IN
-        )
-        assert not is_zp
-        assert "zoompan" not in f_zoom
-        assert "boxblur=25:5" in f_zoom
+        with pytest.raises(ValueError, match="Unsupported camera motion"):
+            self.cam.build_filterchain(img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type="zoom_in")
+        with pytest.raises(ValueError, match="Unsupported camera motion"):
+            self.cam.build_filterchain(img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type="pan_left")
 
-        # PAN_LEFT diverts to STATIC
-        f_pan_l, is_zp = self.cam.build_filterchain(
-            img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type=CameraMotionType.PAN_LEFT
-        )
-        assert not is_zp
-        assert "boxblur=25:5" in f_pan_l
-
-        # VERTICAL_SCROLL is preserved (it's a vertical motion, safe for tall webtoons)
         f_scroll, is_zp = self.cam.build_filterchain(
-            img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type=CameraMotionType.VERTICAL_SCROLL
+            img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type=CameraMotionType.SLOW_PAN_DOWN
         )
         assert not is_zp
         assert "t/4.000" in f_scroll
+        assert "boxblur" not in f_scroll
+
+        f_static, _ = self.cam.build_filterchain(
+            img_w=tall_w, img_h=tall_h, duration_sec=4.0, motion_type=CameraMotionType.STATIC
+        )
+        assert "force_original_aspect_ratio=decrease" in f_static
+        assert "boxblur" not in f_static
 
 
 # ==============================================================================

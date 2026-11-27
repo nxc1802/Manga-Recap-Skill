@@ -12,7 +12,7 @@ COMMAND_REQUIREMENTS = {
 }
 
 
-NON_PRODUCTION_COMMANDS = {"inspect", "validate", "status", "setup", "review-pack", "review_pack", "tts_benchmark"}
+NON_PRODUCTION_COMMANDS = {"inspect", "validate", "status", "setup", "review-pack", "review_pack"}
 
 
 def enforce_execution_policy(command, args):

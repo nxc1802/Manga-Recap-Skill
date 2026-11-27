@@ -41,7 +41,7 @@ def test_frozen_tall_boundary_and_monotonic_decomposition(ratio, tall):
     assert (len(boxes) > 1) is tall
 
 
-@pytest.mark.parametrize("motion", [m.value for m in CameraMotionType if m.value not in {p.value for p in ProductionMotion}] + ["jitter", "PAN_UP"])
+@pytest.mark.parametrize("motion", ["pan_left", "zoom_in", "vertical_scroll", "jitter", "PAN_UP"])
 def test_legacy_motion_is_rejected(motion):
     with pytest.raises(ValidationError):
         Shot(shot_id="x", segment_id="a", source_panel_id="p", duration_sec=1, motion_type=motion)
@@ -69,7 +69,7 @@ def test_no_missing_evidence_or_implicit_fallback(evidence, damage):
     elif damage == "review": segment.narrator_text = "[CAN_XAC_MINH: text]"
     elif damage == "duration": segment.duration = None
     elif damage == "no_evidence": segment.evidence_panel_ids = []
-    else: segment.camera_motion = CameraMotionType.PAN_UP
+    else: segment.__dict__["camera_motion"] = "pan_up"
     with pytest.raises((ValueError, ValidationError)):
         generate_visual_plan(root, manifest, script)
 

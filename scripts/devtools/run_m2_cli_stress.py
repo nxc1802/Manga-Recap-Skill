@@ -49,7 +49,6 @@ def main():
             ("Version flag (no json)", ["--version"], 0),
             ("Status chapter (valid)", ["status", "-p", "stress_proj", "-c", "1", "--json"], 0),
             ("Inspect chapter (valid)", ["inspect", "-p", "stress_proj", "-c", "1", "--json"], 0),
-            ("TTS benchmark (valid)", ["tts_benchmark", "--voices", "Trúc Ly", "--json"], 0),
             ("Inspect missing project (IO_ERROR)", ["inspect", "-p", "nonexistent_proj", "--json"], 3),
             ("Status missing project (IO_ERROR)", ["status", "-p", "nonexistent_proj", "--json"], 3),
             ("Validate missing project (IO_ERROR)", ["validate", "-p", "nonexistent_proj", "--json"], 3),

@@ -39,9 +39,9 @@ _TEMP_PATTERNS = (
 )
 
 
-def cleanup_intermediate_files(chapter_dir: Path, keep_temp: bool = False) -> List[str]:
-    """Cleanly unlinks known temporary video/subtitle/concat files if keep_temp is False."""
-    if keep_temp or not chapter_dir.exists():
+def cleanup_intermediate_files(chapter_dir: Path) -> List[str]:
+    """Cleanly unlinks known temporary video/subtitle/concat files."""
+    if not chapter_dir.exists():
         return []
     cleaned: List[str] = []
     seen = set()

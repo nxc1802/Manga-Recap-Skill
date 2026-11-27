@@ -83,13 +83,13 @@ class TestReviewPackGenerator:
         assert envelope["status"] == "success"
         assert envelope["command"] == "review-pack"
 
-        # Verify generated files exist on disk
+        # Verify generated files exist on disk (HTML review pack removed in V7)
         md_file = out_dir / "review_pack.md"
         html_file = out_dir / "review_pack.html"
         json_file = out_dir / "review_pack.json"
 
         assert md_file.exists()
-        assert html_file.exists()
+        assert not html_file.exists()
         assert json_file.exists()
 
         # Check markdown content
@@ -101,12 +101,16 @@ class TestReviewPackGenerator:
         assert "panel_002.jpg, panel_003.jpg, panel_004.jpg" in md_text
         assert "002_1" in md_text
 
-        # Check html content
-        html_text = html_file.read_text(encoding="utf-8")
-        assert "<!DOCTYPE html>" in html_text
-        assert "badge-unreviewed" in html_text
-        assert "Human Review Inspection Checklist" in html_text
-        assert "panel_005.jpg" in html_text
+        # Reject deprecated HTML format explicitly
+        bad_code = main([
+            "review-pack",
+            "-p", "synthetic_fixture",
+            "-c", "1",
+            "--out-dir", str(out_dir),
+            "--format", "html",
+            "--json",
+        ])
+        assert bad_code == ExitCode.VALIDATION_ERROR.value
 
         # Check json content
         json_data = json.loads(json_file.read_text(encoding="utf-8"))

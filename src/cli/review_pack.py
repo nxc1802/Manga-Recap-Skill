@@ -9,14 +9,12 @@ from src.cli.response import print_response
 from src.core.review_pack import (
     build_review_pack_data,
     create_review_pack,
-    generate_html_review_pack,
     generate_markdown_review_pack,
 )
 
 __all__ = [
     "build_review_pack_data",
     "generate_markdown_review_pack",
-    "generate_html_review_pack",
     "create_review_pack",
     "handle_review_pack",
     "main",
@@ -51,7 +49,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-c", "--chapter", required=True, help="Chapter number")
     parser.add_argument(
         "--format",
-        choices=["md", "html", "json", "all"],
+        choices=["md", "json", "all"],
         default="all",
         help="Output format(s)",
     )

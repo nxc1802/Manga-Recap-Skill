@@ -192,7 +192,7 @@ def main():
             "voice_id": "Nam An",  # Distinct voice ID
             "synthesized_voice": "Nam An",
             "voice_source": "manual",
-            "camera_motion": "zoom_in",
+            "camera_motion": "slow_pan_down",
             "focus_box": {
                 "x_min": 0.15,
                 "y_min": 0.15,
@@ -360,7 +360,7 @@ def main():
             "crf": 20,
             "preset": "medium",
             "burn_subtitles": True,
-            "video_mode": "auto",
+            "video_mode": "landscape_fit",
             "render_pan_mode": "static",
             "subtitle": {
                 "max_lines": 2,

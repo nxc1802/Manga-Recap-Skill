@@ -57,98 +57,37 @@ class TestCameraMotionGenerator:
         assert "fps=30" in filter_str
         assert "boxblur" not in filter_str
 
-    def test_static_filter_aspect_mismatch_blurred_wings(self):
-        # Square input (800x800)
+    def test_static_filter_tall_panel_landscape_pad(self):
+        # Square/portrait input (800x800) uses clean landscape black letterbox/pillarbox pad (F01/F02)
         filter_str, is_zoompan = self.generator.build_filterchain(
             img_w=800, img_h=800, duration_sec=3.0, motion_type=CameraMotionType.STATIC
         )
         assert not is_zoompan
-        assert "boxblur=25:5" in filter_str
-        assert "overlay=(W-w)/2:(H-h)/2" in filter_str
+        assert "force_original_aspect_ratio=decrease" in filter_str
+        assert "pad=1280:720" in filter_str
+        assert "boxblur" not in filter_str
 
-    def test_pan_right_filter(self):
+    def test_slow_pan_down_filter(self):
         filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=2400, img_h=1080, duration_sec=4.0, motion_type=CameraMotionType.PAN_RIGHT
-        )
-        assert not is_zoompan
-        assert "crop=" in filter_str
-        assert "1-cos(PI*t/" in filter_str
-        assert "scale=1280:720" in filter_str
-
-    def test_pan_left_filter(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=2400, img_h=1080, duration_sec=4.0, motion_type=CameraMotionType.PAN_LEFT
-        )
-        assert not is_zoompan
-        assert "crop=" in filter_str
-        assert "1+cos(PI*t/" in filter_str
-        assert "scale=1280:720" in filter_str
-
-    def test_pan_down_filter(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1080, img_h=2400, duration_sec=5.0, motion_type=CameraMotionType.PAN_DOWN
+            img_w=1080, img_h=2400, duration_sec=5.0, motion_type=CameraMotionType.SLOW_PAN_DOWN
         )
         assert not is_zoompan
         assert "crop=" in filter_str
         assert "1-cos(PI*" in filter_str and "t/5.000" in filter_str
         assert "scale=1280:720" in filter_str
 
-    def test_pan_up_filter(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1080, img_h=2400, duration_sec=5.0, motion_type=CameraMotionType.PAN_UP
-        )
-        assert not is_zoompan
-        assert "crop=" in filter_str
-        # In V4, PAN_UP is aliased to PAN_DOWN to enforce strictly monotonic top-to-bottom motion
-        assert ("1+cos(PI*t/" in filter_str) or ("1-cos(PI*" in filter_str)
-        assert "scale=1280:720" in filter_str
-
-    def test_vertical_scroll_linear_progression(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=800, img_h=3200, duration_sec=6.0, motion_type=CameraMotionType.VERTICAL_SCROLL
-        )
-        assert not is_zoompan
-        assert "crop=" in filter_str
-        assert "t/6.000" in filter_str
-        assert "scale=1280:720" in filter_str
-
-    def test_zoom_in_pre_crop_aspect_preservation(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=800, img_h=1200, duration_sec=3.5, motion_type=CameraMotionType.ZOOM_IN
-        )
-        assert is_zoompan
-        assert "crop=" in filter_str
-        assert "zoompan=z=" in filter_str
-        assert "d=105" in filter_str  # 30 fps * 3.5s = 105 frames
-        assert "s=1280x720" in filter_str
-
-    def test_zoom_out_pre_crop_aspect_preservation(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1600, img_h=1200, duration_sec=2.0, motion_type=CameraMotionType.ZOOM_OUT
-        )
-        # In V4, ZOOM_OUT aliases to STATIC to eliminate reverse zoom jitter
-        assert not is_zoompan
-        assert "1280" in filter_str and "720" in filter_str
-
-    def test_focus_crop_filter(self):
+    def test_static_focus_filter(self):
         fb = FocusBox(x_min=0.2, y_min=0.2, x_max=0.5, y_max=0.5)
         filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1920, img_h=1080, duration_sec=2.5, motion_type=CameraMotionType.FOCUS_CROP, focus_box=fb
+            img_w=1920, img_h=1080, duration_sec=2.5, motion_type=CameraMotionType.STATIC_FOCUS, focus_box=fb
         )
         assert not is_zoompan
         assert "crop=" in filter_str
         assert "scale=1280:720" in filter_str
 
-    def test_duration_clamped_to_minimum(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1280, img_h=720, duration_sec=0.1, motion_type=CameraMotionType.ZOOM_IN
-        )
-        # 0.1s is clamped to 0.5s -> 15 frames at 30 fps
-        assert "d=15" in filter_str
-
-    def test_invalid_motion_string_falls_back_to_static(self):
-        filter_str, is_zoompan = self.generator.build_filterchain(
-            img_w=1920, img_h=1080, duration_sec=2.0, motion_type="unknown_motion_type"
-        )
-        assert not is_zoompan
-        assert "scale=1280:720" in filter_str
+    def test_legacy_and_unknown_motion_strings_rejected(self):
+        for bad in ("pan_left", "zoom_in", "vertical_scroll", "unknown_motion_type"):
+            with pytest.raises(ValueError, match="Unsupported camera motion"):
+                self.generator.build_filterchain(
+                    img_w=1920, img_h=1080, duration_sec=2.0, motion_type=bad
+                )

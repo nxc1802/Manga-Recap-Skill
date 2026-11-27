@@ -242,11 +242,6 @@ class KaggleCloudService:
         render_workers: int = 4,
         encoder_preference: str = "auto",
         job_type: str = "produce",
-        video_mode: Optional[str] = None,
-        burn_subtitles: Optional[bool] = None,
-        fps: Optional[int] = None,
-        target_width: Optional[int] = None,
-        target_height: Optional[int] = None,
         compile_feature: bool = False,
     ) -> str:
         from src.core.series_setup import require_series_setup
@@ -254,16 +249,6 @@ class KaggleCloudService:
         require_series_setup(project_slug)
         if job_type not in {"tts", "render", "produce"}:
             raise ValueError("Unknown cloud job type")
-        settings = read_json(get_project_dir(project_slug) / "project.json")["render_settings"]
-        for key, value in {
-            "target_width": target_width,
-            "target_height": target_height,
-            "fps": fps,
-            "burn_subtitles": burn_subtitles,
-            "video_mode": video_mode,
-        }.items():
-            if value is not None and value != settings[key]:
-                raise ValueError(f"Cloud override conflicts with confirmed setup: {key}")
         digest = getattr(self, "_payload_manifest_hash", None)
         if not digest:
             raise ValueError("Package and hash the complete runtime before generating a worker")
@@ -293,11 +278,6 @@ class KaggleCloudService:
         job_type: str = "produce",
         render_workers: int = 4,
         encoder_preference: str = "auto",
-        video_mode: Optional[str] = None,
-        burn_subtitles: Optional[bool] = None,
-        fps: Optional[int] = None,
-        target_width: Optional[int] = None,
-        target_height: Optional[int] = None,
         series_chapters: Optional[List[str]] = None,
         compile_feature: bool = False,
         cloud_policy: Optional[str] = None,
@@ -391,11 +371,6 @@ class KaggleCloudService:
                 render_workers=render_workers,
                 encoder_preference=encoder_preference,
                 job_type=job_type,
-                video_mode=video_mode,
-                burn_subtitles=burn_subtitles,
-                fps=fps,
-                target_width=target_width,
-                target_height=target_height,
                 compile_feature=compile_feature,
             )
             worker_py.write_text(worker_code, encoding="utf-8")
@@ -596,7 +571,7 @@ class KaggleCloudService:
             series=True,
         )
 
-    def check_chapter_1_preview_approval(self, project_slug: str, skip_preview: bool = False):
+    def check_chapter_1_preview_approval(self, project_slug: str):
         from src.core.human_review import require_preview_approval
 
         try:
@@ -609,8 +584,6 @@ class KaggleCloudService:
         self,
         project_slug: str,
         chapters: List[Any],
-        *,
-        skip_preview: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         numbers = [str(number).strip() for number in chapters]

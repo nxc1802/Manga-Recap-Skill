@@ -32,14 +32,18 @@ from src.cli.exit_codes import ExitCode
 from src.cli.main import main
 from src.core.schemas import CheckpointStatus, StageType
 from src.core.storage import calculate_sha256, get_chapter_dir, get_project_dir, init_chapter_layout, init_project_layout, read_json
-from src.tts.benchmark import EMOTION_BENCHMARK_PROMPTS, REFERENCE_PROMPTS, TTSBenchmarkRunner, generate_mock_wav
 from src.tts.catalog import CATALOG_VOICES, get_voice_profile, resolve_voice_id
 from src.tts.engine import (
-    EngineMode,
-    MockTTSBackend,
     VieNeuEngine,
     get_tts_engine,
     get_wav_duration_seconds,
+)
+from tests.fixtures.mock_tts import MockTTSBackend, MockVieNeuEngine
+from scripts.devtools.tts_benchmark import (
+    EMOTION_BENCHMARK_PROMPTS,
+    REFERENCE_PROMPTS,
+    TTSBenchmarkRunner,
+    generate_mock_wav,
 )
 
 
@@ -49,8 +53,8 @@ from src.tts.engine import (
 
 @pytest.fixture
 def mock_engine():
-    """Returns a fresh VieNeuEngine running in Mock mode."""
-    return VieNeuEngine(force_mode=EngineMode.MOCK)
+    """Returns a fresh MockVieNeuEngine test fixture."""
+    return MockVieNeuEngine()
 
 
 def parse_riff_wave_header(file_path: Path) -> Dict[str, Any]:
@@ -347,7 +351,7 @@ class TestOfflineAndZeroCloudGuarantee:
         monkeypatch.setattr(socket.socket, "connect", hostile_connect)
 
         # 1. Synthesize utterance
-        engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+        engine = MockVieNeuEngine()
         out_wav = tmp_path / "offline_test.wav"
         dur, _, _ = engine.synthesize_utterance(
             text="Hệ thống chạy hoàn toàn ngoại tuyến không kết nối mạng.",

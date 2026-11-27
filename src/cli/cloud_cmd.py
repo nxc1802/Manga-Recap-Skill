@@ -150,13 +150,8 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                 "error": "No valid chapters specified for 'cloud produce-series'",
             }
 
-        skip_preview = getattr(args, "skip_preview", False)
-        # Preview approval MUST be verified; missing service support or verification
-        # errors are blockers, not debug-only notices.
         try:
-            ok, preview_err = service.check_chapter_1_preview_approval(
-                project_slug, skip_preview=False
-            )
+            ok, preview_err = service.check_chapter_1_preview_approval(project_slug)
         except Exception as pe:
             ok, preview_err = False, f"Could not verify Chapter 1 preview approval: {pe}"
         if not ok:
@@ -170,11 +165,6 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
         gpu = not getattr(args, "no_gpu", False)
         compile_feature = bool(getattr(args, "compile", False) or getattr(args, "compile_feature", False))
         render_workers = int(getattr(args, "render_workers", 2))
-        raw_video_mode = getattr(args, "video_mode", None)
-        video_mode = raw_video_mode if raw_video_mode not in (None, "auto") else None
-        raw_burn = getattr(args, "burn_subtitles", False)
-        burn_subtitles = True if raw_burn is True else None
-        fps = getattr(args, "fps", None)
         cloud_policy = getattr(args, "cloud_policy", "auto") or "auto"
         chunked = bool(getattr(args, "chunked", False))
 
@@ -188,12 +178,8 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                     project_slug=project_slug,
                     chapters=chapters,
                     gpu=gpu,
-                    skip_preview=skip_preview,
                     compile_feature=compile_feature,
                     render_workers=render_workers,
-                    video_mode=video_mode,
-                    burn_subtitles=burn_subtitles,
-                    fps=fps,
                     cloud_policy=cloud_policy,
                 )
             else:
@@ -202,12 +188,8 @@ def handle_cloud(args: argparse.Namespace) -> Dict[str, Any]:
                     chapters=chapters,
                     gpu=gpu,
                     wait=True,
-                    skip_preview=skip_preview,
                     compile_feature=compile_feature,
                     render_workers=render_workers,
-                    video_mode=video_mode,
-                    burn_subtitles=burn_subtitles,
-                    fps=fps,
                     cloud_policy=cloud_policy,
                 )
             return {

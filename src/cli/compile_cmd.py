@@ -21,5 +21,4 @@ def handle_compile(args: argparse.Namespace) -> Dict[str, Any]:
         chapters=getattr(args, "chapters", None),
         output=getattr(args, "output", None),
         extract_audio=bool(getattr(args, "extract_audio", True)),
-        approved=bool(getattr(args, "approved", False)),
     )

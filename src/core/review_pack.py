@@ -1,8 +1,7 @@
-"""Human review pack data extraction and Markdown/HTML/JSON rendering."""
+"""Human review pack data extraction and Markdown/JSON rendering."""
 
 from __future__ import annotations
 
-import html
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -328,7 +327,7 @@ def generate_markdown_review_pack(data: Dict[str, Any], chap_dir: Path) -> str:
     lines.append("```bash")
     binding = data.get("review_binding", {})
     lines.append(
-        f"manga-recap review-approve -p {data['project_slug']} --reviewer HUMAN_NAME "
+        f"manga-recap approve -p {data['project_slug']} --reviewer HUMAN_NAME "
         f"--config-fingerprint {binding.get('config_fingerprint', 'CONFIG_HASH')} "
         f"--artifact-hash {binding.get('artifact_hash', 'ARTIFACT_HASH')} --json"
     )
@@ -340,141 +339,6 @@ def generate_markdown_review_pack(data: Dict[str, Any], chap_dir: Path) -> str:
     return "\n".join(lines)
 
 
-def generate_html_review_pack(data: Dict[str, Any], chap_dir: Path) -> str:
-    """Renders a standalone, responsive HTML review pack from the shared review-pack data model."""
-    title = html.escape(f"Review Pack: {data['project_title']} - Ch.{data['chapter_number']}")
-    s = data["summary"]
-
-    html_parts: List[str] = [
-        "<!DOCTYPE html>",
-        '<html lang="vi">',
-        "<head>",
-        '  <meta charset="UTF-8">',
-        '  <meta name="viewport" content="width=device-width, initial-scale=1.0">',
-        f"  <title>{title}</title>",
-        "  <style>",
-        "    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #1f2937; background: #f9fafb; margin: 0; padding: 24px; }",
-        "    .container { max-width: 1200px; margin: 0 auto; background: #fff; padding: 32px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }",
-        "    h1, h2, h3 { color: #111827; }",
-        "    h1 { border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }",
-        "    .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 0.85rem; font-weight: 600; }",
-        "    .badge-approved { background: #d1fae5; color: #065f46; }",
-        "    .badge-unreviewed { background: #fef3c7; color: #92400e; }",
-        "    .badge-changes { background: #fee2e2; color: #991b1b; }",
-        "    .grid-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 24px 0; }",
-        "    .metric-card { background: #f3f4f6; padding: 16px; border-radius: 8px; border-left: 4px solid #3b82f6; }",
-        "    .metric-card h4 { margin: 0 0 8px 0; color: #4b5563; font-size: 0.9rem; text-transform: uppercase; }",
-        "    .metric-card p { margin: 0; font-size: 1.5rem; font-weight: 700; color: #111827; }",
-        "    table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 0.95rem; }",
-        "    th, td { border: 1px solid #e5e7eb; padding: 10px 14px; text-align: left; }",
-        "    th { background: #f9fafb; font-weight: 600; color: #374151; }",
-        "    tr:nth-child(even) { background: #f9fafb; }",
-        "    .flag-warning { background: #fffbeb; color: #b45309; font-weight: 600; padding: 2px 6px; border-radius: 4px; }",
-        "    .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin: 20px 0; }",
-        "    .gallery-item { border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; background: #fafafa; }",
-        "    .gallery-item img { width: 100%; height: auto; display: block; }",
-        "    .gallery-item p { padding: 8px 12px; margin: 0; font-size: 0.85rem; font-weight: 600; }",
-        "    .checklist { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin: 24px 0; }",
-        "    .checklist ul { margin: 0; padding-left: 20px; }",
-        "    .checklist li { margin-bottom: 8px; }",
-        "  </style>",
-        "</head>",
-        "<body>",
-        '  <div class="container">',
-    ]
-
-    status_class = "badge-unreviewed"
-    if data["human_review_status"] == HumanReviewStatus.APPROVED.value:
-        status_class = "badge-approved"
-    elif data["human_review_status"] == HumanReviewStatus.CHANGES_REQUESTED.value:
-        status_class = "badge-changes"
-
-    html_parts.extend([
-        f"    <h1>{title}</h1>",
-        "    <div>",
-        f"      <span><strong>Project:</strong> {html.escape(data['project_slug'])} | </span>",
-        f"      <span><strong>Technical:</strong> <code>{html.escape(str(data['technical_status']))}</code> | </span>",
-        f"      <span><strong>Review Status:</strong> <span class=\"badge {status_class}\">{html.escape(str(data['human_review_status']))}</span></span>",
-        "    </div>",
-        '    <div class="grid-metrics">',
-        f"      <div class=\"metric-card\"><h4>Segments</h4><p>{s['total_segments']}</p></div>",
-        f"      <div class=\"metric-card\"><h4>Audio Duration</h4><p>{s['total_audio_duration_seconds']}s</p></div>",
-        f"      <div class=\"metric-card\"><h4>Referenced Panels</h4><p>{s['referenced_panels_count']} / {s['total_manifest_panels']}</p></div>",
-        f"      <div class=\"metric-card\"><h4>Omitted Panels</h4><p>{s['omitted_panels_count']}</p></div>",
-        f"      <div class=\"metric-card\"><h4>Needs Review</h4><p>{s['flagged_needs_review_count']}</p></div>",
-        "    </div>",
-        '    <div class="checklist">',
-        "      <h3>Human Review Inspection Checklist</h3>",
-        "      <ul>",
-        "        <li><strong>Faithful Storytelling</strong>: Confirm narration faithfully reflects manga panel dialogues and observable actions without hallucinated lore.</li>",
-        "        <li><strong>Essential Panel Retention</strong>: Confirm that all critical story beats and combat climax panels are retained (check Omitted Panels table below).</li>",
-        "        <li><strong>Voice & Pronunciation</strong>: Verify natural Vietnamese cadence, character name pronunciation, and audible emotion cues.</li>",
-        "        <li><strong>Framing & Anti-Chat-Box</strong>: Verify camera focus centers on character facial expressions/eyes, avoiding empty speech bubbles.</li>",
-        "        <li><strong>Audio/Video Sync</strong>: Verify smooth Ken Burns camera pacing and legible burned subtitles.</li>",
-        "      </ul>",
-        "    </div>",
-    ])
-
-    if data["contact_sheets"]:
-        html_parts.append("    <h2>Visual Contact Sheets (4x4 Grids)</h2>")
-        html_parts.append('    <div class="gallery">')
-        for cs in data["contact_sheets"]:
-            cs_fn = cs["filename"] if isinstance(cs, dict) else str(cs)
-            cs_rel = cs.get("relative_path", f"contact_sheets/{cs_fn}") if isinstance(cs, dict) else f"contact_sheets/{cs_fn}"
-            html_parts.append(
-                f'      <div class="gallery-item"><a href="{cs_rel}" target="_blank">'
-                f'<img src="{cs_rel}" alt="{html.escape(cs_fn)}" loading="lazy"></a><p>{html.escape(cs_fn)}</p></div>'
-            )
-        html_parts.append("    </div>")
-
-    html_parts.extend([
-        "    <h2>Script-to-Panel Alignment Table (N:M Mapping)</h2>",
-        "    <table>",
-        "      <thead><tr><th>Seq ID</th><th>Panels</th><th>Character / Voice</th><th>Motion</th><th>Duration</th><th>Narration & Dialogue</th><th>Status</th></tr></thead>",
-        "      <tbody>",
-    ])
-    for seg in data["segments"]:
-        s_id = html.escape(str(seg.get("seq_id", "")))
-        p_ids = html.escape(", ".join(seg.get("panel_ids", [])))
-        char = html.escape(str(seg.get("character") or "Narrator"))
-        voice = html.escape(str(seg.get("voice_id", "")))
-        char_voice = f"{char} ({voice})" if voice else char
-        motion = html.escape(str(seg.get("camera_motion", "static")))
-        dur = f"{seg.get('duration')}s" if seg.get("duration") else "pending"
-        text = html.escape(str(seg.get("narrator_text", "")))
-        if "[CAN_XAC_MINH" in text:
-            text = f'<span class="flag-warning">{text}</span>'
-        status = html.escape(str(seg.get("status", "pending")))
-        html_parts.append(
-            f"        <tr><td><strong>{s_id}</strong></td><td><code>{p_ids}</code></td><td>{char_voice}</td>"
-            f"<td><code>{motion}</code></td><td>{dur}</td><td>{text}</td><td><code>{status}</code></td></tr>"
-        )
-    html_parts.extend(["      </tbody>", "    </table>"])
-
-    html_parts.append("    <h2>Omitted Panels Log (Non-Essential Verification)</h2>")
-    if data["omitted_panels"]:
-        html_parts.extend([
-            "    <table>",
-            "      <thead><tr><th>Panel ID</th><th>Dimensions</th><th>Aspect Ratio</th><th>Status</th><th>Verification Note</th></tr></thead>",
-            "      <tbody>",
-        ])
-        for op in data["omitted_panels"]:
-            pid = html.escape(str(op["panel_id"]))
-            dim = html.escape(f"{op.get('width', '?')}x{op.get('height', '?')}")
-            ar = f"{op.get('aspect_ratio', '?'):.2f}" if isinstance(op.get("aspect_ratio"), (int, float)) else "?"
-            st = html.escape(str(op.get("manifest_status", "")))
-            note = html.escape(str(op.get("note", "")))
-            html_parts.append(
-                f"        <tr><td><code>{pid}</code></td><td>{dim}</td><td>{ar}</td><td><code>{st}</code></td><td>{note}</td></tr>"
-            )
-        html_parts.extend(["      </tbody>", "    </table>"])
-    else:
-        html_parts.append("    <p><em>All panels in manifest are referenced in the script.</em></p>")
-
-    html_parts.extend(["  </div>", "</body>", "</html>"])
-    return "\n".join(html_parts)
-
-
 def create_review_pack(
     project_slug: str,
     chapter_num: str,
@@ -482,11 +346,13 @@ def create_review_pack(
     fmt: str = "all",
     out_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Domain operation building review pack JSON/Markdown/HTML outputs."""
+    """Domain operation building canonical Markdown and JSON review pack outputs."""
     if not project_slug:
         raise DomainValidationError("Project slug is required.")
     if chapter_num is None:
         raise DomainValidationError("Chapter number is required for generating a review pack.")
+    if fmt not in {"md", "json", "all"}:
+        raise DomainValidationError(f"Unsupported review pack format '{fmt}'. Supported formats: md, json, all.")
 
     project_dir = resolve_existing_project_dir(project_slug, require_exists=False)
     if not project_dir.exists():
@@ -526,10 +392,6 @@ def create_review_pack(
         md_path = dest_dir / "review_pack.md"
         md_path.write_text(generate_markdown_review_pack(data, chap_dir), encoding="utf-8")
         generated_files["markdown"] = str(md_path)
-    if fmt in {"html", "all"}:
-        html_path = dest_dir / "review_pack.html"
-        html_path.write_text(generate_html_review_pack(data, chap_dir), encoding="utf-8")
-        generated_files["html"] = str(html_path)
     if fmt in {"json", "all"}:
         json_path = dest_dir / "review_pack.json"
         atomic_write_json(json_path, data)

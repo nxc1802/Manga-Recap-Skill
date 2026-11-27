@@ -38,7 +38,6 @@ class RuntimeSettings:
     vieneu_device: str
     vieneu_sample_rate: int
     vieneu_force_neural: bool
-    vieneu_mock: bool
     hf_home: Path
 
 
@@ -86,7 +85,6 @@ def get_runtime_settings(*, load_env: bool = False) -> RuntimeSettings:
         vieneu_device=(os.getenv("VIENEU_DEVICE") or "mps").strip(),
         vieneu_sample_rate=sample_rate,
         vieneu_force_neural=os.getenv("VIENEU_FORCE_NEURAL") == "1",
-        vieneu_mock=os.getenv("VIENEU_MOCK") == "1",
         hf_home=Path(os.getenv("HF_HOME", str(Path.home() / ".cache" / "huggingface" / "hub"))),
     )
 

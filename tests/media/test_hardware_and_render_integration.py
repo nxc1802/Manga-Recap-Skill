@@ -57,7 +57,8 @@ from src.production.hardware import (
     resolve_video_encoder,
     smoke_test_encoder,
 )
-from src.tts.engine import EngineMode, MockTTSBackend, VieNeuEngine, get_tts_engine
+from src.tts.engine import VieNeuEngine, get_tts_engine
+from tests.fixtures.mock_tts import MockVieNeuEngine
 
 
 # ==============================================================================
@@ -119,7 +120,7 @@ def mock_cloud_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                     seq_id="002",
                     panel_ids=["panel_002.jpg"],
                     narrator_text=f"Diễn biến tiếp theo đầy gay cấn trong tập {c_num}.",
-                    camera_motion=CameraMotionType.ZOOM_IN,
+                    camera_motion=CameraMotionType.SLOW_PAN_DOWN,
                     focus_box=FocusBox(x_min=0.2, y_min=0.2, x_max=0.9, y_max=0.9),
                 ),
             ],
@@ -139,43 +140,44 @@ def mock_cloud_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 # ==============================================================================
 
 class TestTTSPersistentSingleton:
-    def test_tts_singleton_reuses_instance_when_mode_matches(self):
-        """Reusing get_tts_engine with same mode returns identical object without recreating."""
-        e1 = get_tts_engine(force_mode=EngineMode.MOCK)
-        e2 = get_tts_engine(force_mode=EngineMode.MOCK)
-        assert e1 is e2, "VieNeuEngine singleton should reuse existing instance when mode matches"
-        assert e1.mode == "mock"
+    def test_tts_singleton_reuses_instance(self):
+        """Reusing get_tts_engine returns identical singleton object without recreating."""
+        with patch("src.tts.engine.NeuralTTSBackend") as mock_neural_backend:
+            mock_neural_backend.return_value = MagicMock(init_duration_seconds=0.1, total_inference_seconds=0.0, utterance_count=0)
+            e1 = get_tts_engine()
+            e2 = get_tts_engine()
+            assert e1 is e2, "VieNeuEngine singleton should reuse existing instance"
+            assert e1.mode == "neural"
 
     def test_tts_singleton_force_reload(self):
         """Passing force_reload=True explicitly recreates the singleton."""
-        e1 = get_tts_engine(force_mode=EngineMode.MOCK)
-        e2 = get_tts_engine(force_mode=EngineMode.MOCK, force_reload=True)
-        assert e1 is not e2, "force_reload=True must instantiate a new VieNeuEngine object"
-
-    def test_tts_singleton_reloads_when_mode_changes(self):
-        """Switching mode from MOCK to NEURAL recreates instance."""
-        e_mock = get_tts_engine(force_mode=EngineMode.MOCK)
-        assert e_mock.mode == "mock"
-
         with patch("src.tts.engine.NeuralTTSBackend") as mock_neural_backend:
-            mock_inst = MagicMock()
-            mock_neural_backend.return_value = mock_inst
-            e_neural = get_tts_engine(force_mode=EngineMode.NEURAL)
-            assert e_neural is not e_mock
-            assert e_neural.mode == "neural"
+            mock_neural_backend.side_effect = [MagicMock(), MagicMock()]
+            e1 = get_tts_engine()
+            e2 = get_tts_engine(force_reload=True)
+            assert e1 is not e2, "force_reload=True must instantiate a new VieNeuEngine object"
+            assert e2.mode == "neural"
+
+    def test_tts_singleton_fails_loudly_without_mock_fallback(self):
+        """Neural init failure must raise RuntimeError rather than falling back to MockTTSBackend."""
+        with patch("src.tts.engine.NeuralTTSBackend", side_effect=ImportError("no vieneu")):
+            with pytest.raises(RuntimeError, match="Neural TTS backend failed to initialize"):
+                get_tts_engine()
 
     def test_tts_singleton_reset_instance(self):
         """reset_instance() cleans up the singleton."""
-        e1 = get_tts_engine(force_mode=EngineMode.MOCK)
-        assert VieNeuEngine._instance is not None
-        VieNeuEngine.reset_instance()
-        assert VieNeuEngine._instance is None
-        e2 = get_tts_engine(force_mode=EngineMode.MOCK)
-        assert e1 is not e2
+        with patch("src.tts.engine.NeuralTTSBackend") as mock_neural_backend:
+            mock_neural_backend.side_effect = [MagicMock(), MagicMock()]
+            e1 = get_tts_engine()
+            assert VieNeuEngine._instance is not None
+            VieNeuEngine.reset_instance()
+            assert VieNeuEngine._instance is None
+            e2 = get_tts_engine()
+            assert e1 is not e2
 
     def test_tts_infer_lock_thread_safety(self, tmp_path: Path):
-        """Multiple concurrent threads calling synthesize must be serialized by inference lock."""
-        engine = get_tts_engine(force_mode=EngineMode.MOCK)
+        """Multiple concurrent threads calling synthesize must be serialized cleanly by mock fixture."""
+        engine = MockVieNeuEngine()
         num_threads = 6
         errors = []
 
@@ -203,8 +205,8 @@ class TestTTSPersistentSingleton:
         assert engine.total_inference_seconds > 0.0
 
     def test_tts_telemetry_metrics_tracking(self, tmp_path: Path):
-        """VieNeuEngine accurately tracks init_duration_seconds, total_inference_seconds, utterance_count."""
-        engine = get_tts_engine(force_mode=EngineMode.MOCK)
+        """MockVieNeuEngine accurately tracks init_duration_seconds, total_inference_seconds, utterance_count."""
+        engine = MockVieNeuEngine()
         assert hasattr(engine, "init_duration_seconds")
         assert hasattr(engine, "total_inference_seconds")
         assert hasattr(engine, "utterance_count")
@@ -377,19 +379,17 @@ class TestCliPhaseCIntegration:
         assert args.encoder == "libx264"
 
     def test_cli_batch_encoder_forwarding(self):
-        """manga-recap batch accepts and forwards --encoder and tts flags."""
+        """manga-recap batch accepts and forwards --encoder and worker flags."""
         parser = build_parser()
         args = parser.parse_args([
             "batch",
             "-p", "test_proj",
             "-c", "1,2",
             "--encoder", "h264_videotoolbox",
-            "--tts-engine", "neural",
             "--tts-workers", "2",
             "--render-workers", "2",
         ])
         assert args.encoder == "h264_videotoolbox"
-        assert args.tts_engine == "neural"
         assert args.tts_workers == 2
         assert args.render_workers == 2
 

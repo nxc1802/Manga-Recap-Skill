@@ -147,7 +147,7 @@ class TestRegressionArea2ParameterMutationsAvoidMismatchedReuse:
         mock_engine.synthesize_utterance.side_effect = fake_synth
 
         with patch("src.cli.tts_cmd.get_tts_engine", return_value=mock_engine):
-            ret = main(["tts", "--project", "p_area2", "--chapter", "1", "--engine", "mock"])
+            ret = main(["tts", "--project", "p_area2", "--chapter", "1", "--engine", "neural"])
             assert ret == ExitCode.SUCCESS
 
         initial_state = read_json(chap_dir / "script.json")["segments"][0]
@@ -303,7 +303,7 @@ class TestRegressionArea4SlidingWindow1To20PanelsCoverage:
                     panel_ids=pids,
                     narrator_text=f"Lời thoại dẫn dắt cho nhóm khung tranh {pids}.",
                     voice_id="Trúc Ly",
-                    camera_motion=CameraMotionType.ZOOM_IN,
+                    camera_motion=CameraMotionType.SLOW_PAN_DOWN,
                     focus_box=FocusBox(x_min=0.1, y_min=0.1, x_max=0.9, y_max=0.9),
                 )
             )
@@ -693,12 +693,12 @@ class TestRegressionArea8InvalidCliOptionsAndJsonEnvelope:
         env = self._assert_json_error_envelope(captured.out)
         assert "invalid choice" in env.error.message or "--engine" in env.error.message
 
-    def test_render_invalid_video_mode(self, capsys):
-        code = main(["render", "--project", "test_p", "--chapter", "1", "--video-mode", "unsupported_mode_xyz", "--json"])
+    def test_render_removed_video_mode_flag_rejected(self, capsys):
+        code = main(["render", "--project", "test_p", "--chapter", "1", "--video-mode", "landscape_fit", "--json"])
         assert code == ExitCode.VALIDATION_ERROR
         captured = capsys.readouterr()
         env = self._assert_json_error_envelope(captured.out)
-        assert "invalid choice" in env.error.message or "--video-mode" in env.error.message
+        assert "unrecognized" in env.error.message or "--video-mode" in env.error.message
 
     def test_render_invalid_quality_mode(self, capsys):
         code = main(["render", "--project", "test_p", "--chapter", "1", "--quality", "ultra_8k_imax", "--json"])

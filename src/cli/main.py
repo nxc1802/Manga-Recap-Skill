@@ -153,38 +153,17 @@ def build_parser() -> JsonAwareArgumentParser:
     p_tts.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
     p_tts.add_argument("--kaggle", action="store_true", help="Offload TTS speech synthesis to Kaggle Cloud GPU")
 
-    # 6. tts_benchmark
-    p_bm = subparsers.add_parser("tts_benchmark", help="Run TTS voice and emotion screening benchmark", parents=[common_parent])
-    p_bm.add_argument("-o", "--out-dir", default="data/benchmarks/vieneu_v3_turbo", help="Output directory")
-    p_bm.add_argument("--voices", default="all", help="Comma-separated voice IDs, 'top10', or 'all'")
-    p_bm.add_argument("--emotions", default="all", help="Comma-separated emotion IDs or 'all'")
-    p_bm.add_argument("--repeats", type=int, default=1, help="Number of repetitions per prompt")
-    p_bm.add_argument("--mock", action="store_true", help="Use deterministic mock synthesis mode")
-    p_bm.add_argument("--ab-tests", action="store_true", help="Include controlled A/B emotion cue comparison tests")
-
     # 7. render
     p_ren = subparsers.add_parser("render", help="Render video clips, mix audio, and burn subtitles", parents=[common_parent])
     p_ren.add_argument("-p", "--project", required=True, help="Project slug")
     p_ren.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_ren.add_argument("--quality", choices=["preview", "final"], default="final", help="Render quality")
-    p_ren.add_argument("--bgm", default=None, help="BGM audio file path")
-    p_ren.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video mode")
-    p_ren.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles")
-    p_ren.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
     p_ren.add_argument("--suffix", default="final", help="Output version suffix")
     p_ren.add_argument("--force", action="store_true", help="Ignore existing panel clips and force re-render")
-    p_ren.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
-    p_ren.add_argument("--skip-review", action="store_true", help="Deprecated compatibility flag; never bypasses approval")
-    p_ren.add_argument("--skip-preview", action="store_true", help="Compatibility flag; never bypasses Chapter 1 approval")
-    p_ren.add_argument("--approved", action="store_true", help="Compatibility flag; approval must be recorded with review-approve")
-    p_ren.add_argument("--allow-placeholders", action="store_true", help="Deprecated; production rejects placeholder artifacts")
     p_ren.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
     p_ren.add_argument("--workers", type=int, default=None, help="Number of concurrent worker threads (default: 2 for Balanced mode)")
     p_ren.add_argument("--hw-accel", choices=["none", "videotoolbox", "auto"], default=None, help="Hardware acceleration encoder")
     p_ren.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder (default: auto or matches --hw-accel)")
-    p_ren.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Maximum subtitle lines per cue (default: 1)")
-    p_ren.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle base font size at 1280px (default: 26)")
-    p_ren.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy (default: sentence-aware)")
     p_ren.add_argument("--kaggle", action="store_true", help="Offload video rendering and TTS to Kaggle Cloud GPU")
 
     # 8. compile
@@ -192,7 +171,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_com.add_argument("-p", "--project", required=True, help="Project slug")
     p_com.add_argument("--chapters", default=None, help="Comma-separated chapter numbers")
     p_com.add_argument("-o", "--output", default=None, help="Output final video path")
-    p_com.add_argument("--approved", action="store_true", help="Compatibility flag; approval must be recorded with review-approve")
     p_com.add_argument("--extract-audio", action=argparse.BooleanOptionalAction, default=True, help="Extract master WAV")
 
     # 9. batch
@@ -200,25 +178,11 @@ def build_parser() -> JsonAwareArgumentParser:
     p_bat.add_argument("-p", "--project", required=True, help="Project slug")
     p_bat.add_argument("-c", "--chapters", default=None, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
     p_bat.add_argument("--retry-chapter", default=None, help="Specific chapter number to retry")
-    p_bat.add_argument("--skip-preview", action=argparse.BooleanOptionalAction, default=True, help="Render final after exact Chapter 1 approval; cannot bypass G6")
     p_bat.add_argument("--compile", action="store_true", help="Auto-compile completed chapters into master recap video")
     p_bat.add_argument("--force", action="store_true", help="Force re-processing of already completed chapters")
-    p_bat.add_argument("--approved", action="store_true", help="Explicitly approve Review Gates for automated runs")
-    p_bat.add_argument("--allow-placeholders", action="store_true", help="Allow dummy placeholder assets (testing only)")
-    p_bat.add_argument("--voice", default=None, help="Voice name override")
-    p_bat.add_argument("--speed", type=float, default=None, help="TTS speed override")
-    p_bat.add_argument("--bgm", default=None, help="BGM audio file path")
-    p_bat.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default=None, help="Video mode")
-    p_bat.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=None, help="Burn subtitles")
-    p_bat.add_argument("--animation", action=argparse.BooleanOptionalAction, default=None, help="Enable cinematic camera motion animations")
-    p_bat.add_argument("--subtitle-lines", type=int, default=None, choices=[1, 2], help="Maximum subtitle lines per cue")
-    p_bat.add_argument("--subtitle-font-size", type=int, default=None, help="Subtitle base font size at 1280px")
-    p_bat.add_argument("--subtitle-chunking", choices=["sentence-aware", "fixed-chars"], default=None, help="Subtitle chunking strategy")
     p_bat.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder for rendering (default: auto)")
-    p_bat.add_argument("--tts-engine", choices=["neural"], default="neural", help="Production requires local neural VieNeu-TTS")
     p_bat.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
     p_bat.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
-    p_bat.add_argument("--keep-temp", action=argparse.BooleanOptionalAction, default=None, help="Preserve intermediate clip files (default: True unless --cleanup)")
     p_bat.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
     p_bat.add_argument("--kaggle", action="store_true", help="Offload batch processing (TTS + Rendering) to Kaggle Cloud GPU")
 
@@ -291,13 +255,7 @@ def build_parser() -> JsonAwareArgumentParser:
     )
     p_cld_series.add_argument("-p", "--project", required=True, help="Project slug")
     p_cld_series.add_argument("-c", "--chapters", required=True, help="Comma-separated or range list of chapters (e.g. '1,2,3' or '1-5')")
-    p_cld_series.add_argument("--skip-preview", action="store_true", default=False, help="Compatibility only; cannot bypass Chapter 1 approval (G6)")
     p_cld_series.add_argument("--compile", action=argparse.BooleanOptionalAction, default=True, help="Compile feature video across chapters (default: True)")
-    p_cld_series.add_argument("--voice", default=None, help="Voice override")
-    p_cld_series.add_argument("--speed", type=float, default=None, help="Speed override")
-    p_cld_series.add_argument("--video-mode", choices=["auto", "landscape_fit", "portrait_vertical", "portrait_padded"], default="auto", help="Video framing mode")
-    p_cld_series.add_argument("--burn-subtitles", action=argparse.BooleanOptionalAction, default=False, help="Burn subtitles directly onto video frames")
-    p_cld_series.add_argument("--animation", action=argparse.BooleanOptionalAction, default=True, help="Enable camera motion animations")
     p_cld_series.add_argument("--no-gpu", action="store_true", help="Disable GPU and run CPU mode")
     p_cld_series.add_argument("--render-workers", type=int, default=2, help="Video clip render concurrent workers (default: 2)")
     p_cld_series.add_argument(
@@ -317,7 +275,7 @@ def build_parser() -> JsonAwareArgumentParser:
     p_rp = subparsers.add_parser("review-pack", aliases=["review_pack"], help="Generate lightweight static human review pack", parents=[common_parent])
     p_rp.add_argument("-p", "--project", required=True, help="Project slug")
     p_rp.add_argument("-c", "--chapter", required=True, help="Chapter number")
-    p_rp.add_argument("--format", choices=["md", "html", "json", "all"], default="all", help="Output format(s)")
+    p_rp.add_argument("--format", choices=["md", "json", "all"], default="all", help="Output format(s)")
     p_rp.add_argument("--out-dir", default=None, help="Custom output directory")
 
     # 16. archive
@@ -496,7 +454,6 @@ COMMAND_REGISTRY: Dict[str, Any] = {
     "panel-inspect": "src.cli.segment_cmd:handle_panel_inspect",
     "decide": "src.cli.segment_cmd:handle_decide",
     "tts": "src.cli.tts_cmd:handle_tts",
-    "tts_benchmark": "src.cli.tts_benchmark_cmd:handle_tts_benchmark",
     "render": "src.cli.render_cmd:handle_render",
     "compile": "src.cli.compile_cmd:handle_compile",
     "batch": "src.cli.batch_cmd:handle_batch",

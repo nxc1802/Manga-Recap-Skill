@@ -32,9 +32,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.cli.main import main
 from src.core.schemas import RecapScript, ScriptSegment
 from src.core.storage import atomic_write_json, calculate_sha256, init_chapter_layout, init_project_layout, read_json
-from src.tts.benchmark import TTSBenchmarkRunner
+from scripts.devtools.tts_benchmark import TTSBenchmarkRunner
 from src.tts.catalog import CATALOG_VOICES
-from src.tts.engine import EngineMode, MockTTSBackend, VieNeuEngine, get_tts_engine, get_wav_duration_seconds
+from src.tts.engine import VieNeuEngine, get_tts_engine, get_wav_duration_seconds
+from tests.fixtures.mock_tts import MockTTSBackend, make_mock_tts_engine
 
 
 def unpack_wav_header(path: Path) -> dict:
@@ -67,7 +68,7 @@ def run_challenge_1_cache_overwrite():
     print("CHALLENGE 1: Direct Synthesis & Overwrite on --force (Zero-Cache Architecture)")
     print("=" * 70)
 
-    engine = get_tts_engine(force_mode=EngineMode.MOCK)
+    engine = make_mock_tts_engine()
     test_text = "Thử nghiệm thách thức ép ghi đè âm thanh trực tiếp."
     voice = "Trúc Ly"
 
@@ -182,7 +183,7 @@ def run_challenge_2_master_audio_format():
 
     # Synthesize dynamically across all 25 catalog voices
     print("2. Synthesizing test clips across all 25 catalog voices...")
-    engine = get_tts_engine(force_mode=EngineMode.MOCK)
+    engine = make_mock_tts_engine()
     tmp_dir = Path(tempfile.mkdtemp())
     try:
         for idx, (v_name, v_info) in enumerate(CATALOG_VOICES.items(), 1):
@@ -255,7 +256,7 @@ def run_challenge_3_offline_zero_cloud():
         print("1. Socket trap armed: Any outbound socket or DNS call will immediately abort.")
 
         # Test A: Engine synthesis under network isolation
-        engine = get_tts_engine(force_mode=EngineMode.MOCK)
+        engine = make_mock_tts_engine()
         tmp_wav = Path(tempfile.gettempdir()) / f"offline_{time.time_ns()}.wav"
         dur, _, _ = engine.synthesize_utterance(
             "Kiểm tra ngoại tuyến hoàn toàn khi toàn bộ ổ cắm mạng bị chặn.",
@@ -286,19 +287,20 @@ def run_challenge_3_offline_zero_cloud():
         finally:
             shutil.rmtree(tmp_bench_dir)
 
-        # Test C: CLI tts_benchmark execution under network isolation
+        # Test C: Standalone devtools tts_benchmark execution under network isolation
         tmp_cli_dir = Path(tempfile.mkdtemp())
         try:
-            cli_code = main([
-                "tts_benchmark",
+            from scripts.devtools.tts_benchmark import main as benchmark_main
+
+            cli_code = benchmark_main([
                 "--out-dir", str(tmp_cli_dir),
                 "--voices", "Trúc Ly",
                 "--emotions", "neutral",
-                "--no-copy-to-lab",
+                "--mock",
                 "--json",
             ])
             assert cli_code == 0
-            print(f"4. CLI tts_benchmark completed offline. Blocked calls count: {len(blocked_attempts)}")
+            print(f"4. Standalone tts_benchmark completed offline. Blocked calls count: {len(blocked_attempts)}")
         finally:
             shutil.rmtree(tmp_cli_dir)
 

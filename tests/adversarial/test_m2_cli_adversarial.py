@@ -368,7 +368,7 @@ class TestDefectRegressionsAdversarial:
         temp_srt.write_text("temp")
         concat_txt.write_text("temp")
 
-        unlinked = cleanup_intermediate_files(chap_dir, keep_temp=False)
+        unlinked = cleanup_intermediate_files(chap_dir)
         assert len(unlinked) == 3
 
         # Scratch files deleted
@@ -417,16 +417,18 @@ class TestDefectRegressionsAdversarial:
             f"Expected v16, got {next_path.name} (possible lexicographical sort bug)"
         )
 
-    def test_cleanup_with_keep_temp_preserves_scratch_files(self, tmp_path):
-        """When keep_temp=True, scratch files must NOT be unlinked."""
+    def test_cleanup_removes_temp_files_without_keep_temp_override(self, tmp_path):
+        """keep_temp toggle is removed; cleanup_intermediate_files cleans scratch files unconditionally."""
         chap_dir = tmp_path / "chapter_keep"
         chap_dir.mkdir(parents=True)
         temp_mp4 = chap_dir / "chapter_1_raw_temp.mp4"
         temp_mp4.write_text("scratch")
 
-        unlinked = cleanup_intermediate_files(chap_dir, keep_temp=True)
-        assert len(unlinked) == 0
-        assert temp_mp4.exists()
+        with pytest.raises(TypeError):
+            cleanup_intermediate_files(chap_dir, keep_temp=True)
+        unlinked = cleanup_intermediate_files(chap_dir)
+        assert unlinked == [temp_mp4.name]
+        assert not temp_mp4.exists()
 
     def test_run_ffmpeg_direct_failure_raises_ffmpeg_execution_error(self):
         """Direct call to run_ffmpeg with failing command raises FFmpegExecutionError."""

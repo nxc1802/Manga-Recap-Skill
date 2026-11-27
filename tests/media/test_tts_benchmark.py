@@ -8,11 +8,11 @@ from pathlib import Path
 import wave
 import pytest
 
-from src.cli.main import main
-from src.tts.benchmark import (
+from scripts.devtools.tts_benchmark import (
     TTSBenchmarkRunner,
     compute_waveform_peaks,
     generate_mock_wav,
+    main as benchmark_main,
 )
 
 
@@ -68,10 +68,9 @@ def test_benchmark_runner_mock_execution(tmp_path):
         assert len(sample["peaks"]) == 64
 
 
-def test_tts_benchmark_cli_with_mock(tmp_path, capsys):
+def test_tts_benchmark_standalone_devtools_cli_with_mock(tmp_path, capsys):
     out_dir = tmp_path / "cli_bench"
-    exit_code = main([
-        "tts_benchmark",
+    exit_code = benchmark_main([
         "--voices", "Trúc Ly,Adam bựa",
         "--emotions", "neutral",
         "--out-dir", str(out_dir),
@@ -81,12 +80,11 @@ def test_tts_benchmark_cli_with_mock(tmp_path, capsys):
     assert exit_code == 0
 
     captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert payload["status"] == "success"
-    assert payload["command"] == "tts_benchmark"
-    assert payload["data"]["total_voices_tested"] == 2
-    assert payload["data"]["voices"][0] == "Trúc Ly"
-    assert Path(payload["data"]["report_json"]).exists()
+    data = json.loads(captured.out)
+    assert data["status"] == "completed"
+    assert data["total_voices_tested"] == 2
+    assert data["voices"][0] == "Trúc Ly"
+    assert Path(data["report_json"]).exists()
 
 
 def test_benchmark_runner_neural_fails_if_neural_unavailable(tmp_path, monkeypatch):
@@ -105,5 +103,5 @@ def test_benchmark_runner_neural_fails_if_neural_unavailable(tmp_path, monkeypat
         use_mock=False,
     )
 
-    with pytest.raises(RuntimeError, match="Neural TTS backend requested but failed to initialize"):
+    with pytest.raises(RuntimeError, match="Neural TTS backend failed to initialize"):
         runner.run()

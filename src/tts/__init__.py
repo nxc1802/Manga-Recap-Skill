@@ -14,8 +14,6 @@ from src.tts.catalog import (
     resolve_voice_id,
 )
 from src.tts.engine import (
-    EngineMode,
-    MockTTSBackend,
     NeuralTTSBackend,
     VieNeuEngine,
     get_tts_engine,
@@ -25,8 +23,6 @@ from src.tts.engine import (
 __all__ = [
     "VieNeuEngine",
     "get_tts_engine",
-    "EngineMode",
-    "MockTTSBackend",
     "NeuralTTSBackend",
     "get_wav_duration_seconds",
     "VoiceProfile",

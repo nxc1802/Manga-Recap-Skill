@@ -30,6 +30,7 @@ def test_setup_applies_eight_confirmed_answers(tmp_path):
     assert require_series_setup("sample", project_dir=root) == setup
     config = read_json(root / "project.json")
     assert config["render_settings"]["render_pan_mode"] == "animation"
+    assert config["render_settings"]["video_mode"] == "landscape_fit"
     assert config["render_settings"]["target_height"] == 1080
     assert config["audio_settings"]["bgm_path"] == "audio/epic_theme.mp3"
     assert "setup_snapshot_hash" not in config

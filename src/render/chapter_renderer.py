@@ -54,8 +54,6 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
     require_voice_approval(root)
     if quality not in {"preview", "final"}:
         raise DomainValidationError("Unknown render quality")
-    if options.get("allow_placeholders"):
-        raise DomainValidationError("Placeholder artifacts are never production inputs")
     if quality == "final" or str(chapter_num) != "1":
         require_preview_approval(root)
     chapter = root / "chapters" / str(chapter_num)
@@ -75,23 +73,10 @@ def render_chapter(project_dir, chapter_num, quality="final", encoder="libx264",
         encoder = resolve_video_encoder("auto")[0]
     else:
         encoder = encoder or "libx264"
-    if settings["video_mode"] not in {"auto", "landscape_fit"}:
-        raise DomainValidationError("Canonical production currently supports auto/landscape_fit framing")
-    if options.get("video_mode") is not None and options["video_mode"] != settings["video_mode"]:
-        raise DomainValidationError("Video mode override conflicts with confirmed project config")
+    if settings.get("video_mode", "landscape_fit") != "landscape_fit":
+        raise DomainValidationError("Canonical V7 supports fixed landscape 16:9 ('landscape_fit') only")
     sub_settings = settings["subtitle"]
-    for key, config_key in (("subtitle_lines", "max_lines"), ("subtitle_font_size", "font_size"), ("subtitle_chunking", "chunking")):
-        if options.get(key) is not None and options[key] != sub_settings[config_key]:
-            raise DomainValidationError(f"{key} override conflicts with project config")
     audio_settings = config["audio_settings"]
-    # Runtime overrides cannot change explicitly confirmed settings.
-    overrides = {"burn_subtitles": settings["burn_subtitles"],
-                 "allow_animation": settings["render_pan_mode"] == "animation"}
-    for key, expected in overrides.items():
-        if options.get(key) is not None and options[key] != expected:
-            raise DomainValidationError(f"{key} conflicts with confirmed setup")
-    if options.get("bgm_path") is not None and options["bgm_path"] != audio_settings.get("bgm_path"):
-        raise DomainValidationError("BGM override conflicts with confirmed setup")
     promote = quality == "final" and str(chapter_num) == "1"
     plan_path = chapter / "visual_plan.json"
     video_dir = chapter / "video"
@@ -189,7 +174,6 @@ def compile_project_chapters(
     chapters: Optional[str] = None,
     output: Optional[str] = None,
     extract_audio: bool = True,
-    approved: bool = False,
 ) -> Dict[str, Any]:
     """Concatenates final chapter videos into a continuous feature video + timeline."""
     from src.youtube.metadata import format_seconds_to_timestamp
@@ -265,22 +249,21 @@ def compile_project_chapters(
                 "Final rendered video is required for compilation; preview video cannot be used for final export."
             )
 
-    if not approved:
-        require_voice_approval(project_dir)
-        require_preview_approval(project_dir)
-        for c_num in sorted(chapter_videos.keys()):
-            chap_json = chapters_dir / str(c_num) / "chapter.json"
-            if chap_json.exists():
-                try:
-                    c_meta = read_json(chap_json)
-                except Exception as e:
-                    raise DomainValidationError(f"Failed to read metadata for Chapter {c_num} from '{chap_json}': {e}") from e
-                if not isinstance(c_meta, dict):
-                    raise DomainValidationError(f"Invalid metadata format in '{chap_json}': expected JSON object.")
-                if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
-                    raise DomainValidationError(
-                        f"Chapter {c_num} requires human review before compilation. Supply --approved to bypass."
-                    )
+    require_voice_approval(project_dir)
+    require_preview_approval(project_dir)
+    for c_num in sorted(chapter_videos.keys()):
+        chap_json = chapters_dir / str(c_num) / "chapter.json"
+        if chap_json.exists():
+            try:
+                c_meta = read_json(chap_json)
+            except Exception as e:
+                raise DomainValidationError(f"Failed to read metadata for Chapter {c_num} from '{chap_json}': {e}") from e
+            if not isinstance(c_meta, dict):
+                raise DomainValidationError(f"Invalid metadata format in '{chap_json}': expected JSON object.")
+            if c_meta.get("overall_status") == CheckpointStatus.NEEDS_REVIEW.value:
+                raise DomainValidationError(
+                    f"Chapter {c_num} requires human review before compilation."
+                )
 
     sorted_chaps = sorted(chapter_videos.keys())
     compile_list = [chapter_videos[c] for c in sorted_chaps]

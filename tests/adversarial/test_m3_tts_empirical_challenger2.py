@@ -43,7 +43,7 @@ from src.core.storage import (
     init_project_layout,
     read_json,
 )
-from src.tts.benchmark import (
+from scripts.devtools.tts_benchmark import (
     EMOTION_BENCHMARK_PROMPTS,
     REFERENCE_PROMPTS,
     TTSBenchmarkRunner,
@@ -51,12 +51,11 @@ from src.tts.benchmark import (
 )
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 from src.tts.engine import (
-    EngineMode,
-    MockTTSBackend,
     VieNeuEngine,
     get_tts_engine,
     get_wav_duration_seconds,
 )
+from tests.fixtures.mock_tts import MockTTSBackend, MockVieNeuEngine
 
 
 # ==============================================================================
@@ -195,7 +194,7 @@ class TestDirectSynthesisInvariantsChallenger2:
 
     def test_direct_synthesis_writes_independent_audio(self, tmp_path):
         """Direct synthesis produces valid audio directly without cache sidecars."""
-        engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+        engine = MockVieNeuEngine()
         text = "Nhân vật chính phát hiện ra bí mật cổ xưa bị chôn vùi."
         voice = "Trúc Ly"
         speed = 1.0
@@ -222,7 +221,7 @@ class TestDirectSynthesisInvariantsChallenger2:
 
     def test_direct_synthesis_parameter_variations(self, tmp_path):
         """Changing text, voice, or speed directly synthesizes distinct WAV files."""
-        engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+        engine = MockVieNeuEngine()
         base_text = "Lời thoại gốc để kiểm tra tính nhạy của tham số."
         base_voice = "Trúc Ly"
         base_speed = 1.0
@@ -288,8 +287,8 @@ class TestOfflineIsolationAndZeroCloudChallenger2:
         monkeypatch.setattr(http.client.HTTPConnection, "connect", blocked_http_connect)
         monkeypatch.setattr(http.client.HTTPSConnection, "connect", blocked_http_connect)
 
-        # 1. Synthesize via VieNeuEngine
-        engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+        # 1. Synthesize via MockVieNeuEngine test fixture
+        engine = MockVieNeuEngine()
         out_wav = tmp_path / "isolated.wav"
         dur, _, _ = engine.synthesize_utterance(
             text="Kiểm tra hệ thống ngoại tuyến hoàn toàn khi chặn tất cả kết nối mạng.",

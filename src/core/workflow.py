@@ -92,7 +92,7 @@ from src.render.visual_policy import (
     validate_narration_evidence,
 )
 from src.tts.catalog import resolve_voice_id
-from src.tts.engine import EngineMode, get_tts_engine, get_wav_duration_seconds
+from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
 
 def _find_existing_panel_path(chap_dir: Path, panels_dir: Path, *candidates: Optional[str]) -> Optional[Path]:
@@ -1256,7 +1256,7 @@ def synthesize_chapter_tts(
             raise DomainValidationError("Production TTS requires the real neural engine")
 
         factory = tts_engine_factory or get_tts_engine
-        tts_engine = factory(force_mode=EngineMode.NEURAL, force_reload=force_reload)
+        tts_engine = factory(force_reload=force_reload)
         if getattr(tts_engine, "mode", None) != "neural":
             raise DomainValidationError("Neural engine unavailable; refusing fallback audio")
 
@@ -1391,21 +1391,10 @@ def render_chapter_workflow(
     encoder: Optional[str] = None,
     hw_accel: Optional[str] = None,
     workers: Optional[int] = None,
-    bgm: Optional[str] = None,
-    burn_subtitles: Optional[bool] = None,
-    animation: Optional[bool] = None,
-    video_mode: Optional[str] = None,
-    subtitle_lines: Optional[int] = None,
-    subtitle_font_size: Optional[int] = None,
-    subtitle_chunking: Optional[str] = None,
-    allow_placeholders: bool = False,
     kaggle: bool = False,
     cleanup: bool = False,
 ) -> Dict[str, Any]:
-    """Renders a chapter locally or on Kaggle and stages review pack or final export."""
-    if allow_placeholders:
-        raise DomainValidationError("Placeholder artifacts cannot enter the production pipeline")
-
+    """Renders a chapter locally or on Kaggle using confirmed project settings."""
     if encoder is None and hw_accel:
         encoder = {"none": "libx264", "auto": "auto", "videotoolbox": "h264_videotoolbox"}[hw_accel]
     render_workers = workers or 4
@@ -1413,13 +1402,6 @@ def render_chapter_workflow(
         quality=quality,
         encoder=encoder,
         render_workers=render_workers,
-        bgm_path=bgm,
-        burn_subtitles=burn_subtitles,
-        allow_animation=animation,
-        video_mode=video_mode,
-        subtitle_lines=subtitle_lines,
-        subtitle_font_size=subtitle_font_size,
-        subtitle_chunking=subtitle_chunking,
     )
     if kaggle:
         expected_quality = "preview" if str(chapter_num) == "1" else "final"
@@ -1434,9 +1416,7 @@ def render_chapter_workflow(
             job_type="render",
             wait=True,
             encoder_preference=options["encoder"] or "auto",
-            burn_subtitles=options["burn_subtitles"],
             render_workers=render_workers,
-            video_mode=options["video_mode"],
         )
     else:
         result = render_chapter(get_project_dir(project_slug), str(chapter_num), **options)
@@ -1525,20 +1505,8 @@ def batch_chapters(
     output: Optional[str] = None,
     extract_audio: bool = True,
     force: bool = False,
-    approved: bool = False,
-    allow_placeholders: bool = False,
-    voice: Optional[str] = None,
-    speed: Optional[float] = None,
-    bgm: Optional[str] = None,
-    video_mode: Optional[str] = None,
-    burn_subtitles: Optional[bool] = None,
-    animation: Optional[bool] = None,
-    subtitle_lines: Optional[int] = None,
-    subtitle_font_size: Optional[int] = None,
-    subtitle_chunking: Optional[str] = None,
     encoder: Optional[str] = None,
     hw_accel: Optional[str] = None,
-    tts_engine: str = "neural",
     tts_workers: int = 2,
     render_workers: int = 2,
     cleanup: bool = False,
@@ -1557,17 +1525,8 @@ def batch_chapters(
     if not (project_dir / "project.json").exists():
         raise StorageFileNotFoundError(f"Project config 'project.json' not found in {project_dir}")
 
-    if not approved:
-        v_sel_path = project_dir / "voice_selection.json"
-        if v_sel_path.exists():
-            try:
-                v_approval = VoiceSelectionApproval.model_validate(read_json(v_sel_path))
-                if not v_approval.is_approved():
-                    raise DomainValidationError(f"Series-level Review Gate 1 rejected: '{v_sel_path}' is not approved.")
-            except DomainValidationError:
-                raise
-            except Exception as e:
-                raise DomainValidationError(f"Series-level Review Gate 1 validation failed for '{v_sel_path}': {e}") from e
+    require_voice_approval(project_dir)
+    require_preview_approval(project_dir)
 
     if retry_chapter is not None:
         target_chapters = [str(retry_chapter)]
@@ -1645,8 +1604,6 @@ def batch_chapters(
                     job_type="produce",
                     render_workers=render_workers,
                     encoder_preference=encoder or "auto",
-                    video_mode=video_mode,
-                    burn_subtitles=burn_subtitles,
                 )
                 render_res = {
                     "video_path": cloud_res.get("final_video"),
@@ -1658,7 +1615,6 @@ def batch_chapters(
                 synthesize_chapter_tts(
                     project_slug,
                     chap_num,
-                    engine=tts_engine,
                     workers=tts_workers,
                     force=force,
                 )
@@ -1675,14 +1631,6 @@ def batch_chapters(
                     encoder=encoder,
                     hw_accel=hw_accel,
                     workers=render_workers,
-                    bgm=bgm,
-                    burn_subtitles=burn_subtitles,
-                    animation=animation,
-                    video_mode=video_mode,
-                    allow_placeholders=allow_placeholders,
-                    subtitle_lines=subtitle_lines,
-                    subtitle_font_size=subtitle_font_size,
-                    subtitle_chunking=subtitle_chunking,
                 )
 
             active_stage = StageType.EXPORT
@@ -1743,7 +1691,6 @@ def batch_chapters(
                     chapters=",".join(active_chaps),
                     output=target_out,
                     extract_audio=extract_audio,
-                    approved=True,
                 )
             except Exception as comp_err:
                 logger.error(f"[Batch] Compilation failed: {comp_err}")

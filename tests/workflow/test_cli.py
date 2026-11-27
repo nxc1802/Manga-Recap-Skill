@@ -37,9 +37,10 @@ class TestCliParserAndDispatch:
         parser = build_parser()
         subparsers_action = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
         registered = list(subparsers_action.choices.keys())
-        expected = ["crawl", "segment", "inspect", "validate", "tts", "tts_benchmark", "render", "compile", "status"]
+        expected = ["crawl", "segment", "inspect", "validate", "tts", "render", "compile", "status"]
         for cmd in expected:
             assert cmd in registered, f"Subcommand '{cmd}' not registered"
+        assert "tts_benchmark" not in registered
 
     def test_cli_version_flag(self, capsys):
         code = main(["--version"])
@@ -48,7 +49,7 @@ class TestCliParserAndDispatch:
         assert "5.0.0" in captured.out
 
     def test_subcommand_help_flag(self, capsys):
-        for subcmd in ["inspect", "validate", "status", "crawl", "tts", "tts_benchmark", "render", "compile"]:
+        for subcmd in ["inspect", "validate", "status", "crawl", "tts", "render", "compile"]:
             code = main([subcmd, "--help"])
             assert code == 0
 
@@ -234,7 +235,7 @@ class TestSubcommandImplementations:
                     "seq_id": "001",
                     "panel_ids": ["panel_001.jpg"],
                     "narrator_text": "Mở đầu trận chiến vô tiền khoáng hậu tại đỉnh núi tuyết.",
-                    "camera_motion": "zoom_in",
+                    "camera_motion": "slow_pan_down",
                 }
             ],
         }
@@ -385,25 +386,10 @@ class TestSubcommandImplementations:
     pass
 
 
-    def test_tts_benchmark_command(self, tmp_path, capsys):
-        """Verifies the benchmark writes the requested output."""
-        bench_out = tmp_path / "cli_bench_out"
-        code = main([
-            "tts_benchmark",
-            "--voices", "Trúc Ly,Adam bựa",
-            "--out-dir", str(bench_out),
-            "--mock",
-            "--json",
-        ])
-        assert code == ExitCode.SUCCESS
-
-        captured = capsys.readouterr()
-        data = json.loads(captured.out)["data"]
-        assert data["total_voices_tested"] == 2
-        assert data["voices"][0] == "Trúc Ly"
-        assert Path(data["output_directory"]) == bench_out
-        assert (bench_out / "report.json").exists()
-        assert (bench_out / "SUMMARY.md").exists()
+    def test_tts_benchmark_removed_from_cli(self, capsys):
+        """Verifies tts_benchmark moved to devtools and is no longer a runtime CLI command."""
+        code = main(["tts_benchmark", "--json"])
+        assert code == ExitCode.VALIDATION_ERROR
 
 
     # Legacy scenario consolidated; see docs/verification/v4_regression_migration.json.

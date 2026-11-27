@@ -43,7 +43,8 @@ from src.tts.cuda_worker import (
     probe_vieneu_runtime,
     tts_worker_loop,
 )
-from src.tts.engine import EngineMode, NeuralTTSBackend, VieNeuEngine
+from src.tts.engine import NeuralTTSBackend, VieNeuEngine
+from tests.fixtures.mock_tts import MockVieNeuEngine
 
 
 def _sine_wave(duration_sec: float = 0.25, sample_rate: int = 48000, freq: float = 440.0) -> np.ndarray:
@@ -643,8 +644,8 @@ def test_engine_synthesize_batch_native_neural_and_mock_compat(tmp_path):
     assert all(r["valid"] and r["batch_used"] for r in neural_res)
     assert backend.utterance_count == 2
 
-    # 2. VieNeuEngine(MOCK).synthesize_batch_native compatibility
-    engine = VieNeuEngine(force_mode=EngineMode.MOCK)
+    # 2. MockVieNeuEngine.synthesize_batch_native test fixture compatibility
+    engine = MockVieNeuEngine()
     mock_tasks = [
         {"text": "Kiểm tra mock batch một.", "voice": "Trúc Ly", "speed": 1.0, "output_path": tmp_path / "m1.wav"},
         {"text": "Kiểm tra mock batch hai.", "voice": "Hải Đăng", "speed": 1.2, "output_path": tmp_path / "m2.wav"},

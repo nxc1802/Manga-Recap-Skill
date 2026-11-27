@@ -184,6 +184,7 @@ def _apply_answers(config, setup):
     audio.default_speed = float(str(values["Q04"]).strip().rstrip("xX"))
     render = config.render_settings
     render.burn_subtitles = _normalize_bool(values["Q05"])
+    render.video_mode = "landscape_fit"
     render.render_pan_mode = "animation"
     if _choice(values["Q09"], {"final", "1080p", "final 1080p"}):
         render.target_width, render.target_height = 1920, 1080

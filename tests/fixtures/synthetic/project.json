@@ -16,7 +16,7 @@
     "crf": 20,
     "preset": "medium",
     "burn_subtitles": true,
-    "video_mode": "auto",
+    "video_mode": "landscape_fit",
     "render_pan_mode": "static",
     "subtitle": {
       "max_lines": 2,

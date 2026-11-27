@@ -158,7 +158,7 @@ class TestPR01AutoFocusAndSemanticDirector:
 
         # Upgrade with shots
         shot1 = VisualShot(shot_id="01", motion=CameraMotionType.STATIC_FOCUS, duration_ratio=0.7)
-        shot2 = VisualShot(shot_id="02", motion=CameraMotionType.ZOOM_IN, duration_ratio=0.3)
+        shot2 = VisualShot(shot_id="02", motion=CameraMotionType.SLOW_PAN_DOWN, duration_ratio=0.3)
         upgraded_seg = ScriptSegment(
             seq_id="002",
             narrator_text="Đột nhiên một bóng đen xuất hiện.",
@@ -171,12 +171,11 @@ class TestPR01AutoFocusAndSemanticDirector:
     def test_camera_static_focus_filterchain_generation(self):
         """
         Verifies that STATIC_FOCUS creates a static 16:9 crop centered around the subject
-        without keyframe/zoompan animation.
+        without zoompan animation, and allow_animation=False downgrades SLOW_PAN_DOWN.
         """
         cam = CameraMotionGenerator(target_width=1280, target_height=720, fps=30)
         focus = FocusBox(x_min=0.2, y_min=0.2, x_max=0.6, y_max=0.6)
 
-        # 1. Explicit static_focus motion
         filter_str, is_zoompan = cam.build_filterchain(
             img_w=1080,
             img_h=1080,
@@ -188,48 +187,35 @@ class TestPR01AutoFocusAndSemanticDirector:
         assert not is_zoompan
         assert "crop=" in filter_str
         assert "scale=1280:720" in filter_str
-        assert "zoompan=" not in filter_str
 
-        # 2. When allow_animation=False with focus_box, falls back to STATIC_FOCUS instead of whole-image STATIC
         filter_no_anim, is_zoompan_no_anim = cam.build_filterchain(
             img_w=1080,
             img_h=1080,
             duration_sec=3.0,
-            motion_type=CameraMotionType.ZOOM_IN,
+            motion_type=CameraMotionType.SLOW_PAN_DOWN,
             focus_box=focus,
             allow_animation=False,
         )
         assert not is_zoompan_no_anim
         assert "crop=" in filter_no_anim
         assert "scale=1280:720" in filter_no_anim
-        assert "zoompan=" not in filter_no_anim
 
-    def test_camera_motion_type_extensions(self):
-        """Verifies SUBJECT_PAN and CONTENT_AWARE_SCROLL motions in CameraMotionGenerator."""
+    def test_camera_slow_pan_down_extension(self):
+        """Verifies SLOW_PAN_DOWN in fixed landscape framing and rejects removed legacy motions."""
         cam = CameraMotionGenerator(target_width=1280, target_height=720, fps=30)
         focus = FocusBox(x_min=0.3, y_min=0.3, x_max=0.7, y_max=0.7)
 
-        # SUBJECT_PAN
-        f_pan, zp_pan = cam.build_filterchain(
-            img_w=1920,
-            img_h=1080,
-            duration_sec=4.0,
-            motion_type=CameraMotionType.SUBJECT_PAN,
-            focus_box=focus,
-        )
-        assert not zp_pan
-        assert "crop=" in f_pan
-
-        # CONTENT_AWARE_SCROLL
         f_scroll, zp_scroll = cam.build_filterchain(
             img_w=1080,
             img_h=2500,
             duration_sec=5.0,
-            motion_type=CameraMotionType.CONTENT_AWARE_SCROLL,
+            motion_type=CameraMotionType.SLOW_PAN_DOWN,
             focus_box=focus,
         )
         assert not zp_scroll
         assert "crop=" in f_scroll
+        with pytest.raises(ValueError, match="Unsupported camera motion"):
+            cam.build_filterchain(img_w=1920, img_h=1080, duration_sec=4.0, motion_type="subject_pan")
 
 
 # ==============================================================================

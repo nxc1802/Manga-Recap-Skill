@@ -75,28 +75,15 @@ class CheckpointStatus(str, Enum):
 
 
 class CameraMotionType(str, Enum):
-    """Cinematic camera motion modes supported by Video Engine V2."""
+    """Canonical camera motion modes supported in V7."""
     STATIC = "static"
     SLOW_PAN_DOWN = "slow_pan_down"
     STATIC_FOCUS = "static_focus"
-    PAN_LEFT = "pan_left"
-    PAN_RIGHT = "pan_right"
-    PAN_UP = "pan_up"
-    PAN_DOWN = "pan_down"
-    ZOOM_IN = "zoom_in"
-    ZOOM_OUT = "zoom_out"
-    FOCUS_CROP = "focus_crop"
-    VERTICAL_SCROLL = "vertical_scroll"
-    CONTENT_AWARE_SCROLL = "content_aware_scroll"
-    SUBJECT_PAN = "subject_pan"
 
 
 class VideoMode(str, Enum):
-    """Video layout modes for Video Engine V2."""
-    AUTO = "auto"
-    PORTRAIT_PADDED = "portrait_padded"
+    """Canonical fixed landscape framing mode."""
     LANDSCAPE_FIT = "landscape_fit"
-    PORTRAIT_VERTICAL = "portrait_vertical"
 
 
 class PanelStatus(str, Enum):
@@ -258,7 +245,6 @@ class VisualShotPlan(BaseModel):
 
 class SubtitleChunkingMode(str, Enum):
     SENTENCE_AWARE = "sentence-aware"
-    FIXED_CHARS = "fixed-chars"
 
 
 class SubtitleSettings(BaseModel):
@@ -297,9 +283,19 @@ class RenderSettings(BaseModel):
     crf: int = Field(default=20, ge=0, le=51)
     preset: str = "medium"
     burn_subtitles: bool = False
-    video_mode: str = "auto"
+    video_mode: str = VideoMode.LANDSCAPE_FIT.value
     render_pan_mode: str = "static"
     subtitle: SubtitleSettings = Field(default_factory=SubtitleSettings)
+
+    @field_validator("video_mode")
+    @classmethod
+    def _enforce_landscape_video_mode(cls, v: Any) -> str:
+        val = str(v).strip().lower()
+        if val != VideoMode.LANDSCAPE_FIT.value:
+            raise ValueError(
+                f"Unsupported video_mode '{v}'; V7 requires fixed 16:9 landscape ('landscape_fit')."
+            )
+        return VideoMode.LANDSCAPE_FIT.value
 
 
 class AudioSettings(BaseModel):

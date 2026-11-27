@@ -216,51 +216,8 @@ class SubtitleGenerator:
         """Sanitizes text by removing audible cues and normalizing whitespace."""
         return sanitize_subtitle_text(text)
 
-    def chunk_vietnamese_text_fixed_chars(self, text: str) -> List[str]:
-        """Legacy fixed-character chunking algorithm."""
-        clean_text = self.sanitize(text)
-        if not clean_text:
-            return []
-
-        if len(clean_text) <= self.max_chars_per_line:
-            return [clean_text]
-
-        words = clean_text.split()
-        blocks: List[str] = []
-        current_block_lines: List[str] = []
-        current_line: List[str] = []
-        current_line_len = 0
-
-        for word in words:
-            w_len = len(word)
-            needed = w_len if not current_line else current_line_len + 1 + w_len
-            if needed <= self.max_chars_per_line:
-                current_line.append(word)
-                current_line_len = needed
-            else:
-                if current_line:
-                    current_block_lines.append(" ".join(current_line))
-                current_line = [word]
-                current_line_len = w_len
-
-                if len(current_block_lines) == self.max_lines_per_block:
-                    blocks.append("\n".join(current_block_lines))
-                    current_block_lines = []
-
-        if current_line:
-            current_block_lines.append(" ".join(current_line))
-        if current_block_lines:
-            blocks.append("\n".join(current_block_lines))
-
-        return blocks
-
     def chunk_vietnamese_text(self, text: str) -> List[str]:
-        """
-        Splits Vietnamese text into subtitle blocks.
-        Uses sentence-aware chunking by default, with fixed-chars fallback.
-        """
-        if self.chunking_mode in ("fixed-chars", "fixed_chars"):
-            return self.chunk_vietnamese_text_fixed_chars(text)
+        """Splits Vietnamese text into sentence-aware subtitle blocks."""
         return chunk_vietnamese_text_sentence_aware(
             text,
             max_chars_per_line=self.max_chars_per_line,

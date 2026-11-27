@@ -44,7 +44,7 @@
       "voice_id": "Nam An",
       "synthesized_voice": "Nam An",
       "voice_source": "manual",
-      "camera_motion": "zoom_in",
+      "camera_motion": "slow_pan_down",
       "focus_box": {
         "x_min": 0.15,
         "y_min": 0.15,

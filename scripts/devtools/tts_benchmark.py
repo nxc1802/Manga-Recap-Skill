@@ -1,51 +1,54 @@
 """
-src/tts/benchmark.py
-TTS Voice & Emotion Benchmark Suite Runner and Telemetry Generator.
-Generates genuine 48 kHz uncompressed WAV audio, report.json, SUMMARY.md,
-and zero-CORS benchmark_data.js.
+scripts/devtools/tts_benchmark.py
+Standalone devtools TTS voice & emotion benchmark runner (moved out of runtime CLI).
+Generates 48 kHz WAV samples, report.json, and SUMMARY.md for narrator screening.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime
 import json
 import math
-import os
 from pathlib import Path
 import platform
-try:
-    import resource
-except ImportError:
-    resource = None
 import struct
+import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 import wave
 
+try:
+    import resource
+except ImportError:
+    resource = None
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from src.core.logger import logger
 from src.core.storage import atomic_write_json
-from src.tts.engine import EngineMode, get_tts_engine, get_wav_duration_seconds
-from src.tts.voice_profiles import VOICE_BY_NAME, VOICE_CATALOG_25, VoiceProfile
+from src.tts.engine import get_tts_engine, get_wav_duration_seconds
+from src.tts.voice_profiles import VOICE_BY_NAME, VOICE_CATALOG_25
 
-# Standard Reference Prompts for Voice Screening
 REFERENCE_PROMPTS = [
     {
         "id": "ref_hook",
         "category": "screening",
         "emotion": "neutral",
         "text": "Chào mừng các bạn đã quay trở lại với kênh tóm tắt truyện tranh. Hôm nay chúng ta sẽ cùng theo dõi diễn biến tiếp theo của bộ truyện cực kỳ hấp dẫn này.",
-        "description": "Standard YouTube Manga Recap Opening Hook"
+        "description": "Standard YouTube Manga Recap Opening Hook",
     },
     {
         "id": "ref_cadence",
         "category": "screening",
         "emotion": "neutral",
         "text": "Màn đêm buông xuống bao trùm toàn bộ sơn cốc, cũng là lúc trận chiến sinh tử giữa hai đại tông môn chính thức bắt đầu.",
-        "description": "Expository Narrative Cadence"
-    }
+        "description": "Expository Narrative Cadence",
+    },
 ]
 
-# 8 Standardized Emotion Benchmark Prompts
 EMOTION_BENCHMARK_PROMPTS = [
     {
         "id": "neutral",
@@ -53,7 +56,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "neutral",
         "name_vi": "Trần thuật trung tính",
         "text": "Sau khi rời khỏi thành trì, hắn lẳng lặng cất bước về phía cánh rừng rậm phía đông, nơi có ngôi đền cổ bị bỏ hoang từ trăm năm trước.",
-        "cues": []
+        "cues": [],
     },
     {
         "id": "excited",
@@ -61,7 +64,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "excited",
         "name_vi": "Hào hứng / Cao trào (Hype)",
         "text": "Không thể tin được! Cú đấm trực diện mang theo luồng kình lực hủy thiên diệt địa đã phá nát hoàn toàn kết giới phòng ngự của đối phương!",
-        "cues": ["!"]
+        "cues": ["!"],
     },
     {
         "id": "suspenseful",
@@ -69,7 +72,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "suspenseful",
         "name_vi": "Hồi hộp / Căng thẳng (Tense)",
         "text": "Không gian bỗng nhiên tĩnh lặng đến nghẹt thở... Từng bước chân nặng trĩu tiến lại gần, lưỡi kiếm sắc lạnh đã kề sát sau gáy tự lúc nào.",
-        "cues": ["..."]
+        "cues": ["..."],
     },
     {
         "id": "sad",
@@ -77,7 +80,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "sad",
         "name_vi": "Trầm buồn / Bi thương",
         "text": "Hắn lặng người quỳ bên đống đổ nát, nhìn kỷ vật cuối cùng của người thân dần tan biến trong ngọn lửa tàn. [thở dài] Tất cả... đã quá muộn rồi.",
-        "cues": ["[thở dài]", "..."]
+        "cues": ["[thở dài]", "..."],
     },
     {
         "id": "angry",
@@ -85,7 +88,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "angry",
         "name_vi": "Phẫn nộ / Quyết liệt",
         "text": "Khốn kiếp! Các ngươi dám làm tổn thương đến sư muội, hôm nay dù có phải trả giá bằng cả tính mạng, ta cũng quyết không để kẻ nào rời khỏi đây lành lặn!",
-        "cues": ["!"]
+        "cues": ["!"],
     },
     {
         "id": "whispered",
@@ -93,7 +96,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "whispered",
         "name_vi": "Thì thầm / Bí ẩn",
         "text": "Nghe cho kỹ đây... Bí mật này tuyệt đối không được để lọt vào tai trưởng lão, kẻ phản bội thực sự... đang ở ngay trong hàng ngũ chúng ta.",
-        "cues": ["..."]
+        "cues": ["..."],
     },
     {
         "id": "cinematic_epic",
@@ -101,7 +104,7 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "cinematic_epic",
         "name_vi": "Sử thi / Hùng tráng",
         "text": "Dưới bầu trời cuồn cuộn mây sấm, ngàn vạn chiến binh cùng đồng thanh gầm thét, nghênh đón khoảnh khắc vương triều hưng suy được định đoạt trong trận huyết chiến này!",
-        "cues": ["!"]
+        "cues": ["!"],
     },
     {
         "id": "comedic",
@@ -109,11 +112,10 @@ EMOTION_BENCHMARK_PROMPTS = [
         "emotion": "comedic",
         "name_vi": "Hài hước / Bựa / Tinh nghịch",
         "text": "Ủa alo? Vừa nãy còn gáy to lắm mà, sao giờ lại ôm đầu chui tọt xuống gầm bàn thế này? [cười] Đúng là không trượt phát nào mà!",
-        "cues": ["[cười]", "?"]
-    }
+        "cues": ["[cười]", "?"],
+    },
 ]
 
-# Controlled A/B Benchmark Prompts: Identical semantic text with varied cues/punctuation
 CONTROLLED_AB_PROMPTS = [
     {
         "id": "ab_neutral_baseline",
@@ -121,7 +123,7 @@ CONTROLLED_AB_PROMPTS = [
         "emotion": "neutral",
         "name_vi": "A/B Đối chứng: Chuẩn trung tính",
         "text": "Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật.",
-        "cues": []
+        "cues": [],
     },
     {
         "id": "ab_sigh_cue",
@@ -129,7 +131,7 @@ CONTROLLED_AB_PROMPTS = [
         "emotion": "sad",
         "name_vi": "A/B Đối chứng: [thở dài] ngắt quãng",
         "text": "[thở dài] Sau tất cả những biến cố kinh hoàng vừa xảy ra... Cuối cùng hắn cũng đã hiểu được sự thật.",
-        "cues": ["[thở dài]"]
+        "cues": ["[thở dài]"],
     },
     {
         "id": "ab_laugh_cue",
@@ -137,7 +139,7 @@ CONTROLLED_AB_PROMPTS = [
         "emotion": "comedic",
         "name_vi": "A/B Đối chứng: [cười] dí dỏm",
         "text": "[cười] Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật!",
-        "cues": ["[cười]"]
+        "cues": ["[cười]"],
     },
     {
         "id": "ab_throat_cue",
@@ -145,7 +147,7 @@ CONTROLLED_AB_PROMPTS = [
         "emotion": "philosophical",
         "name_vi": "A/B Đối chứng: [hắng giọng] quyền uy",
         "text": "[hắng giọng] Sau tất cả những biến cố kinh hoàng vừa xảy ra, cuối cùng hắn cũng đã hiểu được sự thật.",
-        "cues": ["[hắng giọng]"]
+        "cues": ["[hắng giọng]"],
     },
     {
         "id": "ab_dramatic_climax",
@@ -153,7 +155,7 @@ CONTROLLED_AB_PROMPTS = [
         "emotion": "excited",
         "name_vi": "A/B Đối chứng: Cao trào ngắt nhịp",
         "text": "Sau tất cả những biến cố kinh hoàng vừa xảy ra... Cuối cùng! Hắn cũng đã hiểu được toàn bộ sự thật!",
-        "cues": ["!", "..."]
+        "cues": ["!", "..."],
     },
 ]
 
@@ -164,10 +166,7 @@ def generate_mock_wav(
     sample_rate: int = 48000,
     freq: float = 440.0,
 ) -> Tuple[float, List[float]]:
-    """
-    Generates a deterministic 48 kHz 16-bit PCM mono WAV file with smooth envelope.
-    Returns (exact_duration, 64_normalized_peaks).
-    """
+    """Generates a deterministic 48 kHz 16-bit PCM mono WAV file and normalized waveform peaks."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     num_frames = int(sample_rate * duration)
     peaks_count = 64
@@ -181,8 +180,7 @@ def generate_mock_wav(
         t = float(i) / sample_rate
         env = min(1.0, t / 0.1) * min(1.0, (duration - t) / 0.1) if duration > 0.2 else 1.0
         val = 0.6 * math.sin(2.0 * math.pi * freq * t) + 0.3 * math.sin(4.0 * math.pi * freq * t)
-        sample = int(val * env * 32767.0 * 0.7)
-        sample = max(-32768, min(32767, sample))
+        sample = max(-32768, min(32767, int(val * env * 32767.0 * 0.7)))
         frames.extend(struct.pack("<h", sample))
 
         mag = abs(sample)
@@ -215,15 +213,13 @@ def compute_waveform_peaks(wav_path: Path, num_peaks: int = 64) -> List[float]:
         return [0.5] * num_peaks
 
     total_samples = nframes * nchannels
-    fmt = f"<{total_samples}h"
-    samples = struct.unpack(fmt, raw_bytes)
-
+    samples = struct.unpack(f"<{total_samples}h", raw_bytes)
     channel_samples = samples[::nchannels]
     step = max(1, len(channel_samples) // num_peaks)
-    peaks = []
+    peaks: List[float] = []
 
     for i in range(0, len(channel_samples), step):
-        chunk = channel_samples[i:i + step]
+        chunk = channel_samples[i : i + step]
         if chunk:
             peak = max(abs(s) for s in chunk) / 32768.0
             peaks.append(round(min(1.0, peak), 3))
@@ -232,19 +228,19 @@ def compute_waveform_peaks(wav_path: Path, num_peaks: int = 64) -> List[float]:
 
     while len(peaks) < num_peaks:
         peaks.append(0.0)
-
     return peaks
 
 
 def slugify_name(text: str) -> str:
     import unicodedata
+
     text = text.replace("đ", "d").replace("Đ", "D")
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8")
     return text.lower().replace(" ", "_")
 
 
 class TTSBenchmarkRunner:
-    """Executes voice screening and emotion benchmarks, generating telemetry and artifacts."""
+    """Executes voice screening and emotion benchmarks for narrator auditioning."""
 
     def __init__(
         self,
@@ -269,14 +265,10 @@ class TTSBenchmarkRunner:
         benchmark_id = f"bench_{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
         if self.use_mock:
-            tts_engine = get_tts_engine(force_mode=EngineMode.MOCK)
             active_backend = "mock"
+            engine = None
         else:
-            tts_engine = get_tts_engine(force_mode=EngineMode.NEURAL)
-            if tts_engine.mode != EngineMode.NEURAL.value:
-                raise RuntimeError(
-                    f"TTSBenchmarkRunner: Neural backend required when --mock is not specified, but active mode is '{tts_engine.mode}'."
-                )
+            engine = get_tts_engine()
             active_backend = "neural"
 
         hardware_info = {
@@ -288,88 +280,62 @@ class TTSBenchmarkRunner:
         }
 
         samples_data: List[Dict[str, Any]] = []
+        emotion_prompts_map = {ep["id"]: ep for ep in EMOTION_BENCHMARK_PROMPTS}
 
         for rep in range(self.repeats):
-            rep_suffix = f"_rep{rep+1}" if self.repeats > 1 else ""
+            rep_suffix = f"_rep{rep + 1}" if self.repeats > 1 else ""
 
-            # 1. Voice Screening Phase: Selected voices x Reference Prompts
             for v_name in self.voices:
-                vp = VOICE_BY_NAME.get(v_name)
-                v_info = {
-                    "name": v_name,
-                    "region": vp.region.value if vp else "Bắc",
-                    "gender": vp.gender.value if vp else "female",
-                    "role": vp.suggested_role if vp else "Narrator",
-                    "is_top10": vp.is_top10 if vp else False,
-                    "timbre": vp.timbre_description if vp else "",
-                }
-
+                v_info = self._voice_info(v_name)
                 for prompt in REFERENCE_PROMPTS:
-                    sample_item = self._synthesize_sample(
-                        voice_name=v_name,
-                        voice_info=v_info,
-                        prompt_id=f"{prompt['id']}{rep_suffix}",
-                        category=prompt["category"],
-                        emotion=prompt["emotion"],
-                        text=prompt["text"],
+                    samples_data.append(
+                        self._synthesize_sample(
+                            voice_name=v_name,
+                            voice_info=v_info,
+                            prompt_id=f"{prompt['id']}{rep_suffix}",
+                            category=prompt["category"],
+                            emotion=prompt["emotion"],
+                            text=prompt["text"],
+                            engine=engine,
+                        )
                     )
-                    samples_data.append(sample_item)
 
-            # 2. Emotion Benchmark Phase: Target voices x 8 Emotions
-            emotion_prompts_map = {ep["id"]: ep for ep in EMOTION_BENCHMARK_PROMPTS}
             for emo_id in self.emotions:
                 if emo_id not in emotion_prompts_map:
                     continue
                 ep = emotion_prompts_map[emo_id]
-
-                # Primary voice ("Trúc Ly") + up to 2 other top10 voices
                 target_voices = [v for v in self.voices if (VOICE_BY_NAME.get(v) and VOICE_BY_NAME[v].is_top10)][:3]
                 if "Trúc Ly" not in target_voices and "Trúc Ly" in self.voices:
                     target_voices.insert(0, "Trúc Ly")
-
                 for v_name in target_voices:
-                    vp = VOICE_BY_NAME.get(v_name)
-                    v_info = {
-                        "name": v_name,
-                        "region": vp.region.value if vp else "Bắc",
-                        "gender": vp.gender.value if vp else "female",
-                        "role": vp.suggested_role if vp else "Narrator",
-                        "is_top10": vp.is_top10 if vp else False,
-                        "timbre": vp.timbre_description if vp else "",
-                    }
-                    sample_item = self._synthesize_sample(
-                        voice_name=v_name,
-                        voice_info=v_info,
-                        prompt_id=f"emo_{emo_id}{rep_suffix}",
-                        category="emotion",
-                        emotion=emo_id,
-                        text=ep["text"],
+                    samples_data.append(
+                        self._synthesize_sample(
+                            voice_name=v_name,
+                            voice_info=self._voice_info(v_name),
+                            prompt_id=f"emo_{emo_id}{rep_suffix}",
+                            category="emotion",
+                            emotion=emo_id,
+                            text=ep["text"],
+                            engine=engine,
+                        )
                     )
-                    samples_data.append(sample_item)
 
-            # 3. Controlled A/B Emotion Phase (Optional): Top voices tested on identical text with varied cues
             if self.include_ab_tests:
                 ab_target_voices = [v for v in self.voices if v in ["Trúc Ly", "Thiện Minh"]][:2]
                 for v_name in ab_target_voices:
-                    vp = VOICE_BY_NAME.get(v_name)
-                    v_info = {
-                        "name": v_name,
-                        "region": vp.region.value if vp else "Bắc",
-                        "gender": vp.gender.value if vp else "female",
-                        "role": vp.suggested_role if vp else "Narrator",
-                        "is_top10": vp.is_top10 if vp else False,
-                        "timbre": vp.timbre_description if vp else "",
-                    }
+                    v_info = self._voice_info(v_name)
                     for ab_prompt in CONTROLLED_AB_PROMPTS:
-                        sample_item = self._synthesize_sample(
-                            voice_name=v_name,
-                            voice_info=v_info,
-                            prompt_id=f"{ab_prompt['id']}{rep_suffix}",
-                            category=ab_prompt["category"],
-                            emotion=ab_prompt["emotion"],
-                            text=ab_prompt["text"],
+                        samples_data.append(
+                            self._synthesize_sample(
+                                voice_name=v_name,
+                                voice_info=v_info,
+                                prompt_id=f"{ab_prompt['id']}{rep_suffix}",
+                                category=ab_prompt["category"],
+                                emotion=ab_prompt["emotion"],
+                                text=ab_prompt["text"],
+                                engine=engine,
+                            )
                         )
-                        samples_data.append(sample_item)
 
         total_wall = time.perf_counter() - start_time
         if resource is not None:
@@ -405,18 +371,11 @@ class TTSBenchmarkRunner:
             "samples": samples_data,
         }
 
-        # 1. Write report.json
         report_path = self.output_dir / "report.json"
         atomic_write_json(report_path, report)
-
-        # 2. Write SUMMARY.md
         summary_md_path = self.output_dir / "SUMMARY.md"
         self._write_summary_md(summary_md_path, report)
-
-        logger.info(
-            f"TTS Benchmark complete: {len(samples_data)} samples, mean RTF={mean_rtf}, "
-            f"output: {self.output_dir}"
-        )
+        logger.info(f"TTS Benchmark complete: {len(samples_data)} samples, mean RTF={mean_rtf}, output={self.output_dir}")
 
         return {
             "benchmark_id": benchmark_id,
@@ -434,14 +393,27 @@ class TTSBenchmarkRunner:
             "status": "completed",
         }
 
+    def _voice_info(self, v_name: str) -> Dict[str, Any]:
+        vp = VOICE_BY_NAME.get(v_name)
+        return {
+            "name": v_name,
+            "region": vp.region.value if vp else "Bắc",
+            "gender": vp.gender.value if vp else "female",
+            "role": vp.suggested_role if vp else "Narrator",
+            "is_top10": vp.is_top10 if vp else False,
+            "timbre": vp.timbre_description if vp else "",
+        }
+
     def _synthesize_sample(
         self,
+        *,
         voice_name: str,
         voice_info: Dict[str, Any],
         prompt_id: str,
         category: str,
         emotion: str,
         text: str,
+        engine: Optional[Any],
     ) -> Dict[str, Any]:
         v_slug = slugify_name(voice_name)
         sample_filename = f"{v_slug}_{prompt_id}.wav"
@@ -457,8 +429,8 @@ class TTSBenchmarkRunner:
                 freq=220.0 + (abs(hash(voice_name)) % 200),
             )
         else:
-            engine = get_tts_engine(force_mode=EngineMode.NEURAL)
-            dur = engine.synthesize_to_file(
+            assert engine is not None
+            engine.synthesize_to_file(
                 text=text,
                 voice_id=voice_name,
                 output_path=sample_path,
@@ -490,7 +462,7 @@ class TTSBenchmarkRunner:
             "peaks": peaks,
         }
 
-    def _write_summary_md(self, summary_path: Path, report: Dict[str, Any]):
+    def _write_summary_md(self, summary_path: Path, report: Dict[str, Any]) -> None:
         summary = report["summary"]
         hw = report["hardware"]
         samples = report["samples"]
@@ -520,13 +492,13 @@ class TTSBenchmarkRunner:
             "|---|---|---|---|---|---|---|",
         ]
 
-        screening_samples = [s for s in samples if s["category"] == "screening" and "ref_hook" in s["sample_id"]]
-        for s in screening_samples:
-            vi = s["voice_info"]
-            lines.append(
-                f"| **{s['voice_id']}** | {vi['region']} | {vi['gender']} | {vi['role']} | "
-                f"{s['audio_duration_seconds']:.2f}s | {s['rtf']:.3f} | 48kHz Mono |"
-            )
+        for s in samples:
+            if s["category"] == "screening" and "ref_hook" in s["sample_id"]:
+                vi = s["voice_info"]
+                lines.append(
+                    f"| **{s['voice_id']}** | {vi['region']} | {vi['gender']} | {vi['role']} | "
+                    f"{s['audio_duration_seconds']:.2f}s | {s['rtf']:.3f} | 48kHz Mono |"
+                )
 
         lines.extend([
             "",
@@ -536,12 +508,12 @@ class TTSBenchmarkRunner:
             "|---|---|---|---|---|---|",
         ])
 
-        emotion_samples = [s for s in samples if s["category"] == "emotion"]
-        for s in emotion_samples:
-            lines.append(
-                f"| `{s['emotion']}` | {s['sample_id']} | {s['voice_id']} | "
-                f"{s['audio_duration_seconds']:.2f}s | {s['rtf']:.3f} | 48kHz Mono |"
-            )
+        for s in samples:
+            if s["category"] == "emotion":
+                lines.append(
+                    f"| `{s['emotion']}` | {s['sample_id']} | {s['voice_id']} | "
+                    f"{s['audio_duration_seconds']:.2f}s | {s['rtf']:.3f} | 48kHz Mono |"
+                )
 
         lines.extend([
             "",
@@ -552,5 +524,50 @@ class TTSBenchmarkRunner:
             "3. Record the confirmed narrator and speed in `voice_selection.json`.",
             "",
         ])
-
         summary_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def parse_voices_arg(raw_voices: str) -> List[str]:
+    text = str(raw_voices or "all").strip()
+    if text.lower() == "all":
+        return [vp.name for vp in VOICE_CATALOG_25]
+    if text.lower() == "top10":
+        return [vp.name for vp in VOICE_CATALOG_25 if vp.is_top10]
+    return [v.strip() for v in text.split(",") if v.strip()]
+
+
+def parse_emotions_arg(raw_emotions: str) -> List[str]:
+    text = str(raw_emotions or "all").strip()
+    if text.lower() == "all":
+        return [ep["id"] for ep in EMOTION_BENCHMARK_PROMPTS]
+    return [e.strip() for e in text.split(",") if e.strip()]
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Standalone VieNeu-TTS voice & emotion benchmark tool")
+    parser.add_argument("-o", "--out-dir", default="data/benchmarks/vieneu_v3_turbo", help="Output directory")
+    parser.add_argument("--voices", default="all", help="Comma-separated voice IDs, 'top10', or 'all'")
+    parser.add_argument("--emotions", default="all", help="Comma-separated emotion IDs or 'all'")
+    parser.add_argument("--repeats", type=int, default=1, help="Number of repetitions per prompt")
+    parser.add_argument("--mock", action="store_true", help="Use deterministic mock WAV generation")
+    parser.add_argument("--ab-tests", action="store_true", help="Include controlled A/B emotion cue comparison tests")
+    parser.add_argument("--json", action="store_true", help="Print JSON result")
+    args = parser.parse_args(argv)
+
+    result = TTSBenchmarkRunner(
+        output_dir=Path(args.out_dir),
+        voices=parse_voices_arg(args.voices),
+        emotions=parse_emotions_arg(args.emotions),
+        repeats=args.repeats,
+        use_mock=bool(args.mock),
+        include_ab_tests=bool(args.ab_tests),
+    ).run()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"Benchmark written to {result['output_dir']} ({result['total_samples_generated']} samples)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -54,7 +54,7 @@ def unit_project(tmp_path, monkeypatch):
 def test_reference_renderer_validates_then_human_gate(unit_project):
     root, chapter = unit_project
     with pytest.raises(CliValidationError, match="Gate G6"):
-        render_chapter(root, "1", quality="final", approved=True, skip_preview=True)
+        render_chapter(root, "1", quality="final")
     result = render_chapter(root, "1", quality="preview")
     assert Path(result["video_path"]).stat().st_size > 0
     assert read_json(chapter / "chapter.json")["human_review_status"] == "unreviewed"
