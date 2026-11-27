@@ -375,8 +375,7 @@ def publish_chapter_video(
         try:
             prev_ev = read_json(evidence_file)
             if (
-                prev_ev.get("partial_upload") is True
-                and prev_ev.get("video_sha256") == video_sha256
+                prev_ev.get("video_sha256") == video_sha256
                 and prev_ev.get("account") == account_name_resolved
                 and prev_ev.get("video_id")
             ):
@@ -387,6 +386,35 @@ def publish_chapter_video(
                 thumbnail_local_sha256 = prev_ev.get("thumbnail_local_sha256")
                 thumbnail_upload_at = prev_ev.get("thumbnail_upload_at")
                 uploaded_at = prev_ev.get("uploaded_at") or uploaded_at
+                if (
+                    prev_ev.get("partial_upload") is False
+                    and (not captions_required or captions_uploaded)
+                    and (not thumbnail_required or thumbnail_uploaded)
+                ):
+                    logger.info(
+                        f"Skipping duplicate YouTube upload: exact video already published as {resumed_video_id}"
+                    )
+                    existing_receipt = read_json(receipt_file) if receipt_file.is_file() else {}
+                    return {
+                        "status": "success",
+                        "duplicate_prevented": True,
+                        "verified": bool(existing_receipt.get("verified_at")),
+                        "video_id": resumed_video_id,
+                        "video_url": f"https://www.youtube.com/watch?v={resumed_video_id}",
+                        "account": account_name_resolved,
+                        "channel_title": channel_title,
+                        "channel_id": channel_id,
+                        "title": title,
+                        "privacy_status": privacy,
+                        "captions_uploaded": captions_uploaded,
+                        "thumbnail_uploaded": thumbnail_uploaded,
+                        "video_sha256": video_sha256,
+                        "subtitle_sha256": subtitle_sha256,
+                        "thumbnail_local_sha256": thumbnail_local_sha256,
+                        "thumbnail_upload_at": thumbnail_upload_at,
+                        "receipt_path": str(receipt_file),
+                        "evidence_path": str(evidence_file),
+                    }
                 logger.info(f"Resuming partial YouTube upload for existing video ID {resumed_video_id}...")
         except Exception:
             resumed_video_id = None

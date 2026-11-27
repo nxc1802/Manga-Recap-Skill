@@ -497,3 +497,99 @@ def test_bug09_kaggle_tts_does_not_fail_when_sync_already_completed_checkpoint(t
     assert res["status"] == "success"
     assert res["provider"] == "kaggle"
     assert load_chapter_metadata(chap_dir).stages[StageType.TTS].status == CheckpointStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# BUG-10 (found live during V7.1 P8.2 YT-07 duplicate upload check):
+# Re-running publish for an already-completed exact video+account must not
+# call insert_video again and must return duplicate_prevented=True.
+# ---------------------------------------------------------------------------
+
+
+def test_bug10_youtube_rerun_prevents_duplicate_upload(tmp_path, monkeypatch):
+    import argparse
+    from types import SimpleNamespace
+    from src.youtube.publisher import publish_chapter_video
+
+    monkeypatch.setenv("DATA_PROJECTS_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("DATA_OUTPUT_DIR", str(tmp_path / "output"))
+    proj_dir = _make_project(tmp_path, slug="bug10-yt", compute="local")
+    answers = _valid_answers(compute="local")
+    answers["Q08"]["user_answer"] = {"account": "cho_review", "privacy": "private"}
+    record_series_setup("bug10-yt", answers, reviewer="qa", project_dir=proj_dir)
+    ch1 = init_chapter_layout("bug10-yt", "1")
+    _write_chapter_evidence(ch1, slug="bug10-yt", ch="1")
+    atomic_write_json(ch1 / "visual_plan.json", {"schema_version": "4.1.0", "shots": []})
+    prev_mp4 = ch1 / "video" / "preview.mp4"
+    prev_srt = ch1 / "subtitles" / "preview.srt"
+    prev_mp4.parent.mkdir(parents=True, exist_ok=True)
+    prev_srt.parent.mkdir(parents=True, exist_ok=True)
+    prev_mp4.write_bytes(b"YT_VIDEO_BYTES")
+    prev_srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nHi\n", encoding="utf-8")
+    approve_chapter_preview(
+        "bug10-yt",
+        reviewer="qa",
+        config_fingerprint=review_fingerprint(proj_dir),
+        artifact_hash=hashlib.sha256(prev_mp4.read_bytes()).hexdigest(),
+    )
+    vid = ch1 / "video" / "final.mp4"
+    srt = ch1 / "subtitles" / "final.srt"
+    thumb = ch1 / "thumbnail.jpg"
+    vid.parent.mkdir(parents=True, exist_ok=True)
+    srt.parent.mkdir(parents=True, exist_ok=True)
+    vid.write_bytes(b"YT_VIDEO_BYTES")
+    srt.write_text("1\n00:00:00,000 --> 00:00:02,000\nHi\n", encoding="utf-8")
+    Image.new("RGB", (1280, 720), (30, 40, 50)).save(thumb, "JPEG")
+    atomic_write_json(
+        ch1 / "youtube_metadata.json",
+        {
+            "project_slug": "bug10-yt",
+            "chapter_number": "1",
+            "title": "Test Title",
+            "description": "Test Desc",
+            "privacy_status": "private",
+        },
+    )
+    atomic_write_json(
+        ch1 / "youtube_upload_evidence.json",
+        {
+            "schema_version": "4.0.0",
+            "project_slug": "bug10-yt",
+            "chapter_number": "1",
+            "video_id": "EXISTING_VID_123",
+            "account": "cho_review",
+            "video_sha256": calculate_sha256(vid),
+            "captions_uploaded": True,
+            "thumbnail_uploaded": True,
+            "partial_upload": False,
+        },
+    )
+    atomic_write_json(
+        ch1 / "youtube_receipt.json",
+        {"video_id": "EXISTING_VID_123", "verified_at": "2026-11-27T00:00:00Z"},
+    )
+
+    fake_acct_mgr = MagicMock()
+    fake_acct_mgr.get_account.return_value = SimpleNamespace(
+        account_name="cho_review", channel_title="Test Ch", channel_id="UC123"
+    )
+    fake_client = MagicMock()
+    monkeypatch.setattr("src.youtube.publisher.YouTubeDataClient", lambda *a, **k: fake_client)
+
+    args = argparse.Namespace(
+        project="bug10-yt",
+        chapter="1",
+        account="cho_review",
+        privacy="private",
+        force=False,
+        no_captions=False,
+        title=None,
+        description=None,
+        tags=None,
+        wait=False,
+    )
+    res = publish_chapter_video(args, account_mgr=fake_acct_mgr, credentials_fn=lambda **k: MagicMock())
+    assert res["duplicate_prevented"] is True
+    assert res["video_id"] == "EXISTING_VID_123"
+    assert res["verified"] is True
+    fake_client.insert_video.assert_not_called()
