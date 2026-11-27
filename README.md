@@ -47,3 +47,5 @@ Standalone maintenance scripts (outside production runtime):
 .venv/bin/python scripts/sync_requirements.py --check
 .venv/bin/python -m pytest -q
 ```
+
+See the [V7 Core-Only Implementation Report](docs/verification/v7_core_only_2026-11-27/v7_core_only_report.md) for codebase metrics, decision audit, and verification results.
