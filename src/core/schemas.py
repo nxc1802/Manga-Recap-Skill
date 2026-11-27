@@ -124,10 +124,8 @@ class CharacterGender(str, Enum):
 
 
 class VoiceStrategy(str, Enum):
-    """Narration and voice assignment strategy."""
-    SINGLE_NARRATOR = "single_narrator"               # Strategy: Unified single narrator (standard)
-    EMOTION_AWARE = "emotion_aware"                   # Strategy (Optional): Single narrator with emotion cues ([cười], [thở dài])
-    NARRATOR_AND_CHARACTERS = "narrator_and_characters"# Backward-compatible alias (maps to single_narrator)
+    """Canonical narration strategy (single approved narrator only)."""
+    SINGLE_NARRATOR = "single_narrator"
 
 
 class HumanReviewStatus(str, Enum):
@@ -501,51 +499,6 @@ class RecapScript(BaseModel):
         if duplicates:
             raise ValueError(f"Duplicate seq_id values found across segments: {sorted(list(set(duplicates)))}")
         return self
-
-    @classmethod
-    def from_legacy_dict(cls, project_slug: str, chapter_number: str, title: str, legacy_data: Dict[str, Any]) -> RecapScript:
-        """Upgrades legacy dictionary format (from script.csv or old json) to RecapScript."""
-        segments: List[ScriptSegment] = []
-        for seq_str, content in legacy_data.items():
-            if isinstance(content, str):
-                segments.append(ScriptSegment(
-                    seq_id=str(seq_str),
-                    panel_ids=[f"panel_{seq_str}.jpg"],
-                    narrator_text=content,
-                    camera_motion=CameraMotionType.STATIC
-                ))
-            elif isinstance(content, dict):
-                fx = float(content.get("focus_x", 50))
-                fy = float(content.get("focus_y", 50))
-                cs = float(content.get("crop_scale", 100))
-                box = FocusBox.from_center_and_scale(focus_x=fx, focus_y=fy, crop_scale=cs)
-
-                motion_str = str(content.get("pan_direction", "static")).lower()
-                motion_map = {
-                    "horizontal": CameraMotionType.PAN_LEFT,
-                    "vertical": CameraMotionType.PAN_DOWN,
-                    "zoom": CameraMotionType.ZOOM_IN,
-                    "static": CameraMotionType.STATIC
-                }
-                motion = motion_map.get(motion_str, CameraMotionType.STATIC)
-
-                segments.append(ScriptSegment(
-                    seq_id=str(seq_str),
-                    panel_ids=content.get("panel_ids", [f"panel_{seq_str}.jpg"]),
-                    narrator_text=content.get("text", ""),
-                    character=content.get("character"),
-                    emotion=content.get("emotion", "neutral"),
-                    camera_motion=motion,
-                    focus_box=box,
-                    status=content.get("status", "pending")
-                ))
-
-        return cls(
-            project_slug=project_slug,
-            chapter_number=str(chapter_number),
-            title=title,
-            segments=segments
-        )
 
 
 # ==============================================================================

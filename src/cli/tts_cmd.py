@@ -29,8 +29,6 @@ def handle_tts(args: argparse.Namespace) -> Dict[str, Any]:
     return synthesize_chapter_tts(
         project_slug,
         str(chapter_num),
-        voice=getattr(args, "voice", None),
-        speed=getattr(args, "speed", None),
         force=force_resynth,
         no_cache=no_cache,
         engine=getattr(args, "engine", "neural"),

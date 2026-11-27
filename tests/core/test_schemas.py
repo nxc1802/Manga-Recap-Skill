@@ -150,22 +150,16 @@ class TestRecapScript:
         assert script.segments[0].seq_id == "002_1"
         assert script.segments[1].seq_id == "scene_climax"
 
-    def test_legacy_dict_conversion(self):
-        legacy = {
-            "1": {
-                "text": "Lời kể một",
-                "focus_x": 40,
-                "focus_y": 60,
-                "pan_direction": "horizontal",
-                "crop_scale": 80
-            },
-            "2": "Lời kể hai"
-        }
-        script = RecapScript.from_legacy_dict("test_slug", "1", "Ep 1", legacy)
-        assert len(script.segments) == 2
-        assert script.segments[0].seq_id == "1"
-        assert script.segments[0].camera_motion == CameraMotionType.PAN_LEFT
-        assert script.segments[1].seq_id == "2"
+    def test_single_narrator_voice_strategy_enforced(self):
+        assert not hasattr(RecapScript, "from_legacy_dict")
+        assert list(VoiceStrategy) == [VoiceStrategy.SINGLE_NARRATOR]
+        with pytest.raises(ValidationError):
+            RecapScript(
+                project_slug="test_slug",
+                chapter_number="1",
+                voice_strategy="emotion_aware",
+                segments=[],
+            )
 
 
 class TestCharacterDictionary:

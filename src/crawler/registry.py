@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from src.core.logger import logger
 from src.core.storage import atomic_write_json, get_project_dir, read_json
+from src.crawler.errors import CrawlerError, CrawlerErrorCode
 from src.crawler.schemas import SourceProfile
 
 
@@ -42,7 +43,7 @@ class SiteAdapterRegistry:
         1. data/projects/<slug>/source_profiles/<domain>.json
         2. data/source_profiles/<domain>.json
         3. src/crawler/profiles/<domain>.json (built-in)
-        4. Generic fallback adapter
+        Fails closed with CrawlerError when the site has no explicit profile.
         """
         domain = self.extract_domain(domain_or_url)
         cache_key = f"{project_slug or 'global'}:{domain}"
@@ -88,27 +89,17 @@ class SiteAdapterRegistry:
                     except Exception:
                         pass
 
-        # 4. Fallback to generic profile
-        generic_path = self.builtin_dir / "generic.json"
-        if generic_path.exists():
-            try:
-                data = read_json(generic_path)
-                data["domain"] = domain
-                data["name"] = f"Generic ({domain})"
-                profile = SourceProfile.model_validate(data)
-                self._cache[cache_key] = profile
-                return profile
-            except Exception as e:
-                logger.warning(f"Failed to load generic profile from {generic_path}: {e}")
-
-        # In-memory default
-        profile = SourceProfile(
+        supported = sorted({p.domain for p in self.list_profiles(project_slug)})
+        raise CrawlerError(
+            message=(
+                f"Unsupported manga source site '{domain}'. Supported profiles: {', '.join(supported) or 'none'}. "
+                f"Add a profile at data/source_profiles/{domain}.json or import local images via --import-dir."
+            ),
+            code=CrawlerErrorCode.UNSUPPORTED_STRUCTURE,
             domain=domain,
-            name=f"Default ({domain})",
-            confidence=0.5,
+            url=domain_or_url,
+            details={"supported_domains": supported},
         )
-        self._cache[cache_key] = profile
-        return profile
 
     def save_profile(
         self,

@@ -176,11 +176,12 @@ class TestSiteAdapterRegistry:
         assert profile.confidence >= 0.8
         assert "webtoons.com" in profile.headers.get("Referer", "")
 
-    def test_generic_fallback(self):
+    def test_unsupported_site_raises_crawler_error(self):
         registry = SiteAdapterRegistry()
-        profile = registry.get_profile("https://unfamiliar-manga-site.xyz/read/chap-1")
-        assert profile.domain == "unfamiliar-manga-site.xyz"
-        assert profile.confidence <= 0.8
+        with pytest.raises(CrawlerError) as exc_info:
+            registry.get_profile("https://unfamiliar-manga-site.xyz/read/chap-1")
+        assert exc_info.value.code == CrawlerErrorCode.UNSUPPORTED_STRUCTURE
+        assert exc_info.value.domain == "unfamiliar-manga-site.xyz"
 
     def test_save_and_retrieve_profile(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

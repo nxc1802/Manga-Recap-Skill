@@ -8,7 +8,6 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import httpx
 
-from src.core.config import config
 from src.core.logger import logger
 from src.core.schemas import utc_iso_now
 from src.core.storage import atomic_write_json, calculate_sha256, read_json
@@ -70,6 +69,7 @@ class CrawlerService:
         img_url: str,
         save_path: Path,
         chapter_base_url: str = None,
+        profile=None,
     ) -> bool:
         """
         Downloads a single image with referrer headers, saving it locally.
@@ -84,7 +84,8 @@ class CrawlerService:
 
         # Resolve profile headers / referer
         ref_target = chapter_base_url or img_url
-        profile = self.registry.get_profile(ref_target)
+        if profile is None and self.resolver.classify_url(ref_target) != URLClassification.DIRECT_IMAGE:
+            profile = self.registry.get_profile(ref_target)
         if profile and profile.headers:
             headers.update(profile.headers)
 
@@ -93,8 +94,6 @@ class CrawlerService:
             headers["Referer"] = "https://www.webtoons.com/"
         elif chapter_base_url:
             headers["Referer"] = chapter_base_url
-        elif config.crawler.chapter_base_url:
-            headers["Referer"] = config.crawler.chapter_base_url
 
         try:
             resp = await client.get(img_url, headers=headers, timeout=30.0)
@@ -133,7 +132,7 @@ class CrawlerService:
             dest_name = f"page_001{Path(urlparse(url).path).suffix or '.jpg'}"
             dest_path = output_raw_dir / dest_name
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                success = await self.download_image(client, url, dest_path, url)
+                success = await self.download_image(client, url, dest_path, url, profile=None)
                 if success:
                     return [dest_name]
                 raise CrawlerError(
@@ -211,7 +210,7 @@ class CrawlerService:
                         ext = ".webp"
                     dest_name = f"page_{seq:03d}{ext}"
                     dest_path = output_raw_dir / dest_name
-                    success = await self.download_image(client, img_url, dest_path, target_reader_url)
+                    success = await self.download_image(client, img_url, dest_path, target_reader_url, profile=profile)
                     if success:
                         if strict_verify:
                             ok, err = self.verifier.verify_image(dest_path, strict=True)
@@ -250,7 +249,9 @@ class CrawlerService:
         5. Emit manifest.json.
         Returns (chapter_id, summary_context)
         """
-        url_template = chapter_base_url or config.crawler.chapter_base_url
+        url_template = chapter_base_url or ""
+        if not url_template:
+            raise ValueError("chapter_base_url is required")
         if "[CHAPTER_NUMBER]" in url_template:
             url = url_template.replace("[CHAPTER_NUMBER]", chapter_number)
         elif "{chapter_number}" in url_template:
@@ -311,8 +312,6 @@ class CrawlerService:
         raw_pages_dir.mkdir(parents=True, exist_ok=True)
 
         limit_panels = max_panels
-        if limit_panels is None:
-            limit_panels = getattr(config.orchestrator, "max_panels", None)
 
         try:
             downloaded = await self.crawl_raw_pages(

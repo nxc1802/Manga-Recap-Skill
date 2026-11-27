@@ -433,7 +433,7 @@ def test_stale_legacy_metadata_conservative_fallback_and_cache_upgrade(tmp_path,
     with pytest.raises(ValueError, match="Only '4sided' is supported"):
         DecisionPolicyConfig(policy="legacy_9preset")
 
-    # Old legacy_9preset manifest evidence must fall back conservatively to FULL Region(), never guessing crop
+    # Old legacy_9preset manifest evidence must fail closed instead of guessing full frame crop
     man_legacy = load_manifest(chap_dir)
     man_legacy.panels[0].evidence_metadata = {
         "decision_policy": "legacy_9preset",
@@ -449,7 +449,7 @@ def test_stale_legacy_metadata_conservative_fallback_and_cache_upgrade(tmp_path,
         {
             "panel_001": {
                 "sha256": man_legacy.panels[0].sha256,
-                "width": 800,
+                "width": 1080,
                 "height": 1200,
                 "cache_version": "legacy-v5",
                 "raw_answers": {"panel_group": {"choice": "group_1_story_art"}},
@@ -457,8 +457,10 @@ def test_stale_legacy_metadata_conservative_fallback_and_cache_upgrade(tmp_path,
             }
         },
     )
-    assert resolve_accepted_display_box(800, 1200, man_legacy.panels[0].evidence_metadata) == Region()
-    assert compute_adaptive_display_box(800, 1200, man_legacy.panels[0].evidence_metadata) == Region()
+    with pytest.raises(ValueError, match="Incompatible legacy 9-preset crop metadata"):
+        resolve_accepted_display_box(1080, 1200, man_legacy.panels[0].evidence_metadata)
+    with pytest.raises(ValueError, match="Incompatible legacy 9-preset crop metadata"):
+        compute_adaptive_display_box(1080, 1200, man_legacy.panels[0].evidence_metadata)
 
     # Running Decision pipeline invalidates legacy cache cleanly and upgrades metadata to canonical 4sided
     upgrade_calls = 0

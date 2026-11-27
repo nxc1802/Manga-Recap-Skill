@@ -311,7 +311,7 @@ def test_split_no_split_above_hw4_and_merge_verification_and_vcs_guards(tmp_path
             {"panel_id": "panel_004", "width": 800, "height": 220},  # contiguous fragment of p3
         ],
     )
-    cfg = DecisionPolicyConfig(policy="4sided", verify_merges=True)
+    cfg = DecisionPolicyConfig(policy="4sided")
     saw_no_split_on_hw45 = False
     saw_merge_verify = False
 
@@ -345,7 +345,7 @@ def test_split_no_split_above_hw4_and_merge_verification_and_vcs_guards(tmp_path
     assert summary["total_input_tokens"] > 0 and "split_select" in summary["tokens_by_phase"] and "merge_verify" in summary["tokens_by_phase"]
 
 
-def test_reapply_policy_dry_run_refresh_and_repack_recovery(tmp_path, monkeypatch):
+def test_refresh_and_repack_recovery(tmp_path, monkeypatch):
     chap_dir = _make_manifest_chapter(
         tmp_path,
         monkeypatch,
@@ -355,6 +355,7 @@ def test_reapply_policy_dry_run_refresh_and_repack_recovery(tmp_path, monkeypatc
     orig_bytes = (chap_dir / "panels" / "panel_001.jpg").read_bytes()
 
     calls = 0
+    edge_trim = 20
 
     def _handler(_req: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -362,41 +363,38 @@ def test_reapply_policy_dry_run_refresh_and_repack_recovery(tmp_path, monkeypatc
         return httpx.Response(
             200,
             json=_four_sided_payload(
-                edges=(20, 0, 20, 10),
+                edges=(edge_trim, 0, edge_trim, 10),
                 edge_probs={
-                    "left": {"0": 0.25, "10": 0.0, "20": 0.75, "30": 0.0, "40": 0.0},
+                    "left": {"0": 0.05, "10": 0.0, str(edge_trim): 0.95, "30": 0.0, "40": 0.0} if edge_trim == 20 else {"0": 0.05, "10": 0.95, "20": 0.0, "30": 0.0, "40": 0.0},
                     "top": {"0": 0.95, "10": 0.05, "20": 0.0, "30": 0.0, "40": 0.0},
-                    "right": {"0": 0.25, "10": 0.0, "20": 0.75, "30": 0.0, "40": 0.0},
-                    "bottom": {"0": 0.25, "10": 0.75, "20": 0.0, "30": 0.0, "40": 0.0},
+                    "right": {"0": 0.05, "10": 0.0, str(edge_trim): 0.95, "30": 0.0, "40": 0.0} if edge_trim == 20 else {"0": 0.05, "10": 0.95, "20": 0.0, "30": 0.0, "40": 0.0},
+                    "bottom": {"0": 0.05, "10": 0.95, "20": 0.0, "30": 0.0, "40": 0.0},
                 },
             ),
         )
 
     client = DecisionClient(http_client=httpx.Client(transport=httpx.MockTransport(_handler)))
-    cfg_lenient = DecisionPolicyConfig(policy="4sided", edge_conf_threshold=0.70)
-    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client, config=cfg_lenient)
+    cfg = DecisionPolicyConfig(policy="4sided")
+    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client, config=cfg)
     assert calls == 1
     assert (chap_dir / "panels" / "panel_001.jpg").read_bytes() == orig_bytes
     assert load_manifest(chap_dir).panels[0].sha256 == orig_sha
     assert load_manifest(chap_dir).panels[0].evidence_metadata["crop_edges_pct"] == {"left": 20, "top": 0, "right": 20, "bottom": 10}
 
-    # dry_run makes 0 API calls and keeps manifest untouched
-    dry = run_decision_pipeline(chap_dir, dry_run=True, config=cfg_lenient)
-    assert dry["dry_run"] is True and dry["pass1_cached"] == 1 and dry["pass1_pending"] == 0
-    assert calls == 1
-
     # adaptive_tall_resolution preserves medium on regular panels and switches to high on tall panels
     from src.ingest.decision import _resolve_panel_resolution
-    cfg_adapt = DecisionPolicyConfig(policy="4sided", image_resolution="medium", adaptive_tall_resolution="high")
-    assert _resolve_panel_resolution(1080, 1400, cfg_adapt) == "medium"
-    assert _resolve_panel_resolution(1080, 2600, cfg_adapt) == "high"
+    assert _resolve_panel_resolution(1080, 1400, cfg) == "medium"
+    assert _resolve_panel_resolution(1080, 2600, cfg) == "high"
 
-    # reapply_policy tightens threshold offline with ZERO API calls
-    cfg_strict = DecisionPolicyConfig(policy="4sided", edge_conf_threshold=0.85)
-    res_reapply = run_decision_pipeline(chap_dir, reapply_policy=True, client=client, config=cfg_strict)
+    # Second run without refresh hits cache cleanly with zero API calls
+    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client, config=cfg)
     assert calls == 1
-    assert res_reapply["requests"] == {}
-    assert load_manifest(chap_dir).panels[0].evidence_metadata["crop_edges_pct"] == {"left": 0, "top": 0, "right": 0, "bottom": 0}
+
+    # Single explicit refresh=True bypasses cache cleanly
+    edge_trim = 10
+    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, refresh=True, client=client, config=cfg)
+    assert calls == 2
+    assert load_manifest(chap_dir).panels[0].evidence_metadata["crop_edges_pct"] == {"left": 10, "top": 0, "right": 10, "bottom": 10}
 
     # Simulate interrupted backup recovery in apply_panel_plan
     (chap_dir / "panels").replace(chap_dir / ".repack_backup_panels")
@@ -467,128 +465,80 @@ def test_static_visual_policy_honors_4sided_display_crop_and_rejects_unsafe(tmp_
         validate_visual_plan(VisualPlan.model_validate(tampered_data), chap_dir, manifest, script, 1280, 720, 30, False)
 
 
-def test_s2_reapply_policy_offline_preflight_validation_and_approval_idempotency(tmp_path, monkeypatch):
-    """P0 S2: --reapply-policy enforces strict offline cache preflight, 0 network/key calls, and idempotent approvals."""
+def test_v7_panel_identity_after_repack_and_cache_integrity(tmp_path, monkeypatch):
+    """V7 Fixes #1 & #2: split shifts panel_002 -> panel_003 without colliding on pass1[panel_003]; disk integrity + incomplete cache rejected."""
     from src.core.errors import DomainValidationError
-    from src.core.human_review import approve_preview, require_preview_approval, review_fingerprint
-    from src.core.schemas import ChapterMetadata
-    from src.core.series_setup import record_series_setup
-    from tests.core.test_series_setup import _make_valid_answers_dict
 
     chap_dir = _make_manifest_chapter(
         tmp_path,
         monkeypatch,
         [
-            {"panel_id": "panel_001", "width": 600, "height": 800, "border_pct": 0.1},
-            {"panel_id": "panel_002", "width": 600, "height": 800, "border_pct": 0.1},
+            {"panel_id": "panel_001", "width": 600, "height": 1800, "draw_gutter": True},  # Split -> panel_001, panel_002
+            {"panel_id": "panel_002", "width": 600, "height": 800},   # Kept -> shifts to panel_003! (10,0,10,0)
+            {"panel_id": "panel_003", "width": 600, "height": 900},   # Kept -> shifts to panel_004! SKIP (0,0,0,0)
         ],
     )
-    proj_dir = chap_dir.parent.parent
-    answers = _make_valid_answers_dict()
-    for key, value in dict(Q02="local", Q05=False, Q08={"no_upload": True}, Q09="preview", Q10=False).items():
-        answers[key]["user_answer"] = value
-    record_series_setup("dec4-proj", answers, project_dir=proj_dir)
-    atomic_write_json(
-        proj_dir / "voice_selection.json",
-        dict(project_slug="dec4-proj", primary_voice="Ngọc Huyền", reviewer="reviewer", status="approved", speed=1.0),
-    )
-    atomic_write_json(
-        chap_dir / "chapter.json",
-        ChapterMetadata(project_slug="dec4-proj", chapter_number="1", title="Ch 1", chapter_id="ch1"),
-    )
-    script = RecapScript(
-        project_slug="dec4-proj",
-        chapter_number="1",
-        segments=[ScriptSegment(seq_id="001", evidence_panel_ids=["panel_001"], narrator_text="Hello world", duration=2.0)],
-    )
-    atomic_write_json(chap_dir / "script.json", script)
-    generate_visual_plan(chap_dir, load_manifest(chap_dir), script, target_width=1280, target_height=720, motion_enabled=False).save(
-        chap_dir / "visual_plan.json"
-    )
-    (chap_dir / "video").mkdir(parents=True, exist_ok=True)
-    (chap_dir / "subtitles").mkdir(parents=True, exist_ok=True)
-    (chap_dir / "video" / "preview.mp4").write_bytes(b"fake-preview-mp4")
-    (chap_dir / "subtitles" / "preview.srt").write_text("1\n00:00:00,000 --> 00:00:00,500\nok\n", encoding="utf-8")
-    (chap_dir / "video" / "preview_review_sheet.jpg").write_bytes(b"fake-sheet")
-    preview_sha = calculate_sha256(chap_dir / "video" / "preview.mp4")
+    sha_p2 = load_manifest(chap_dir).panels[1].sha256
+    sha_p3 = load_manifest(chap_dir).panels[2].sha256
 
-    def _edge_payload(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json=_four_sided_payload(
-                edges=(20, 0, 20, 0),
-                edge_probs={
-                    "left": {"0": 0.25, "10": 0.0, "20": 0.75, "30": 0.0, "40": 0.0},
-                    "top": {"0": 0.95, "10": 0.05, "20": 0.0, "30": 0.0, "40": 0.0},
-                    "right": {"0": 0.25, "10": 0.0, "20": 0.75, "30": 0.0, "40": 0.0},
-                    "bottom": {"0": 0.95, "10": 0.05, "20": 0.0, "30": 0.0, "40": 0.0},
-                },
-            ),
-        )
+    api_calls = 0
 
-    client = DecisionClient(http_client=httpx.Client(transport=httpx.MockTransport(_edge_payload)))
-    cfg_lenient = DecisionPolicyConfig(policy="4sided", edge_conf_threshold=0.70)
-    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client, config=cfg_lenient)
+    def _handler(req: httpx.Request) -> httpx.Response:
+        nonlocal api_calls
+        api_calls += 1
+        body = json.loads(req.content.decode("utf-8"))
+        qkeys = set(body["questions"].keys())
+        txt = next(item["text"] for item in body["input"] if item["type"] == "text")
+        if "primary_cut" in qkeys:
+            return httpx.Response(200, json={"answers": {"primary_cut": {"choice": "cut_1", "confidence": 0.94}}, "usage": {"total_input_tokens": 100}})
+        if "600x1800px" in txt:
+            return httpx.Response(200, json=_four_sided_payload(structure_action="needs_split", edges=(0, 0, 0, 0)))
+        if "600x800px" in txt:
+            return httpx.Response(200, json=_four_sided_payload(panel_group="group_1_story_art", edges=(10, 0, 10, 0)))
+        if "600x900px" in txt:
+            return httpx.Response(200, json=_four_sided_payload(panel_group="group_3_skip", edges=(0, 0, 0, 0)))
+        return httpx.Response(200, json=_four_sided_payload(panel_group="group_1_story_art", edges=(0, 20, 0, 20)))
 
-    # Approve preview AFTER decision; unset API keys completely to verify true offline --reapply-policy
-    approve_preview(proj_dir, "reviewer", review_fingerprint(proj_dir), preview_sha)
-    manifest_bytes_before = (chap_dir / "manifest.json").read_bytes()
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_DECISION_API_KEY", raising=False)
+    client = DecisionClient(http_client=httpx.Client(transport=httpx.MockTransport(_handler)))
+    summary = run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client)
+    assert summary["split_resolved"] == 1
+    assert summary["final_total_panels"] == 4
+    repacked = load_manifest(chap_dir)
+    # Critical Fix #1 check: repacked panel_003 MUST hold raw panel_002's SHA and ACTIVE (10,0,10,0), NOT raw panel_003 SKIP!
+    assert repacked.panels[2].panel_id == "panel_003"
+    assert repacked.panels[2].sha256 == sha_p2
+    assert repacked.panels[2].status == PanelStatus.ACTIVE
+    assert repacked.panels[2].evidence_metadata["source_raw_panels"] == ["panel_002"]
+    assert repacked.panels[2].evidence_metadata["crop_edges_pct"] == {"left": 10, "top": 0, "right": 10, "bottom": 0}
+    assert repacked.panels[3].panel_id == "panel_004"
+    assert repacked.panels[3].sha256 == sha_p3
+    assert repacked.panels[3].status == PanelStatus.SKIP
+    assert repacked.panels[3].evidence_metadata["source_raw_panels"] == ["panel_003"]
 
-    # Same policy reapply is byte-idempotent and keeps approval intact with client=None & no API key!
-    res_same = run_decision_pipeline(chap_dir, reapply_policy=True, client=None, config=cfg_lenient)
-    assert res_same["requests"] == {}
-    assert (chap_dir / "manifest.json").read_bytes() == manifest_bytes_before
-    require_preview_approval(proj_dir)
+    # Immediate re-run uses verified SHA-bound cache with 0 API calls and keeps lineage exact
+    calls_before_resume = api_calls
+    summary2 = run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client)
+    assert api_calls == calls_before_resume
+    assert summary2["cache_hits"]["pass1"] == 4
 
-    # Tighter threshold reapplies offline cleanly via client=None without API key
-    cfg_strict = DecisionPolicyConfig(policy="4sided", edge_conf_threshold=0.85)
-    res_strict = run_decision_pipeline(chap_dir, reapply_policy=True, client=None, config=cfg_strict)
-    assert res_strict["requests"] == {}
-    strict_manifest = load_manifest(chap_dir)
-    assert strict_manifest.panels[0].evidence_metadata["crop_edges_pct"] == {"left": 0, "top": 0, "right": 0, "bottom": 0}
+    # Fix #2a: Corrupt cache (incomplete raw_answers missing crop_bottom) is rejected as invalid cache hit
+    cache = read_json(chap_dir / "decision_cache.json")
+    cache["panel_003"]["raw_answers"].pop("crop_bottom", None)
+    atomic_write_json(chap_dir / "decision_cache.json", cache)
+    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client)
+    assert api_calls == calls_before_resume + 1  # re-queried panel_003 instead of trusting partial raw answers!
 
-    # Cannot combine --reapply-policy with --refresh-decisions
-    with pytest.raises(DomainValidationError, match="Cannot combine"):
-        run_decision_pipeline(chap_dir, reapply_policy=True, refresh_decisions=True, config=cfg_strict)
-
-    # Corrupt cache dimensions, sha256, cache_version, empty raw_answers, and missing panel must fail preflight cleanly
-    saved_bytes = (chap_dir / "manifest.json").read_bytes()
-    orig_cache = read_json(chap_dir / "decision_cache.json")
-
-    for mut_name, mutator in (
-        ("dim", lambda c: c["panel_001"].update({"width": 999})),
-        ("sha", lambda c: c["panel_001"].update({"sha256": "deadbeef"})),
-        ("ver", lambda c: c["panel_001"].update({"cache_version": "stale"})),
-        ("empty", lambda c: c["panel_001"].update({"raw_answers": {}})),
-        ("missing", lambda c: c.pop("panel_002")),
-    ):
-        bad_cache = json.loads(json.dumps(orig_cache))
-        mutator(bad_cache)
-        atomic_write_json(chap_dir / "decision_cache.json", bad_cache)
-        dry = run_decision_pipeline(chap_dir, reapply_policy=True, dry_run=True, config=cfg_strict)
-        assert dry["reapply_ready"] is False, f"expected not ready for {mut_name}"
-        with pytest.raises(DomainValidationError, match="preflight failed"):
-            run_decision_pipeline(chap_dir, reapply_policy=True, config=cfg_strict)
-        assert (chap_dir / "manifest.json").read_bytes() == saved_bytes
-
-    # Changing resolution requires API recompute, so --reapply-policy fails preflight cleanly
-    atomic_write_json(chap_dir / "decision_cache.json", orig_cache)
-    with pytest.raises(DomainValidationError, match="cache_version_mismatch"):
-        run_decision_pipeline(
-            chap_dir,
-            reapply_policy=True,
-            config=DecisionPolicyConfig(policy="4sided", image_resolution="high"),
-        )
+    # Fix #2b: Swapping panel image bytes on disk without updating manifest SHA fails integrity before cache/API
+    Image.new("RGB", (600, 800), color=(1, 2, 3)).save(chap_dir / "panels" / "panel_003.jpg")
+    with pytest.raises(DomainValidationError, match="checksum mismatch"):
+        run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=client)
 
 
 def test_s2_child_cache_isolation_merge_requires_verify_and_missing_confidence_backoff(tmp_path, monkeypatch):
-    """P0 S2: verify_merges=False never merges from VCS alone; split children own independent cache; missing confidence backs off."""
+    """Unconditional semantic merge verification; split children own independent Pass 2 cache; missing confidence backs off."""
     from src.core.errors import DomainValidationError
     from src.ingest.decision import _select_conservative_edge_trim, interpret_panel_answers
 
-    # 1. Missing confidence/probabilities NEVER gets inferred as certain under guardrails
     raw_pct, acc_pct, conf, _, _ = _select_conservative_edge_trim(
         {"type": "choice", "choice": "30"},
         edge_conf_threshold=0.60,
@@ -615,8 +565,8 @@ def test_s2_child_cache_isolation_merge_requires_verify_and_missing_confidence_b
     assert no_conf_dec["status"] == PanelStatus.NEEDS_REVIEW.value
     assert no_conf_dec["review_reason"] == "missing_group_confidence"
 
-    # 2. VCS contiguity alone (verify_merges=False) MUST NOT merge!
-    chap_noverify = _make_manifest_chapter(
+    # VCS contiguity always invokes semantic merge check and refuses non-mergeable fragments
+    chap_verify = _make_manifest_chapter(
         tmp_path / "nv",
         monkeypatch,
         [
@@ -624,31 +574,31 @@ def test_s2_child_cache_isolation_merge_requires_verify_and_missing_confidence_b
             {"panel_id": "panel_002", "width": 800, "height": 220},
         ],
     )
-    nv_client = DecisionClient(
-        http_client=httpx.Client(
-            transport=httpx.MockTransport(
-                lambda r: httpx.Response(
-                    200,
-                    json=_four_sided_payload(
-                        structure_action="merge_with_prev" if "800x220px" in next(i["text"] for i in json.loads(r.content)["input"] if i["type"] == "text") else "ok_single",
-                        edges=(0, 0, 0, 0),
-                    ),
-                )
-            )
+    verify_calls = 0
+
+    def _nv_handler(r: httpx.Request) -> httpx.Response:
+        nonlocal verify_calls
+        body = json.loads(r.content)
+        if "merge_decision" in body["questions"]:
+            verify_calls += 1
+            return httpx.Response(200, json={"answers": {"merge_decision": {"choice": "keep_separate", "confidence": 0.9}}, "usage": {"total_input_tokens": 100}})
+        txt = next(i["text"] for i in body["input"] if i["type"] == "text")
+        return httpx.Response(
+            200,
+            json=_four_sided_payload(
+                structure_action="merge_with_prev" if "800x220px" in txt else "ok_single",
+                edges=(0, 0, 0, 0),
+            ),
         )
-    )
-    nv_summary = run_decision_pipeline(
-        chap_noverify,
-        api_key="key-123",
-        max_workers=1,
-        client=nv_client,
-        config=DecisionPolicyConfig(policy="4sided", verify_merges=False),
-    )
+
+    nv_client = DecisionClient(http_client=httpx.Client(transport=httpx.MockTransport(_nv_handler)))
+    nv_summary = run_decision_pipeline(chap_verify, api_key="key-123", max_workers=1, client=nv_client)
+    assert verify_calls == 1
     assert nv_summary["final_total_panels"] == 2
     assert nv_summary["merge_diagnostics"][0]["merged"] is False
-    assert nv_summary["merge_diagnostics"][0]["action"] == "merge_verification_required"
+    assert nv_summary["merge_diagnostics"][0]["action"] == "keep_separate"
 
-    # 3. Split children store OWN Pass 2 raw_answers (different crops per child), NOT parent fallback, across reapply_policy
+    # Split children store OWN Pass 2 raw_answers & __pass2_* cache with source lineage
     chap_dir = _make_manifest_chapter(
         tmp_path / "split",
         monkeypatch,
@@ -677,22 +627,13 @@ def test_s2_child_cache_isolation_merge_requires_verify_and_missing_confidence_b
     cache = read_json(chap_dir / "decision_cache.json")
     assert cache["panel_001"]["panel_origin"] == "child_pass2"
     assert cache["panel_002"]["panel_origin"] == "child_pass2"
+    assert cache["__pass2_panel_001"]["source_raw_panels"] == ["panel_001"]
     assert cache["panel_001"]["raw_answers"]["structure_action"]["choice"] == "ok_single"
 
-    # Tighten threshold on split children offline -> backs off 0.95 cumulative < 0.96 cleanly WITHOUT inheriting parent!
-    re_sum = run_decision_pipeline(
-        chap_dir,
-        reapply_policy=True,
-        config=DecisionPolicyConfig(policy="4sided", edge_conf_threshold=0.96),
-    )
-    assert re_sum["final_total_panels"] == 2 and re_sum["requests"] == {}
-    re_man = load_manifest(chap_dir)
-    assert all(p.evidence_metadata["crop_edges_pct"] == {"left": 0, "top": 0, "right": 0, "bottom": 0} for p in re_man.panels)
+    # Re-running cached chapter hits verified child_pass2 entries with ZERO API calls
+    run_decision_pipeline(chap_dir, api_key="key-123", max_workers=1, client=sp_client)
+    assert pass2_seen == 2
 
-    # Removing __pass2_* & child panel_origin marker refuses parent fallback cleanly
-    bad_child_cache = json.loads(json.dumps(cache))
-    bad_child_cache.pop("__pass2_panel_001", None)
-    bad_child_cache["panel_001"].pop("panel_origin", None)
-    atomic_write_json(chap_dir / "decision_cache.json", bad_child_cache)
-    with pytest.raises(DomainValidationError, match="missing_or_invalid_child_pass2_cache"):
-        run_decision_pipeline(chap_dir, reapply_policy=True, config=DecisionPolicyConfig(policy="4sided"))
+    # Resolution override on DecisionPolicyConfig rejected (B08)
+    with pytest.raises(ValueError, match="fixed at medium / high"):
+        DecisionPolicyConfig(policy="4sided", image_resolution="high")

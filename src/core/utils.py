@@ -32,35 +32,18 @@ def slugify_project_title(project_title: str) -> str:
 
 def get_project_data_dir(project_slug: str) -> Path:
     """
-    Returns the project data directory.
-    When MANGA_RECAP_DATA_DIR is set, resolves strictly within that root
-    (<MANGA_RECAP_DATA_DIR>/projects/{slug} with legacy fallback <MANGA_RECAP_DATA_DIR>/{slug})
-    so isolated test/cloud runs never fall back to repo-local data/.
-    Otherwise uses config.storage_dir / project_slug with config.data_dir fallback.
+    Returns the canonical project data directory under RuntimeSettings.projects_dir.
+    Respects MANGA_RECAP_DATA_DIR cleanly without repo/YAML config fallbacks.
     """
-    from src.core.config import config
+    from src.core.settings import get_runtime_settings
 
-    env_data_dir = os.getenv("MANGA_RECAP_DATA_DIR")
-    if env_data_dir:
-        data_dir = Path(env_data_dir)
-        storage_dir = data_dir / "projects"
-    else:
-        storage_dir = config.storage_dir
-        data_dir = config.data_dir
-
+    storage_dir = get_runtime_settings().projects_dir
     slug = slugify_project_title(str(project_slug))
     canonical_slug = storage_dir / slug
     if canonical_slug.exists():
         return canonical_slug
     if (storage_dir / str(project_slug)).exists():
         return storage_dir / str(project_slug)
-
-    legacy_slug = data_dir / slug
-    if legacy_slug.exists():
-        return legacy_slug
-    if (data_dir / str(project_slug)).exists():
-        return data_dir / str(project_slug)
-
     return canonical_slug
 
 def get_project_title_by_id(project_id: str) -> str:

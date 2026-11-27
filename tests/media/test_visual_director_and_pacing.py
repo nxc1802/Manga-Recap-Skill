@@ -28,7 +28,6 @@ from src.core.pacing import (
     count_punctuation_pauses,
     estimate_script_duration_seconds,
     estimate_segment_duration_seconds,
-    format_pacing_report,
 )
 from src.core.schemas import (
     CameraMotionType,
@@ -289,11 +288,8 @@ class TestPR03SoftScriptPacing:
         assert result["total_estimated_seconds"] > 0.0
         assert "recommendations" in result
         assert isinstance(result["recommendations"], list)
-        assert len(result["recommendations"]) >= 1
-
-        report_str = format_pacing_report(result)
-        assert "PRE-TTS SCRIPT PACING DIAGNOSTIC REPORT" in report_str
-        assert "Target Duration" in report_str
+        assert len(result["recommendations"]) == 1
+        assert result["within_budget"] is False
 
     def test_validate_cmd_pacing_flag_integration(self, tmp_path, monkeypatch):
         """Verifies that manga-recap validate --pacing runs pacing diagnostics."""

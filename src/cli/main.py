@@ -141,17 +141,12 @@ def build_parser() -> JsonAwareArgumentParser:
     p_decide.add_argument("-p", "--project", required=True, help="Project slug")
     p_decide.add_argument("-c", "--chapter", required=True, help="Chapter number")
     p_decide.add_argument("--workers", type=int, default=2, help="Concurrent Decision API requests (default: 2)")
-    p_decide.add_argument("--reclassify-all", action="store_true", help="Refresh all Pass 1 and Pass 2 decisions cleanly")
-    p_decide.add_argument("--refresh-decisions", action="store_true", help="Bypass cached Decision API answers and re-query")
-    p_decide.add_argument("--reapply-policy", action="store_true", help="Re-apply guardrails and thresholds over cached raw answers without API calls")
-    p_decide.add_argument("--dry-run", action="store_true", help="Report cache hits and pending API requests without mutating chapter artifacts")
+    p_decide.add_argument("--refresh", action="store_true", help="Bypass cached Decision API answers and re-query")
 
     # 5. tts
     p_tts = subparsers.add_parser("tts", help="Synthesize audio for script segments", parents=[common_parent])
     p_tts.add_argument("-p", "--project", required=True, help="Project slug")
     p_tts.add_argument("-c", "--chapter", required=True, help="Chapter number")
-    p_tts.add_argument("--voice", default=None, help="Preset voice override")
-    p_tts.add_argument("--speed", type=float, default=None, help="Speech speed override")
     p_tts.add_argument("--force", action="store_true", help="Re-synthesize all audio segments even if existing")
     p_tts.add_argument("--no-cache", action="store_true", help="Bypass and delete any existing cached audio clips and re-synthesize cleanly")
     p_tts.add_argument("--engine", choices=["neural"], default="neural", help="Production requires local neural VieNeu-TTS")
@@ -352,7 +347,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prep.add_argument("--verify", action="store_true", help="Perform strict image integrity and continuity verification")
     p_prep.add_argument("--target-width", type=int, default=1080, help="Target panel width")
     p_prep.add_argument("--force", action="store_true", help="Force re-segmentation")
-    p_prep.add_argument("--skip-decide", action="store_true", help="Skip Decision API pass after segmentation")
     p_prep.add_argument("--workers", type=int, default=2, help="Concurrent Decision API requests (default: 2)")
 
     # 20. preview (validate script -> TTS -> preview render -> review pack)
@@ -424,7 +418,6 @@ def _handle_prepare(args: argparse.Namespace) -> Dict[str, Any]:
         verify=bool(getattr(args, "verify", False)),
         target_width=getattr(args, "target_width", 1080),
         force=bool(getattr(args, "force", False)),
-        skip_decide=bool(getattr(args, "skip_decide", False)),
         workers=getattr(args, "workers", 2),
     )
 

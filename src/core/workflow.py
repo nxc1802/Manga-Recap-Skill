@@ -1081,10 +1081,7 @@ def decide_chapter_panels(
     chapter_num: str,
     *,
     workers: int = 2,
-    reclassify_all: bool = False,
-    refresh_decisions: bool = False,
-    reapply_policy: bool = False,
-    dry_run: bool = False,
+    refresh: bool = False,
 ) -> Dict[str, Any]:
     if not project_slug or chapter_num is None:
         raise DomainValidationError("Both --project and --chapter are required.")
@@ -1093,10 +1090,7 @@ def decide_chapter_panels(
     return run_decision_pipeline(
         chap_dir,
         max_workers=workers,
-        reclassify_all=reclassify_all,
-        refresh_decisions=refresh_decisions,
-        reapply_policy=reapply_policy,
-        dry_run=dry_run,
+        refresh=refresh,
     )
 
 
@@ -1110,7 +1104,6 @@ def prepare_chapter(
     verify: bool = False,
     target_width: int = 1080,
     force: bool = False,
-    skip_decide: bool = False,
     workers: int = 2,
 ) -> Dict[str, Any]:
     """
@@ -1151,11 +1144,9 @@ def prepare_chapter(
         target_width=target_width,
         force=force,
     )
-    decide_res: Optional[Dict[str, Any]] = None
-    if not skip_decide:
-        decide_res = decide_chapter_panels(
-            project_slug, str(chapter_num), workers=workers, reclassify_all=force
-        )
+    decide_res = decide_chapter_panels(
+        project_slug, str(chapter_num), workers=workers, refresh=force
+    )
     inspect_res = inspect_project_or_chapter(project_slug, str(chapter_num))
     update_checkpoint(
         chap_dir,
@@ -1180,31 +1171,20 @@ def prepare_chapter(
 
 def resolve_segment_voice(
     seg: ScriptSegment,
-    voice_override: Optional[str] = None,
-    approved_voice: Optional[str] = None,
-    approved_character_mapping: Optional[Dict[str, str]] = None,
-    default_voice: Optional[str] = None,
+    approved_voice: str,
 ) -> Tuple[str, str]:
-    """Resolves segment voice strictly prioritizing explicit overrides and approved narrator."""
-    if voice_override:
-        return voice_override, "override"
-    if seg.character and approved_character_mapping and seg.character in approved_character_mapping:
-        return approved_character_mapping[seg.character], "approved"
-    if seg.is_manual_voice() and seg.voice_id:
-        return seg.voice_id, "manual"
-    if approved_voice:
-        return approved_voice, "approved"
-    if seg.voice_id and seg.voice_source != "tts":
-        return seg.voice_id, "manual"
-    return default_voice or "Ngọc Huyền", "default"
+    """Enforces canonical single-narrator voice across all segments."""
+    if seg.is_manual_voice() and seg.voice_id and resolve_voice_id(seg.voice_id) != approved_voice:
+        raise DomainValidationError(
+            f"Segment '{seg.seq_id}' voice '{seg.voice_id}' conflicts with confirmed single narrator '{approved_voice}'."
+        )
+    return approved_voice, "approved"
 
 
 def synthesize_chapter_tts(
     project_slug: str,
     chapter_num: str,
     *,
-    voice: Optional[str] = None,
-    speed: Optional[float] = None,
     force: bool = False,
     no_cache: bool = False,
     engine: str = "neural",
@@ -1271,10 +1251,6 @@ def synthesize_chapter_tts(
         approval = require_voice_approval(project_dir)
         default_voice = resolve_voice_id(approval.primary_voice)
         default_speed = approval.speed
-        if voice and resolve_voice_id(voice) != default_voice:
-            raise DomainValidationError("Voice override conflicts with confirmed Q03")
-        if speed and speed != default_speed:
-            raise DomainValidationError("Speed override conflicts with confirmed Q04")
 
         if mock or engine != "neural":
             raise DomainValidationError("Production TTS requires the real neural engine")
@@ -1294,13 +1270,8 @@ def synthesize_chapter_tts(
         for seg in script_obj.segments:
             seg_voice, v_source = resolve_segment_voice(
                 seg=seg,
-                voice_override=voice,
                 approved_voice=default_voice,
-                approved_character_mapping={},
-                default_voice=default_voice,
             )
-            if resolve_voice_id(seg_voice) != default_voice:
-                raise DomainValidationError("Segment voice conflicts with confirmed single narrator")
 
             seg_audio_file = audio_clips_dir / f"audio_{chapter_num}_{seg.seq_id}.wav"
             engine_mode = getattr(tts_engine, "mode", "neural")
@@ -1688,8 +1659,6 @@ def batch_chapters(
                     project_slug,
                     chap_num,
                     engine=tts_engine,
-                    voice=voice,
-                    speed=speed,
                     workers=tts_workers,
                     force=force,
                 )

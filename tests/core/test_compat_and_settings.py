@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from src.compat.migrate import (
+from scripts.migrate_legacy_project import (
     migrate_project_artifacts,
     normalize_chapter_data,
     normalize_legacy_script_data,

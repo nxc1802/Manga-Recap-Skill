@@ -143,11 +143,14 @@ def test_prepare_creates_ingest_artifacts_never_script_and_reports_status(tmp_pa
     proj_dir = _create_test_project(tmp_path)
     import_dir = _create_raw_import_dir(tmp_path, count=2)
 
+    monkeypatch.setattr(
+        "src.core.workflow.decide_chapter_panels",
+        lambda slug, chap, **kw: {"project_slug": slug, "chapter_number": chap, "needs_review_count": 0},
+    )
     res = prepare_chapter(
         "wf-series",
         "1",
         import_dir=str(import_dir),
-        skip_decide=True,
     )
 
     chap_dir = proj_dir / "chapters" / "1"

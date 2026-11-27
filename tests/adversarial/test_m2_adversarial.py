@@ -26,7 +26,6 @@ import pytest
 
 from src.cli.exit_codes import ExitCode
 from src.cli.main import main
-from src.core.config import config
 from src.core.storage import (
     cleanup_intermediate_files,
     init_chapter_layout,

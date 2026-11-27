@@ -1,8 +1,7 @@
 """Central, fail-closed policy applied before CLI handler imports or dispatch."""
 from src.core.errors import DomainValidationError
-from src.core.project import get_project_dir, get_projects_root
+from src.core.project import get_project_dir
 from src.core.series_setup import require_series_setup
-from src.core.storage import read_json
 
 COMMAND_REQUIREMENTS = {
     name: ("series_setup",) for name in (
@@ -41,17 +40,3 @@ def enforce_execution_policy(command, args):
     if production:
         from src.core.human_review import require_preview_approval
         require_preview_approval(get_project_dir(slug))
-
-
-
-def resolve_legacy_chapter(chapter_id, chapter_number):
-    """Resolve an existing identity exactly; never guess a default series."""
-    matches = []
-    for path in get_projects_root().glob(f"*/chapters/{chapter_number}/chapter.json"):
-        if read_json(path).get("chapter_id") == chapter_id:
-            matches.append(path.parents[2])
-    if len(matches) != 1:
-        raise DomainValidationError("Legacy chapter identity is missing or ambiguous; use the canonical CLI with --project")
-    project = matches[0]
-    require_series_setup(project.name, project_dir=project)
-    return project

@@ -75,3 +75,22 @@ def test_reject_incomplete_or_unconfirmed_answers(tmp_path):
 def test_pipeline_blocks_unconfigured_series(command):
     with pytest.raises(CliValidationError, match="eight"):
         execute_subcommand(command, Namespace(project="unconfigured", chapter="1"))
+
+
+def test_legacy_setup_v4_rejected_at_runtime_with_migration_hint(tmp_path):
+    answers = _make_valid_answers_dict()
+    root = tmp_path / "legacy_series"
+    record_series_setup("legacy_series", answers, project_dir=root)
+    setup_path = root / "series_setup_answers.json"
+    raw = read_json(setup_path)
+    raw["schema_version"] = "4.0.0"
+    raw["answers"]["Q06"] = {
+        "question_id": "Q06",
+        "question_title": "Motion",
+        "user_answer": "static",
+        "answer_source": "user",
+        "confirmed_at": raw["updated_at"],
+    }
+    atomic_write_json(setup_path, raw)
+    with pytest.raises(CliValidationError, match="migrate_legacy_project.py"):
+        require_series_setup("legacy_series", project_dir=root)

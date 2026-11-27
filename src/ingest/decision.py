@@ -28,7 +28,7 @@ from src.core.panel_repack import (
 )
 from src.core.schemas import PanelItem, PanelManifest, PanelStatus, utc_iso_now
 from src.core.settings import resolve_gemini_api_key
-from src.core.storage import atomic_write_json, load_manifest
+from src.core.storage import atomic_write_json, calculate_sha256, load_manifest
 from src.providers.decision import (
     DECISION_USD_PER_1M_INPUT_TOKENS,
     DECISIONS_MODEL,
@@ -45,15 +45,22 @@ CROP_POLICY_VERSION = "2026-v6.2-4sided"
 CROP_PCT_OPTIONS: Tuple[int, ...] = (0, 10, 20, 30, 40)
 CROP_PCT_KEYS: Tuple[str, ...] = ("0", "10", "20", "30", "40")
 CROP_EDGE_NAMES: Tuple[str, ...] = ("left", "top", "right", "bottom")
+REQUIRED_RAW_QUESTION_KEYS: Tuple[str, ...] = (
+    "panel_group",
+    "structure_action",
+    "crop_left",
+    "crop_top",
+    "crop_right",
+    "crop_bottom",
+)
 FULL_DISPLAY_REGION: Dict[str, float] = {"x_min": 0.0, "y_min": 0.0, "x_max": 1.0, "y_max": 1.0}
 
 
 @dataclass(frozen=True)
 class DecisionPolicyConfig:
-    """Canonical 4-sided adaptive guardrail configuration for Decision 1 routing and crop framing."""
+    """Fixed benchmarked 4-sided adaptive configuration for Decision 1 routing and crop framing."""
 
     policy: str = "4sided"
-    verify_merges: bool = True
     image_resolution: Optional[str] = "medium"
     adaptive_tall_resolution: Optional[str] = "high"
     max_height: int = 1024
@@ -73,11 +80,9 @@ class DecisionPolicyConfig:
 
     def __post_init__(self) -> None:
         if self.policy != "4sided":
-            raise ValueError(f"Unsupported decision policy '{self.policy}'. Only '4sided' is supported in V6.1.")
-
-    @property
-    def checks_merge_pairs(self) -> bool:
-        return bool(self.verify_merges)
+            raise ValueError(f"Unsupported decision policy '{self.policy}'. Only '4sided' is supported.")
+        if self.image_resolution != "medium" or self.adaptive_tall_resolution != "high":
+            raise ValueError("Decision input resolution must stay fixed at medium / high adaptive.")
 
 
 _EDGE_CRITERIA: Dict[str, str] = {
@@ -813,7 +818,55 @@ def _record_usage_and_latency(telemetry: Dict[str, Any], phase: str, usage: Any,
         telemetry["image_tokens"] += int(parsed["image_tokens"])
 
 
-def _is_valid_raw_cache_entry(p: PanelItem, entry: Any, cache_version: str) -> bool:
+def _verify_panel_disk_image(chap_dir: Path, p: PanelItem) -> Tuple[Path, str, int, int]:
+    """Verifies on-disk panel existence, SHA-256 bytes, and image dimensions before cache/API use."""
+    root = chap_dir.resolve()
+    panels_root = root / "panels"
+    img_path = (root / p.relative_path).resolve()
+    if not img_path.is_relative_to(panels_root) or not img_path.is_file() or img_path.stat().st_size <= 0:
+        raise DomainValidationError(
+            f"Missing or unreadable panel file '{p.relative_path}' for '{p.panel_id}'; re-run 'segment --force'."
+        )
+    actual_sha = calculate_sha256(img_path)
+    if actual_sha != p.sha256:
+        raise DomainValidationError(
+            f"Panel '{p.panel_id}' byte checksum mismatch on disk; re-run 'segment --force'."
+        )
+    try:
+        with Image.open(img_path) as im:
+            im.load()
+            actual_w, actual_h = im.size
+    except Exception as exc:
+        raise DomainValidationError(
+            f"Corrupt panel image '{p.panel_id}' on disk ({exc}); re-run 'segment --force'."
+        ) from exc
+    if (actual_w, actual_h) != (p.width, p.height):
+        raise DomainValidationError(
+            f"Panel '{p.panel_id}' dimensions mismatch (disk {actual_w}x{actual_h} != manifest {p.width}x{p.height}); re-run 'segment --force'."
+        )
+    return img_path, actual_sha, actual_w, actual_h
+
+
+def _is_complete_raw_answers(answers: Any) -> bool:
+    if not isinstance(answers, dict):
+        return False
+    for q_key in REQUIRED_RAW_QUESTION_KEYS:
+        ans = answers.get(q_key)
+        if not isinstance(ans, dict):
+            return False
+        choice = ans.get("choice")
+        if not isinstance(choice, str) or not choice.strip():
+            return False
+    return True
+
+
+def _is_valid_raw_cache_entry(
+    p: PanelItem,
+    entry: Any,
+    cache_version: str,
+    *,
+    expect_child_pass2: bool = False,
+) -> bool:
     if not isinstance(entry, dict):
         return False
     if entry.get("sha256") != p.sha256:
@@ -822,9 +875,16 @@ def _is_valid_raw_cache_entry(p: PanelItem, entry: Any, cache_version: str) -> b
         return False
     if entry.get("cache_version") != cache_version:
         return False
-    return bool(entry.get("blocked")) or (
-        isinstance(entry.get("raw_answers"), dict) and len(entry["raw_answers"]) > 0
-    )
+    if expect_child_pass2:
+        if entry.get("panel_origin") != "child_pass2":
+            return False
+        meta = p.evidence_metadata or {}
+        if "source_raw_panels" in entry and entry.get("source_raw_panels") != meta.get("source_raw_panels"):
+            return False
+        if "source_raw_sha256s" in entry and entry.get("source_raw_sha256s") != meta.get("source_raw_sha256s"):
+            return False
+    blocked_ok = bool(entry.get("blocked")) and isinstance(entry.get("review_reason"), str) and bool(entry.get("review_reason"))
+    return blocked_ok or _is_complete_raw_answers(entry.get("raw_answers"))
 
 
 def _raw_payload_from_cache_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -833,41 +893,80 @@ def _raw_payload_from_cache_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
     return {"answers": entry["raw_answers"], "usage": {}, "_meta": {}}
 
 
-def _resolve_reapply_cache_entry(
-    p: PanelItem,
-    cached_raw: Dict[str, Any],
-    cache_version: str,
-) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Resolves a strict raw cache entry for `--reapply-policy` without inheriting parent answers."""
-    repack_op = (p.evidence_metadata or {}).get("repack_op")
-    if repack_op in ("split_at", "merge"):
-        p2_entry = cached_raw.get(f"__pass2_{p.panel_id}")
-        if _is_valid_raw_cache_entry(p, p2_entry, cache_version):
-            return p2_entry, "child_pass2"
-        direct = cached_raw.get(p.panel_id)
-        if (
-            isinstance(direct, dict)
-            and direct.get("panel_origin") == "child_pass2"
-            and _is_valid_raw_cache_entry(p, direct, cache_version)
-        ):
-            return direct, "child_pass2"
-        return None, "missing_or_invalid_child_pass2_cache"
-
-    direct = cached_raw.get(p.panel_id)
-    if not isinstance(direct, dict):
-        return None, "missing_cache_entry"
-    if direct.get("sha256") != p.sha256:
-        return None, "sha256_mismatch"
-    if direct.get("width") != p.width or direct.get("height") != p.height:
-        return None, "dimension_mismatch"
-    if direct.get("cache_version") != cache_version:
-        return None, "cache_version_mismatch"
-    if not (
-        bool(direct.get("blocked"))
-        or (isinstance(direct.get("raw_answers"), dict) and len(direct["raw_answers"]) > 0)
+def _is_valid_split_cache_entry(p: PanelItem, entry: Any, cache_version: str) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if (
+        entry.get("sha256") != p.sha256
+        or entry.get("width") != p.width
+        or entry.get("height") != p.height
+        or entry.get("cache_version") != cache_version
     ):
-        return None, "empty_raw_answers"
-    return direct, str(direct.get("panel_origin") or "raw_pass1")
+        return False
+    cuts = entry.get("cuts")
+    if cuts is None:
+        return bool(entry.get("reason"))
+    return (
+        isinstance(cuts, list)
+        and len(cuts) > 0
+        and all(isinstance(c, (int, float)) and not isinstance(c, bool) and 0.0 < float(c) < 1.0 for c in cuts)
+    )
+
+
+def _resolve_post_repack_record(
+    p: PanelItem,
+    pass1_records: Dict[str, Dict[str, Any]],
+    pass2_records: Dict[str, Dict[str, Any]],
+) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    """Resolves verified post-repack decision & raw payload using explicit lineage before panel_id."""
+    meta = p.evidence_metadata or {}
+    repack_op = meta.get("repack_op")
+    if repack_op in ("split_at", "merge"):
+        rec = pass2_records.get(p.panel_id)
+        if rec is not None and rec["sha256"] == p.sha256 and (rec["width"], rec["height"]) == (p.width, p.height):
+            return dict(rec["dec"]), rec["raw"], "child_pass2"
+        p1_rec = pass1_records.get(p.panel_id)
+        if (
+            p1_rec is not None
+            and p1_rec.get("origin") == "child_pass2"
+            and p1_rec["sha256"] == p.sha256
+            and (p1_rec["width"], p1_rec["height"]) == (p.width, p.height)
+            and p1_rec.get("source_raw_panels") == meta.get("source_raw_panels")
+            and p1_rec.get("source_raw_sha256s") == meta.get("source_raw_sha256s")
+        ):
+            dec_copy = dict(p1_rec["dec"])
+            dec_copy["structure_action"] = "ok_single"
+            return dec_copy, p1_rec["raw"], "child_pass2"
+        raise DomainValidationError(
+            f"Missing child Pass 2 decision for repacked panel '{p.panel_id}'; refusing parent fallback."
+        )
+
+    if repack_op in ("keep", "drop"):
+        src_ids = meta.get("source_raw_panels") or []
+        src_shas = meta.get("source_raw_sha256s") or []
+        if len(src_ids) != 1 or len(src_shas) != 1:
+            raise DomainValidationError(
+                f"Invalid source lineage metadata on repacked panel '{p.panel_id}'; run 'segment --force' or repair panel_plan."
+            )
+        src_id, src_sha = str(src_ids[0]), str(src_shas[0])
+        src_rec = pass1_records.get(src_id)
+        if (
+            src_rec is None
+            or src_rec["sha256"] != src_sha
+            or src_sha != p.sha256
+            or (src_rec["width"], src_rec["height"]) != (p.width, p.height)
+        ):
+            raise DomainValidationError(
+                f"Lineage mismatch for repacked panel '{p.panel_id}' (expected source '{src_id}' / {src_sha[:8]})."
+            )
+        return dict(src_rec["dec"]), src_rec["raw"], str(src_rec.get("origin") or "raw_pass1")
+
+    rec = pass1_records.get(p.panel_id)
+    if rec is None or rec["sha256"] != p.sha256 or (rec["width"], rec["height"]) != (p.width, p.height):
+        raise DomainValidationError(
+            f"Missing verified Pass 1 decision for panel '{p.panel_id}' ({p.sha256[:8]})."
+        )
+    return dict(rec["dec"]), rec["raw"], str(rec.get("origin") or "raw_pass1")
 
 
 def _apply_decision_to_panel(
@@ -942,34 +1041,28 @@ def run_decision_pipeline(
     *,
     api_key: Optional[str] = None,
     max_workers: int = 3,
-    reclassify_all: bool = False,
-    refresh_decisions: bool = False,
-    reapply_policy: bool = False,
-    dry_run: bool = False,
+    refresh: bool = False,
     client: Optional[DecisionClient] = None,
     config: Optional[DecisionPolicyConfig] = None,
 ) -> Dict[str, Any]:
     """
     2-Pass non-duplicative Decision API pipeline:
-      Pass 1: Evaluate raw panels (group 1/2/3, split/merge candidate, display crop, motion).
+      Pass 1: Evaluate raw panels (group 1/2/3, split/merge candidate, 4-sided crop).
       Split/Merge: Guarded resolution via VCS continuity + semantic cut/merge checks.
-      Pass 2: Re-classify ONLY newly created split/merged child panels (0 duplicate calls on unchanged).
+      Pass 2: Re-classify ONLY newly created split/merged child panels.
     """
     cfg = config or DecisionPolicyConfig()
-    if reapply_policy and (refresh_decisions or reclassify_all):
-        raise DomainValidationError(
-            "Cannot combine --reapply-policy with --refresh-decisions or --reclassify-all."
-        )
     chap_dir = Path(chapter_dir)
     manifest = load_manifest(chap_dir)
     if manifest is None or not manifest.panels:
         raise ValueError(f"Missing or empty manifest.json in {chap_dir}; run 'segment' first.")
 
-    owns_client = client is None and not reapply_policy
-    transport: Optional[DecisionClient] = (
-        client if client is not None else (None if reapply_policy else DecisionClient(retry_jitter=0.15))
-    )
-    model_name = transport.model if transport is not None else DECISIONS_MODEL
+    for p in manifest.panels:
+        _verify_panel_disk_image(chap_dir, p)
+
+    owns_client = client is None
+    transport: DecisionClient = client if client is not None else DecisionClient(retry_jitter=0.15)
+    model_name = transport.model or DECISIONS_MODEL
     try:
         cache_version = compute_decision_cache_version(model_name, config=cfg)
         panels = manifest.panels
@@ -986,64 +1079,41 @@ def run_decision_pipeline(
             except Exception:
                 cached_raw = {}
 
-        force_refresh = bool(refresh_decisions or reclassify_all) and not reapply_policy
-        pass1_raw: Dict[str, Dict[str, Any]] = {}
+        force_refresh = bool(refresh)
         pass1: Dict[str, Dict[str, Any]] = {}
-        pass2_raw: Dict[str, Dict[str, Any]] = {}
-        panel_origins: Dict[str, str] = {}
+        pass1_records: Dict[str, Dict[str, Any]] = {}
+        pass2_records: Dict[str, Dict[str, Any]] = {}
         cache_hits_pass1 = 0
-        reapply_invalid: Dict[str, str] = {}
 
-        if reapply_policy:
+        if not force_refresh:
             for p in panels:
-                entry, reason_or_origin = _resolve_reapply_cache_entry(p, cached_raw, cache_version)
-                if entry is None:
-                    reapply_invalid[p.panel_id] = reason_or_origin
-                    continue
-                raw_rec = _raw_payload_from_cache_entry(entry)
-                dec = interpret_panel_answers(raw_rec, p.width, p.height, config=cfg)
-                if (p.evidence_metadata or {}).get("repack_op") in ("split_at", "merge"):
-                    dec["structure_action"] = "ok_single"
-                pass1_raw[p.panel_id] = raw_rec
-                pass1[p.panel_id] = dec
-                panel_origins[p.panel_id] = reason_or_origin
-                cache_hits_pass1 += 1
-        elif not force_refresh:
-            for p in panels:
-                entry = cached_raw.get(p.panel_id)
-                if _is_valid_raw_cache_entry(p, entry, cache_version) and isinstance(entry.get("decision"), dict):
+                expect_child = (p.evidence_metadata or {}).get("repack_op") in ("split_at", "merge")
+                entry = cached_raw.get(f"__pass2_{p.panel_id}") if expect_child else cached_raw.get(p.panel_id)
+                if not entry and not expect_child:
+                    entry = cached_raw.get(p.panel_id)
+                elif expect_child and not _is_valid_raw_cache_entry(p, entry, cache_version, expect_child_pass2=True):
+                    entry = cached_raw.get(p.panel_id)
+                if _is_valid_raw_cache_entry(p, entry, cache_version, expect_child_pass2=expect_child) and isinstance(
+                    entry.get("decision"), dict
+                ):
                     raw_rec = _raw_payload_from_cache_entry(entry)
-                    pass1_raw[p.panel_id] = raw_rec
-                    pass1[p.panel_id] = dict(entry["decision"])
-                    panel_origins[p.panel_id] = str(entry.get("panel_origin") or "raw_pass1")
+                    dec_copy = dict(entry["decision"])
+                    origin = "child_pass2" if expect_child else str(entry.get("panel_origin") or "raw_pass1")
+                    pass1[p.panel_id] = dec_copy
+                    pass1_records[p.panel_id] = {
+                        "dec": dec_copy,
+                        "raw": raw_rec,
+                        "sha256": p.sha256,
+                        "width": p.width,
+                        "height": p.height,
+                        "origin": origin,
+                        "source_raw_panels": (p.evidence_metadata or {}).get("source_raw_panels"),
+                        "source_raw_sha256s": (p.evidence_metadata or {}).get("source_raw_sha256s"),
+                    }
                     cache_hits_pass1 += 1
 
         pending = [p for p in panels if p.panel_id not in pass1]
-        if dry_run:
-            return {
-                "dry_run": True,
-                "project_slug": manifest.project_slug,
-                "chapter_number": manifest.chapter_number,
-                "model": model_name,
-                "policy": cfg.policy,
-                "cache_version": cache_version,
-                "total_panels": len(panels),
-                "pass1_cached": cache_hits_pass1,
-                "pass1_pending": len(pending),
-                "reapply_policy": reapply_policy,
-                "reapply_ready": len(reapply_invalid) == 0 if reapply_policy else None,
-                "reapply_invalid_panels": reapply_invalid if reapply_policy else {},
-                "refresh_decisions": force_refresh,
-            }
-
-        if reapply_policy and reapply_invalid:
-            summary_items = ", ".join(f"{pid}:{why}" for pid, why in sorted(reapply_invalid.items())[:8])
-            raise DomainValidationError(
-                f"Offline --reapply-policy preflight failed for {len(reapply_invalid)} panel(s): {summary_items}"
-            )
-
-        need_api = (bool(pending) or force_refresh) and not reapply_policy
-        key = resolve_gemini_api_key(api_key) if need_api else (api_key or "")
+        key = resolve_gemini_api_key(api_key) if (bool(pending) or force_refresh) else (api_key or "")
 
         telemetry: Dict[str, Any] = {
             "requests": {},
@@ -1065,57 +1135,53 @@ def run_decision_pipeline(
             with cache_lock:
                 atomic_write_json(cache_path, cache_payload)
 
-        if reapply_policy:
-            logger.info(
-                f"DecisionEngine Reapply Policy ({cfg.policy}): re-evaluating {len(panels)} cached panels offline..."
-            )
-            repack_res: Dict[str, Any] = {"fast_path": "reapply_policy_in_place", "split_diagnostics": {}}
-            split_cuts: Dict[str, List[float]] = {}
-            to_reclassify: List[PanelItem] = []
-            merge_diagnostics: List[Dict[str, Any]] = []
-            pass2: Dict[str, Dict[str, Any]] = {}
-            updated_manifest = manifest.model_copy(deep=True)
-        else:
-            assert transport is not None
-            logger.info(
-                f"DecisionEngine Pass 1 ({cfg.policy}): {len(pending)} pending / {len(panels)} total via {model_name}..."
-            )
-            if pending:
-                first_error: Optional[BaseException] = None
-                completed_since_flush = 0
-                try:
-                    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                        futures = {
-                            pool.submit(
-                                _evaluate_panel_raw,
-                                chap_dir / p.relative_path,
-                                p.width,
-                                p.height,
-                                key,
-                                client=transport,
-                                config=cfg,
-                            ): p
-                            for p in pending
-                        }
-                        for fut in as_completed(futures):
-                            p = futures[fut]
-                            try:
-                                raw_res = fut.result()
-                                dec = interpret_panel_answers(raw_res, p.width, p.height, config=cfg)
-                                pass1_raw[p.panel_id] = raw_res
-                                pass1[p.panel_id] = dec
-                                origin = (
-                                    "child_pass2"
-                                    if (p.evidence_metadata or {}).get("repack_op") in ("split_at", "merge")
-                                    else "raw_pass1"
+        logger.info(
+            f"DecisionEngine Pass 1 ({cfg.policy}): {len(pending)} pending / {len(panels)} total via {model_name}..."
+        )
+        if pending:
+            first_error: Optional[BaseException] = None
+            completed_since_flush = 0
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                    futures = {
+                        pool.submit(
+                            _evaluate_panel_raw,
+                            chap_dir / p.relative_path,
+                            p.width,
+                            p.height,
+                            key,
+                            client=transport,
+                            config=cfg,
+                        ): p
+                        for p in pending
+                    }
+                    for fut in as_completed(futures):
+                        p = futures[fut]
+                        try:
+                            raw_res = fut.result()
+                            dec = interpret_panel_answers(raw_res, p.width, p.height, config=cfg)
+                            is_child = (p.evidence_metadata or {}).get("repack_op") in ("split_at", "merge")
+                            origin = "child_pass2" if is_child else "raw_pass1"
+                            if is_child:
+                                dec["structure_action"] = "ok_single"
+                            pass1[p.panel_id] = dec
+                            pass1_records[p.panel_id] = {
+                                "dec": dict(dec),
+                                "raw": raw_res,
+                                "sha256": p.sha256,
+                                "width": p.width,
+                                "height": p.height,
+                                "origin": origin,
+                                "source_raw_panels": (p.evidence_metadata or {}).get("source_raw_panels"),
+                                "source_raw_sha256s": (p.evidence_metadata or {}).get("source_raw_sha256s"),
+                            }
+                            if raw_res.get("blocked"):
+                                telemetry["content_blocked_panels"].append(p.panel_id)
+                            else:
+                                _record_usage_and_latency(
+                                    telemetry, "pass1", raw_res.get("usage"), raw_res.get("_meta")
                                 )
-                                panel_origins[p.panel_id] = origin
-                                if raw_res.get("blocked"):
-                                    telemetry["content_blocked_panels"].append(p.panel_id)
-                                else:
-                                    _record_usage_and_latency(
-                                        telemetry, "pass1", raw_res.get("usage"), raw_res.get("_meta")
-                                    )
+                            if raw_res.get("blocked") or _is_complete_raw_answers(raw_res.get("answers")):
                                 with cache_lock:
                                     cache_payload[p.panel_id] = {
                                         "sha256": p.sha256,
@@ -1126,256 +1192,281 @@ def run_decision_pipeline(
                                         "blocked": bool(raw_res.get("blocked")),
                                         "review_reason": raw_res.get("review_reason"),
                                         "panel_origin": origin,
+                                        "source_raw_panels": (p.evidence_metadata or {}).get("source_raw_panels"),
+                                        "source_raw_sha256s": (p.evidence_metadata or {}).get("source_raw_sha256s"),
                                         "decision": {k: v for k, v in dec.items() if k != "raw_answers"},
                                     }
-                                completed_since_flush += 1
-                                if completed_since_flush >= 10:
-                                    completed_since_flush = 0
-                                    _flush_cache()
-                            except BaseException as exc:
-                                if first_error is None:
-                                    first_error = exc
-                finally:
-                    if pass1:
-                        _flush_cache()
-                if first_error is not None:
-                    raise first_error
-
-            # Resolve split cut positions with cache
-            split_targets = [p for p in panels if pass1[p.panel_id]["structure_action"] == "needs_split"]
-            split_cuts = {}
-            if split_targets:
-                logger.info(f"DecisionEngine: Resolving cut positions for {len(split_targets)} multi-frame panels...")
-                to_query_split: List[PanelItem] = []
-                for p in split_targets:
-                    s_key = f"__split_{p.panel_id}"
-                    cached_s = cache_payload.get(s_key) if not force_refresh else None
-                    if (
-                        isinstance(cached_s, dict)
-                        and cached_s.get("sha256") == p.sha256
-                        and cached_s.get("width") == p.width
-                        and cached_s.get("height") == p.height
-                        and cached_s.get("cache_version") == cache_version
-                    ):
-                        telemetry["cache_hits"]["split"] += 1
-                        if cached_s.get("cuts"):
-                            split_cuts[p.panel_id] = list(cached_s["cuts"])
-                    else:
-                        to_query_split.append(p)
-                if to_query_split:
-                    with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_split))) as pool:
-                        futs = {
-                            pool.submit(
-                                _choose_cut_ratios_detailed,
-                                chap_dir,
-                                p.panel_id,
-                                p.height / float(max(1, p.width)),
-                                key,
-                                client=transport,
-                                config=cfg,
-                            ): p
-                            for p in to_query_split
-                        }
-                        for fut in as_completed(futs):
-                            p = futs[fut]
-                            sres = fut.result()
-                            if sres.get("usage") or (sres.get("_meta") or {}).get("latency_ms"):
-                                _record_usage_and_latency(
-                                    telemetry, "split_select", sres.get("usage"), sres.get("_meta")
-                                )
-                            if sres.get("cuts"):
-                                split_cuts[p.panel_id] = list(sres["cuts"])
-                            cache_payload[f"__split_{p.panel_id}"] = {
-                                "sha256": p.sha256,
-                                "width": p.width,
-                                "height": p.height,
-                                "cache_version": cache_version,
-                                "cuts": sres.get("cuts"),
-                                "reason": sres.get("reason"),
-                            }
+                            completed_since_flush += 1
+                            if completed_since_flush >= 10:
+                                completed_since_flush = 0
+                                _flush_cache()
+                        except BaseException as exc:
+                            if first_error is None:
+                                first_error = exc
+            finally:
+                if pass1:
                     _flush_cache()
+            if first_error is not None:
+                raise first_error
 
-            # Build PanelPlan resolving needs_split and semantically verified merge_with_prev
-            plan_items: List[PanelPlanItem] = []
-            merge_diagnostics = []
-            for idx, p in enumerate(panels):
-                dec = pass1[p.panel_id]
-                status = PanelStatus(dec["status"])
-
-                can_try_merge = (
-                    dec["structure_action"] == "merge_with_prev"
-                    and idx > 0
-                    and bool(plan_items)
-                    and plan_items[-1].op in (PanelPlanOp.KEEP, PanelPlanOp.MERGE)
-                    and plan_items[-1].group != PanelStatus.SKIP
-                    and status != PanelStatus.SKIP
-                )
-                if can_try_merge:
-                    prev_panel = panels[idx - 1]
-                    contig_ok, vcs_gap, vcs_reason = _is_vcs_merge_contiguous(
-                        prev_panel,
-                        p,
-                        max_gap_px=cfg.max_merge_vcs_gap_px,
-                    )
-                    allow_merge = False
-                    merge_action = vcs_reason
-                    if contig_ok:
-                        if not cfg.checks_merge_pairs:
-                            merge_action = "merge_verification_required"
-                        else:
-                            m_key = f"__merge_{prev_panel.panel_id}_{p.panel_id}"
-                            cached_m = cache_payload.get(m_key) if not force_refresh else None
-                            pair_sig = {
-                                "prev_sha256": prev_panel.sha256,
-                                "curr_sha256": p.sha256,
-                                "prev_size": [prev_panel.width, prev_panel.height],
-                                "curr_size": [p.width, p.height],
-                                "vcs_gap_px": int(vcs_gap or 0),
-                            }
-                            if (
-                                isinstance(cached_m, dict)
-                                and cached_m.get("cache_version") == cache_version
-                                and cached_m.get("pair_signature") == pair_sig
-                                and isinstance(cached_m.get("result"), dict)
-                            ):
-                                mres = dict(cached_m["result"])
-                                telemetry["cache_hits"]["merge"] += 1
-                            else:
-                                mres = verify_merge_pair_via_decision(
-                                    chap_dir,
-                                    prev_panel,
-                                    p,
-                                    int(vcs_gap or 0),
-                                    key,
-                                    client=transport,
-                                    config=cfg,
-                                )
-                                _record_usage_and_latency(
-                                    telemetry, "merge_verify", mres.get("usage"), mres.get("_meta")
-                                )
-                                cache_payload[m_key] = {
-                                    "pair_signature": pair_sig,
-                                    "cache_version": cache_version,
-                                    "result": {"action": mres["action"], "confidence": mres.get("confidence")},
-                                }
-                            merge_action = mres["action"]
-                            allow_merge = merge_action == "merge"
-                            if merge_action == "uncertain":
-                                status = PanelStatus.NEEDS_REVIEW
-                                dec["status"] = PanelStatus.NEEDS_REVIEW.value
-                                dec["decision_valid"] = False
-                                dec["crop_safe"] = False
-                                dec["text_detection_uncertain"] = True
-                                dec["review_reason"] = "uncertain_merge_boundary"
-                    merge_diagnostics.append(
-                        {
-                            "prev_panel_id": prev_panel.panel_id,
-                            "curr_panel_id": p.panel_id,
-                            "vcs_contiguous": contig_ok,
-                            "vcs_gap_px": vcs_gap,
-                            "vcs_reason": vcs_reason,
-                            "action": merge_action,
-                            "merged": allow_merge,
-                        }
-                    )
-                    if allow_merge:
-                        prev_item = plan_items[-1]
-                        plan_items[-1] = PanelPlanItem(
-                            op=PanelPlanOp.MERGE,
-                            source_panel_ids=prev_item.source_panel_ids + [p.panel_id],
-                            group=prev_item.group,
-                            reason="decision_merge_fragment",
-                        )
-                        continue
-
-                if p.panel_id in split_cuts:
-                    plan_items.append(
-                        PanelPlanItem(
-                            op=PanelPlanOp.SPLIT_AT,
-                            source_panel_ids=[p.panel_id],
-                            group=PanelStatus.ACTIVE,
-                            cut_ratios=split_cuts[p.panel_id],
-                            reason="decision_split_multi_frame",
-                        )
-                    )
-                elif status == PanelStatus.SKIP:
-                    plan_items.append(
-                        PanelPlanItem(
-                            op=PanelPlanOp.DROP,
-                            source_panel_ids=[p.panel_id],
-                            group=PanelStatus.SKIP,
-                            reason="decision_group_3_skip",
-                        )
-                    )
+        # Resolve split cut positions with cache
+        split_targets = [p for p in panels if pass1[p.panel_id]["structure_action"] == "needs_split"]
+        split_cuts: Dict[str, List[float]] = {}
+        if split_targets:
+            logger.info(f"DecisionEngine: Resolving cut positions for {len(split_targets)} multi-frame panels...")
+            to_query_split: List[PanelItem] = []
+            for p in split_targets:
+                s_key = f"__split_{p.panel_id}"
+                cached_s = cache_payload.get(s_key) if not force_refresh else None
+                if _is_valid_split_cache_entry(p, cached_s, cache_version):
+                    telemetry["cache_hits"]["split"] += 1
+                    if cached_s.get("cuts"):
+                        split_cuts[p.panel_id] = list(cached_s["cuts"])
                 else:
-                    plan_items.append(
-                        PanelPlanItem(
-                            op=PanelPlanOp.KEEP,
-                            source_panel_ids=[p.panel_id],
-                            group=status,
-                            tall_motion_hint=dec["motion_mode"] if status == PanelStatus.ACTIVE else None,
-                            reason=f"decision_{dec['panel_group']}",
-                        )
-                    )
-
-            plan = PanelPlan(
-                project_slug=manifest.project_slug,
-                chapter_number=manifest.chapter_number,
-                items=plan_items,
-            )
-            atomic_write_json(chap_dir / "panel_plan.json", plan)
-            repack_res = apply_panel_plan(chap_dir, plan, regenerate_sheets=False)
-
-            # Pass 2: Re-classify ONLY newly split or merged child panels (never fall back to parent decisions)
-            updated_manifest = load_manifest(chap_dir)
-            assert updated_manifest is not None
-            to_reclassify = [
-                p
-                for p in updated_manifest.panels
-                if p.evidence_metadata.get("repack_op") in ("split_at", "merge")
-                and panel_origins.get(p.panel_id) != "child_pass2"
-            ]
-            pass2 = {}
-            if to_reclassify:
-                logger.info(f"DecisionEngine Pass 2: Classifying {len(to_reclassify)} newly split/merged panels...")
-                to_query_p2: List[PanelItem] = []
-                for p in to_reclassify:
-                    c2_key = f"__pass2_{p.panel_id}"
-                    cached_p2 = cache_payload.get(c2_key) if not force_refresh else None
-                    if _is_valid_raw_cache_entry(p, cached_p2, cache_version) and isinstance(
-                        cached_p2.get("decision"), dict
-                    ):
-                        pass2_raw[p.panel_id] = _raw_payload_from_cache_entry(cached_p2)
-                        pass2[p.panel_id] = dict(cached_p2["decision"])
-                        telemetry["cache_hits"]["pass2"] += 1
-                    else:
-                        to_query_p2.append(p)
-                if to_query_p2:
-                    with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_p2))) as pool:
-                        futs = {
-                            pool.submit(
-                                _evaluate_panel_raw,
-                                chap_dir / p.relative_path,
-                                p.width,
-                                p.height,
-                                key,
-                                client=transport,
-                                config=cfg,
-                            ): p
-                            for p in to_query_p2
+                    to_query_split.append(p)
+            if to_query_split:
+                with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_split))) as pool:
+                    futs = {
+                        pool.submit(
+                            _choose_cut_ratios_detailed,
+                            chap_dir,
+                            p.panel_id,
+                            p.height / float(max(1, p.width)),
+                            key,
+                            client=transport,
+                            config=cfg,
+                        ): p
+                        for p in to_query_split
+                    }
+                    for fut in as_completed(futs):
+                        p = futs[fut]
+                        sres = fut.result()
+                        if sres.get("usage") or (sres.get("_meta") or {}).get("latency_ms"):
+                            _record_usage_and_latency(
+                                telemetry, "split_select", sres.get("usage"), sres.get("_meta")
+                            )
+                        if sres.get("cuts"):
+                            split_cuts[p.panel_id] = list(sres["cuts"])
+                        cache_payload[f"__split_{p.panel_id}"] = {
+                            "sha256": p.sha256,
+                            "width": p.width,
+                            "height": p.height,
+                            "cache_version": cache_version,
+                            "cuts": sres.get("cuts"),
+                            "reason": sres.get("reason"),
                         }
-                        for fut in as_completed(futs):
-                            p = futs[fut]
-                            raw_res = fut.result()
-                            dec = interpret_panel_answers(raw_res, p.width, p.height, config=cfg)
-                            pass2_raw[p.panel_id] = raw_res
-                            pass2[p.panel_id] = dec
-                            if raw_res.get("blocked"):
-                                telemetry["content_blocked_panels"].append(p.panel_id)
-                            else:
-                                _record_usage_and_latency(
-                                    telemetry, "pass2", raw_res.get("usage"), raw_res.get("_meta")
-                                )
+                _flush_cache()
+
+        # Build PanelPlan resolving needs_split and semantically verified merge_with_prev
+        plan_items: List[PanelPlanItem] = []
+        merge_diagnostics: List[Dict[str, Any]] = []
+        for idx, p in enumerate(panels):
+            dec = pass1[p.panel_id]
+            status = PanelStatus(dec["status"])
+
+            can_try_merge = (
+                dec["structure_action"] == "merge_with_prev"
+                and idx > 0
+                and bool(plan_items)
+                and plan_items[-1].op in (PanelPlanOp.KEEP, PanelPlanOp.MERGE)
+                and plan_items[-1].group != PanelStatus.SKIP
+                and status != PanelStatus.SKIP
+            )
+            if can_try_merge:
+                prev_panel = panels[idx - 1]
+                contig_ok, vcs_gap, vcs_reason = _is_vcs_merge_contiguous(
+                    prev_panel,
+                    p,
+                    max_gap_px=cfg.max_merge_vcs_gap_px,
+                )
+                allow_merge = False
+                merge_action = vcs_reason
+                if contig_ok:
+                    m_key = f"__merge_{prev_panel.panel_id}_{p.panel_id}"
+                    cached_m = cache_payload.get(m_key) if not force_refresh else None
+                    pair_sig = {
+                        "prev_sha256": prev_panel.sha256,
+                        "curr_sha256": p.sha256,
+                        "prev_size": [prev_panel.width, prev_panel.height],
+                        "curr_size": [p.width, p.height],
+                        "vcs_gap_px": int(vcs_gap or 0),
+                    }
+                    if (
+                        isinstance(cached_m, dict)
+                        and cached_m.get("cache_version") == cache_version
+                        and cached_m.get("pair_signature") == pair_sig
+                        and isinstance(cached_m.get("result"), dict)
+                        and cached_m["result"].get("action") in ("merge", "keep_separate", "uncertain")
+                    ):
+                        mres = dict(cached_m["result"])
+                        telemetry["cache_hits"]["merge"] += 1
+                    else:
+                        mres = verify_merge_pair_via_decision(
+                            chap_dir,
+                            prev_panel,
+                            p,
+                            int(vcs_gap or 0),
+                            key,
+                            client=transport,
+                            config=cfg,
+                        )
+                        _record_usage_and_latency(
+                            telemetry, "merge_verify", mres.get("usage"), mres.get("_meta")
+                        )
+                        cache_payload[m_key] = {
+                            "pair_signature": pair_sig,
+                            "cache_version": cache_version,
+                            "result": {"action": mres["action"], "confidence": mres.get("confidence")},
+                        }
+                    merge_action = mres["action"]
+                    allow_merge = merge_action == "merge"
+                    if merge_action == "uncertain":
+                        status = PanelStatus.NEEDS_REVIEW
+                        dec["status"] = PanelStatus.NEEDS_REVIEW.value
+                        dec["decision_valid"] = False
+                        dec["crop_safe"] = False
+                        dec["text_detection_uncertain"] = True
+                        dec["review_reason"] = "uncertain_merge_boundary"
+                merge_diagnostics.append(
+                    {
+                        "prev_panel_id": prev_panel.panel_id,
+                        "curr_panel_id": p.panel_id,
+                        "vcs_contiguous": contig_ok,
+                        "vcs_gap_px": vcs_gap,
+                        "vcs_reason": vcs_reason,
+                        "action": merge_action,
+                        "merged": allow_merge,
+                    }
+                )
+                if allow_merge:
+                    prev_item = plan_items[-1]
+                    plan_items[-1] = PanelPlanItem(
+                        op=PanelPlanOp.MERGE,
+                        source_panel_ids=prev_item.source_panel_ids + [p.panel_id],
+                        group=prev_item.group,
+                        reason="decision_merge_fragment",
+                    )
+                    continue
+
+            if p.panel_id in split_cuts:
+                plan_items.append(
+                    PanelPlanItem(
+                        op=PanelPlanOp.SPLIT_AT,
+                        source_panel_ids=[p.panel_id],
+                        group=PanelStatus.ACTIVE,
+                        cut_ratios=split_cuts[p.panel_id],
+                        reason="decision_split_multi_frame",
+                    )
+                )
+            elif status == PanelStatus.SKIP:
+                plan_items.append(
+                    PanelPlanItem(
+                        op=PanelPlanOp.DROP,
+                        source_panel_ids=[p.panel_id],
+                        group=PanelStatus.SKIP,
+                        reason="decision_group_3_skip",
+                    )
+                )
+            else:
+                plan_items.append(
+                    PanelPlanItem(
+                        op=PanelPlanOp.KEEP,
+                        source_panel_ids=[p.panel_id],
+                        group=status,
+                        tall_motion_hint=dec["motion_mode"] if status == PanelStatus.ACTIVE else None,
+                        reason=f"decision_{dec['panel_group']}",
+                    )
+                )
+
+        plan = PanelPlan(
+            project_slug=manifest.project_slug,
+            chapter_number=manifest.chapter_number,
+            items=plan_items,
+        )
+        atomic_write_json(chap_dir / "panel_plan.json", plan)
+        repack_res = apply_panel_plan(chap_dir, plan, regenerate_sheets=False)
+
+        updated_manifest = load_manifest(chap_dir)
+        assert updated_manifest is not None
+        for p in updated_manifest.panels:
+            _verify_panel_disk_image(chap_dir, p)
+
+        # Pass 2: Re-classify newly split/merged child panels (never parent-inherit!)
+        to_reclassify: List[PanelItem] = []
+        for p in updated_manifest.panels:
+            meta = p.evidence_metadata or {}
+            if meta.get("repack_op") in ("split_at", "merge"):
+                p1_rec = pass1_records.get(p.panel_id)
+                already_verified_child = (
+                    not force_refresh
+                    and repack_res.get("fast_path") == "metadata_only"
+                    and p1_rec is not None
+                    and p1_rec.get("origin") == "child_pass2"
+                    and p1_rec["sha256"] == p.sha256
+                    and (p1_rec["width"], p1_rec["height"]) == (p.width, p.height)
+                    and p1_rec.get("source_raw_panels") == meta.get("source_raw_panels")
+                    and p1_rec.get("source_raw_sha256s") == meta.get("source_raw_sha256s")
+                )
+                if not already_verified_child:
+                    to_reclassify.append(p)
+
+        if to_reclassify:
+            logger.info(f"DecisionEngine Pass 2: Classifying {len(to_reclassify)} newly split/merged panels...")
+            to_query_p2: List[PanelItem] = []
+            for p in to_reclassify:
+                c2_key = f"__pass2_{p.panel_id}"
+                cached_p2 = cache_payload.get(c2_key) if not force_refresh else None
+                if _is_valid_raw_cache_entry(p, cached_p2, cache_version, expect_child_pass2=True) and isinstance(
+                    cached_p2.get("decision"), dict
+                ):
+                    raw_rec = _raw_payload_from_cache_entry(cached_p2)
+                    dec_copy = dict(cached_p2["decision"])
+                    dec_copy["structure_action"] = "ok_single"
+                    pass2_records[p.panel_id] = {
+                        "dec": dec_copy,
+                        "raw": raw_rec,
+                        "sha256": p.sha256,
+                        "width": p.width,
+                        "height": p.height,
+                        "origin": "child_pass2",
+                    }
+                    telemetry["cache_hits"]["pass2"] += 1
+                else:
+                    to_query_p2.append(p)
+            if to_query_p2:
+                with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_p2))) as pool:
+                    futs = {
+                        pool.submit(
+                            _evaluate_panel_raw,
+                            chap_dir / p.relative_path,
+                            p.width,
+                            p.height,
+                            key,
+                            client=transport,
+                            config=cfg,
+                        ): p
+                        for p in to_query_p2
+                    }
+                    for fut in as_completed(futs):
+                        p = futs[fut]
+                        raw_res = fut.result()
+                        dec = interpret_panel_answers(raw_res, p.width, p.height, config=cfg)
+                        dec["structure_action"] = "ok_single"
+                        pass2_records[p.panel_id] = {
+                            "dec": dict(dec),
+                            "raw": raw_res,
+                            "sha256": p.sha256,
+                            "width": p.width,
+                            "height": p.height,
+                            "origin": "child_pass2",
+                        }
+                        if raw_res.get("blocked"):
+                            telemetry["content_blocked_panels"].append(p.panel_id)
+                        else:
+                            _record_usage_and_latency(
+                                telemetry, "pass2", raw_res.get("usage"), raw_res.get("_meta")
+                            )
+                        if raw_res.get("blocked") or _is_complete_raw_answers(raw_res.get("answers")):
                             cache_payload[f"__pass2_{p.panel_id}"] = {
                                 "sha256": p.sha256,
                                 "width": p.width,
@@ -1385,35 +1476,19 @@ def run_decision_pipeline(
                                 "blocked": bool(raw_res.get("blocked")),
                                 "review_reason": raw_res.get("review_reason"),
                                 "panel_origin": "child_pass2",
+                                "source_raw_panels": (p.evidence_metadata or {}).get("source_raw_panels"),
+                                "source_raw_sha256s": (p.evidence_metadata or {}).get("source_raw_sha256s"),
                                 "decision": {k: v for k, v in dec.items() if k != "raw_answers"},
                             }
 
         needs_review_panels: List[Dict[str, Any]] = []
+        resolved_by_panel_id: Dict[str, Tuple[Dict[str, Any], Dict[str, Any], str]] = {}
         for p in updated_manifest.panels:
-            repack_op = (p.evidence_metadata or {}).get("repack_op")
-            if p.panel_id in pass2:
-                dec = pass2[p.panel_id]
-            elif (
-                repack_op in ("split_at", "merge")
-                and not reapply_policy
-                and panel_origins.get(p.panel_id) != "child_pass2"
-            ):
-                raise DomainValidationError(
-                    f"Missing child Pass 2 decision for repacked panel '{p.panel_id}'; refusing parent fallback."
-                )
-            elif p.panel_id in pass1:
-                dec = pass1[p.panel_id]
-            else:
-                src_raw = (p.evidence_metadata.get("source_raw_panels") or [p.panel_id])[0]
-                if src_raw not in pass1:
-                    raise DomainValidationError(
-                        f"Missing Pass 1 decision for panel '{p.panel_id}' (source '{src_raw}')."
-                    )
-                dec = pass1[src_raw]
-
+            final_dec, raw_rec, origin = _resolve_post_repack_record(p, pass1_records, pass2_records)
+            resolved_by_panel_id[p.panel_id] = (final_dec, raw_rec, origin)
             _apply_decision_to_panel(
                 p,
-                dec,
+                final_dec,
                 model_name=model_name,
                 cfg=cfg,
                 needs_review_panels=needs_review_panels,
@@ -1429,15 +1504,9 @@ def run_decision_pipeline(
             else (not after_reviewable_ids)
         )
         need_regen_sheets = (
-            (
-                not reapply_policy
-                and (
-                    repack_res.get("fast_path") != "metadata_only"
-                    or orig_reviewable_ids != after_reviewable_ids
-                    or not sheets_present
-                )
-            )
-            or (reapply_policy and (orig_reviewable_ids != after_reviewable_ids or not sheets_present))
+            repack_res.get("fast_path") != "metadata_only"
+            or orig_reviewable_ids != after_reviewable_ids
+            or not sheets_present
         )
         if need_regen_sheets:
             for old_s in sheets_dir.glob("*"):
@@ -1448,7 +1517,7 @@ def run_decision_pipeline(
         after_panels_dump = [p.model_dump(mode="json") for p in updated_manifest.panels]
         after_sheets_dump = [cs.model_dump(mode="json") for cs in updated_manifest.contact_sheets]
         if (
-            (repack_res.get("fast_path") != "metadata_only" and not reapply_policy)
+            repack_res.get("fast_path") != "metadata_only"
             or after_panels_dump != orig_panels_dump
             or after_sheets_dump != orig_sheets_dump
         ):
@@ -1459,26 +1528,11 @@ def run_decision_pipeline(
             k: v for k, v in cache_payload.items() if str(k).startswith("__") and isinstance(v, dict)
         }
         for p in updated_manifest.panels:
-            repack_op = (p.evidence_metadata or {}).get("repack_op")
-            if p.panel_id in pass2:
-                final_dec = dict(pass2[p.panel_id])
-                raw_rec = pass2_raw[p.panel_id]
-                origin = "child_pass2"
-            elif repack_op in ("split_at", "merge"):
-                final_dec = dict(pass1[p.panel_id])
-                final_dec["structure_action"] = "ok_single"
-                raw_rec = pass1_raw[p.panel_id]
-                origin = "child_pass2"
-            elif p.panel_id in pass1:
-                final_dec = dict(pass1[p.panel_id])
-                raw_rec = pass1_raw[p.panel_id]
-                origin = panel_origins.get(p.panel_id, "raw_pass1")
-            else:
-                src_raw = (p.evidence_metadata.get("source_raw_panels") or [p.panel_id])[0]
-                final_dec = dict(pass1[src_raw])
-                raw_rec = pass1_raw[src_raw]
-                origin = "raw_pass1"
+            final_dec, raw_rec, origin = resolved_by_panel_id[p.panel_id]
+            final_dec = dict(final_dec)
             final_dec.pop("raw_answers", None)
+            if not raw_rec.get("blocked") and not _is_complete_raw_answers(raw_rec.get("answers")):
+                continue
             cache_entry = {
                 "sha256": p.sha256,
                 "width": p.width,
@@ -1488,6 +1542,8 @@ def run_decision_pipeline(
                 "blocked": bool(raw_rec.get("blocked")),
                 "review_reason": raw_rec.get("review_reason"),
                 "panel_origin": origin,
+                "source_raw_panels": (p.evidence_metadata or {}).get("source_raw_panels"),
+                "source_raw_sha256s": (p.evidence_metadata or {}).get("source_raw_sha256s"),
                 "decision": final_dec,
             }
             final_cache[p.panel_id] = cache_entry

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import numpy as np
 from PIL import Image
-from src.core.schemas import PanelStatus
+from src.core.schemas import PanelStatus, VoiceStrategy
 from src.core.visual_contract import Region, Shot, VisualPlan, VisualRole, ProductionMotion
 from src.core.storage import load_manifest, load_recap_script, calculate_sha256
 SCROLL_VIEWPORT_H_OVER_W = 1.3
@@ -14,24 +14,28 @@ SCROLL_VIEWPORT_H_OVER_W = 1.3
 TALL_PANEL_THRESHOLD = 2.4
 
 
-def _is_incompatible_legacy_crop(metadata: dict | None) -> bool:
+def _reject_incompatible_legacy_crop(metadata: dict | None) -> None:
     if not metadata:
-        return False
-    if metadata.get("crop_method") == "legacy_9preset":
-        return True
-    if metadata.get("decision_policy") in ("legacy_9preset", "9preset_safe"):
-        return True
-    if "center_crop_preset" in metadata and metadata.get("crop_method") != "4sided_pct":
-        return True
-    return False
+        return
+    if (
+        metadata.get("crop_method") == "legacy_9preset"
+        or metadata.get("decision_policy") in ("legacy_9preset", "9preset_safe")
+        or ("center_crop_preset" in metadata and metadata.get("crop_method") != "4sided_pct")
+    ):
+        raise ValueError(
+            "Incompatible legacy 9-preset crop metadata detected; run "
+            "'python scripts/migrate_legacy_project.py --project-dir <dir> --apply' "
+            "or 'manga-recap decide --refresh' before rendering."
+        )
 
 
 def resolve_accepted_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
     """
     Resolves accepted render-only display crop while enforcing safety booleans and
-    falling back conservatively to full image for incompatible legacy crop metadata.
+    rejecting incompatible legacy 9-preset crop metadata without silent fallback.
     """
-    if not metadata or _is_incompatible_legacy_crop(metadata):
+    _reject_incompatible_legacy_crop(metadata)
+    if not metadata:
         return Region()
     if metadata.get("decision_valid") is False or metadata.get("crop_safe") is False:
         return Region()
@@ -53,12 +57,10 @@ def _map_subbox_into_region(parent: Region, child: Region) -> Region:
 
 def compute_adaptive_display_box(width: int, height: int, metadata: dict | None = None) -> Region:
     """
-    Computes render-only display crop: respects explicit trusted `display_crop`, uses
-    full-image conservative fallback on incompatible legacy evidence, or trims up to
-    10% top/bottom (`keep = max(0.80, min(1.0, W/H))`).
+    Computes render-only display crop: rejects incompatible legacy crop metadata, respects
+    explicit trusted `display_crop`, or trims up to 10% top/bottom (`keep = max(0.80, min(1.0, W/H))`).
     """
-    if _is_incompatible_legacy_crop(metadata):
-        return Region()
+    _reject_incompatible_legacy_crop(metadata)
     if metadata and (metadata.get("decision_valid") is False or metadata.get("crop_safe") is False):
         return Region()
     if metadata and isinstance(metadata.get("display_crop"), dict):
@@ -131,11 +133,14 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
     manifest = manifest if manifest is not None else load_manifest(chapter_dir)
     if script is None or manifest is None or not script.segments or not manifest.panels:
         raise ValueError("Narration and real panel evidence are required")
+    if script.voice_strategy != VoiceStrategy.SINGLE_NARRATOR:
+        raise ValueError("Only single_narrator voice_strategy is supported")
     if script.project_slug != manifest.project_slug or script.chapter_number != manifest.chapter_number:
         raise ValueError("Narration/evidence identity mismatch")
     root = Path(chapter_dir).resolve()
     known = set()
     panel_by_key = {}
+    verified_paths = {}
     for panel in manifest.panels:
         if panel.status == PanelStatus.NEEDS_REVIEW:
             raise ValueError(f"Panel needs review: {panel.panel_id}")
@@ -146,7 +151,7 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
             if panel_path.is_file():
                 evidence_path(chapter_dir, panel)
         else:
-            evidence_path(chapter_dir, panel)
+            verified_paths[panel.panel_id] = evidence_path(chapter_dir, panel)
         for key in (panel.panel_id, panel.filename, Path(panel.filename).stem):
             known.add(key)
             panel_by_key[key] = panel
@@ -158,14 +163,29 @@ def validate_narration_evidence(chapter_dir, script, manifest=None):
             raise ValueError(f"Unresolved narration: {segment.seq_id}")
         if not segment.evidence_panel_ids or any(pid not in known for pid in segment.evidence_panel_ids):
             raise ValueError(f"Narration lacks panel evidence: {segment.seq_id}")
+        active_in_seg = []
         for pid in segment.evidence_panel_ids:
-            if panel_by_key[pid].status == PanelStatus.SKIP:
+            p = panel_by_key[pid]
+            if p.status == PanelStatus.SKIP:
                 raise ValueError(f"Segment {segment.seq_id} references Group 3 SKIP panel: {pid}")
+            if p.status == PanelStatus.ACTIVE:
+                omit, reason = detect_omit_visual_band(verified_paths[p.panel_id], p)
+                if omit:
+                    raise ValueError(
+                        f"Evidence panel '{p.panel_id}' in segment '{segment.seq_id}' is non-renderable ({reason}); "
+                        "Agent must repair panel_plan.json or script.json."
+                    )
+                active_in_seg.append(p)
+        if not active_in_seg:
+            raise ValueError(
+                f"Segment '{segment.seq_id}' has no renderable ACTIVE panel in evidence_panel_ids; "
+                "Agent must update script.json without relying on panel substitution."
+            )
     return manifest
 
 
 def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, motion_enabled):
-    """Yield shots in narration order. Each segment needs its duration before iteration reaches it."""
+    """Yield shots in narration order. Never automatically substitutes missing/non-renderable panels."""
     root = Path(chap_dir)
     manifest = manifest if manifest is not None else load_manifest(root)
     script = script if script is not None else load_recap_script(root)
@@ -174,23 +194,13 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
         raise ValueError("Script/manifest chapter mismatch")
     if script.project_slug != manifest.project_slug:
         raise ValueError("Script/manifest project mismatch")
-    by_id, approved, omitted = {}, [], {}
+    by_id = {}
     for panel in manifest.panels:
         for key in {panel.panel_id, panel.filename, Path(panel.filename).stem}:
             if key in by_id and by_id[key] != panel:
                 raise ValueError(f"Ambiguous panel identifier: {key}")
             by_id[key] = panel
-        if panel.status == PanelStatus.SKIP:
-            omit, reason = detect_omit_visual_band(None, panel)
-        else:
-            path = evidence_path(root, panel)
-            omit, reason = detect_omit_visual_band(path, panel)
-        omitted[panel.panel_id] = reason if omit else None
-        if not omit and panel.status == PanelStatus.ACTIVE:
-            approved.append(panel)
-    approved_ids = {p.panel_id for p in approved}
-    panels_order = {p.panel_id: i for i, p in enumerate(manifest.panels)}
-    evidence_order = []
+
     resolved = []
     for segment in script.segments:
         if segment.status == "needs_review" or "[CAN_XAC_MINH" in segment.narrator_text:
@@ -202,61 +212,31 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
         except KeyError as exc:
             raise ValueError(f"Unknown evidence panel: {exc}") from exc
         resolved.append((segment, panels))
-        evidence_order.extend(panels)
+
     shots = []
-    previous_approved = None
     for segment, panels in resolved:
         if not segment.duration or not math.isfinite(segment.duration) or segment.duration <= 0:
             raise ValueError(f"Measured audio duration required: {segment.seq_id}")
         first_shot = len(shots)
         if segment.shots:
             raise ValueError("Legacy embedded shots must be migrated to canonical VisualPlan")
-        # No aliasing of legacy pan, zoom, subject pan or jitter is permitted.
         motion = ProductionMotion(segment.camera_motion.value)
         if motion_enabled is False and motion == ProductionMotion.SLOW_PAN_DOWN:
             raise ValueError("Motion conflicts with explicitly static setup")
+        active_panels = [p for p in panels if p.status == PanelStatus.ACTIVE]
+        if not active_panels:
+            raise ValueError(f"Segment '{segment.seq_id}' has no renderable ACTIVE panel")
         candidates = []
-        last_global_displayed_id = (
-            (shots[-1].substitute_panel_id or shots[-1].source_panel_id) if shots else None
-        )
-        same_segment = [p for p in panels if p.panel_id in approved_ids]
-        for idx, panel in enumerate(panels):
-            reason = omitted[panel.panel_id]
-            substitute = None
-            substitution_reason = None
-            if reason:
-                # In adaptive mode, skip omitted panels when the segment already has ACTIVE art.
-                if motion_enabled is True and same_segment:
-                    continue
-                adjacent = [p for p in evidence_order if p.panel_id in approved_ids
-                            and abs(panels_order[p.panel_id] - panels_order[panel.panel_id]) == 1]
-                same_page = [p for p in approved if p.source_image == panel.source_image]
-                if same_segment:
-                    substitute, substitution_reason = same_segment[0], "same_segment"
-                elif adjacent:
-                    substitute, substitution_reason = adjacent[0], "adjacent_evidence"
-                elif same_page:
-                    substitute, substitution_reason = same_page[0], "same_source_page"
-                elif previous_approved:
-                    substitute, substitution_reason = previous_approved, "previous_approved"
-                else:
-                    raise ValueError(f"No evidenced visual substitute: {panel.panel_id}")
-            displayed = substitute or panel
+        last_global_displayed_id = shots[-1].source_panel_id if shots else None
+        for idx, displayed in enumerate(active_panels):
             if motion_enabled is True:
-                prev_seg_displayed_id = (
-                    (candidates[-1]["substitute_panel_id"] or candidates[-1]["source_panel_id"])
-                    if candidates
-                    else None
-                )
+                prev_seg_displayed_id = candidates[-1]["source_panel_id"] if candidates else None
                 if prev_seg_displayed_id == displayed.panel_id:
                     continue
                 if (
                     not candidates
                     and last_global_displayed_id == displayed.panel_id
-                    and any(
-                        not omitted[p.panel_id] and p.panel_id != displayed.panel_id
-                        for p in panels[idx + 1 :]
-                    )
+                    and any(p.panel_id != displayed.panel_id for p in active_panels[idx + 1 :])
                 ):
                     continue
             metadata = displayed.evidence_metadata
@@ -270,14 +250,11 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
             avoid = [Region.model_validate(x) for x in metadata.get("avoid_regions", [])]
             crop_safe = metadata.get("crop_safe", True)
             decision_valid = metadata.get("decision_valid", True)
-            # Uncertain text detection and absent safe focus evidence use full panel.
             uncertain = metadata.get("text_detection_uncertain", True) or (not decision_valid) or bool(avoid and not focus)
             tall_hint = metadata.get("tall_motion_hint")
-            if displayed.status != PanelStatus.ACTIVE:
-                raise ValueError(f"Only Group 1 ACTIVE panels may be rendered: {displayed.panel_id}")
             custom_scroll_rate = None
             travel_frac_for_scroll = None
-            if uncertain or (substitute and motion_enabled is not True):
+            if uncertain:
                 boxes, used_motion = [Region()], ProductionMotion.STATIC
             elif avoid:
                 safe = [f for f in focus if not any(_intersects(f, a) for a in avoid)]
@@ -290,7 +267,7 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
                 viewport_aspect = max(target_height / float(max(1, target_width)), SCROLL_VIEWPORT_H_OVER_W)
                 visible_h_px = min(crop_h_px, crop_w_px * viewport_aspect)
                 travel_frac = max(0.0, (crop_h_px - visible_h_px) / float(max(1, displayed.height)))
-                est_dur = float(segment.duration) / float(max(1, len(panels)))
+                est_dur = float(segment.duration) / float(max(1, len(active_panels)))
                 if disp_r > SCROLL_VIEWPORT_H_OVER_W and travel_frac > 0.01 and tall_hint != "static":
                     req_rate = travel_frac / max(0.001, est_dur)
                     boxes, used_motion = [display_box], ProductionMotion.SLOW_PAN_DOWN
@@ -323,15 +300,16 @@ def iter_segment_shots(chap_dir, manifest, script, target_width, target_height, 
                     if (used_motion == ProductionMotion.SLOW_PAN_DOWN and custom_scroll_rate is not None)
                     else (0.12 if used_motion == ProductionMotion.SLOW_PAN_DOWN else 0)
                 )
-                candidates.append(dict(source_panel_id=panel.panel_id,
-                    substitute_panel_id=substitute.panel_id if substitute else None,
+                candidates.append(dict(
+                    source_panel_id=displayed.panel_id,
+                    substitute_panel_id=None,
                     source_box=box, focus_regions=focus, avoid_regions=avoid,
-                    visual_role=VisualRole.OMIT_VISUAL if reason else VisualRole.SHOW,
-                    visual_omit_reason=reason, substitution_reason=substitution_reason,
+                    visual_role=VisualRole.SHOW,
+                    visual_omit_reason=None, substitution_reason=None,
                     motion_type=used_motion,
                     scroll_fraction_per_second=scroll_val,
-                    _travel_frac=travel_frac_for_scroll))
-            previous_approved = displayed
+                    _travel_frac=travel_frac_for_scroll,
+                ))
         duration = segment.duration / len(candidates)
         for item in candidates:
             travel_frac = item.pop("_travel_frac", None)

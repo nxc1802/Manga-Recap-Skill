@@ -158,14 +158,19 @@ def validate_complete_setup(data):
     except Exception as exc:
         return False, [str(exc)]
     errors = []
+    if setup.schema_version != SETUP_SCHEMA_VERSION:
+        errors.append(
+            f"Unsupported series setup schema_version '{setup.schema_version}' (expected {SETUP_SCHEMA_VERSION}); "
+            "run 'python scripts/migrate_legacy_project.py --project-dir <dir> --apply'."
+        )
     for qid, question in QUESTION_METADATA.items():
         item = setup.answers.get(qid)
         if item is None:
             errors.append(f"Missing question {qid} ({question['title']})")
         elif item.question_id != qid or not _valid_answer(qid, item.user_answer):
             errors.append(f"Invalid answer for {qid} ({question['title']})")
-    if setup.schema_version == "5.0.0" and set(setup.answers) - set(ALL_QUESTION_IDS):
-        errors.append("Setup accepts Q01–Q05 and Q08–Q10")
+    if set(setup.answers) - set(ALL_QUESTION_IDS):
+        errors.append("Setup accepts Q01–Q05 and Q08–Q10 only; migrate legacy Q06/Q07 first")
     return not errors, errors
 
 
@@ -173,19 +178,13 @@ def _apply_answers(config, setup):
     config = config.model_copy(deep=True)
     values = {key: item.user_answer for key, item in setup.answers.items()}
     source = _source(values["Q01"])
-    # Existing setup records may already have a URL associated with a local import.
-    if setup.schema_version == "5.0.0" or "url" in values["Q01"] or "source" in values["Q01"]:
-        config.source_url = source
+    config.source_url = source
     audio = config.audio_settings
     audio.default_voice = resolve_voice_id(values["Q03"])
     audio.default_speed = float(str(values["Q04"]).strip().rstrip("xX"))
     render = config.render_settings
     render.burn_subtitles = _normalize_bool(values["Q05"])
-    motion = None
-    if setup.schema_version != "5.0.0":
-        legacy_motion = values.get("Q06")
-        motion = False if _choice(legacy_motion, {"static"}) else _normalize_bool(legacy_motion)
-    render.render_pan_mode = "static" if motion is False else "animation"
+    render.render_pan_mode = "animation"
     if _choice(values["Q09"], {"final", "1080p", "final 1080p"}):
         render.target_width, render.target_height = 1920, 1080
     else:
@@ -203,7 +202,8 @@ def _apply_answers(config, setup):
 def _check_setup(setup):
     valid, errors = validate_complete_setup(setup)
     if not valid:
-        raise DomainValidationError("Series setup needs eight explicit answers", details=errors)
+        detail_msg = "; ".join(errors[:3])
+        raise DomainValidationError(f"Series setup invalid: {detail_msg}", details=errors)
 
 
 def require_series_setup(project_slug, project_dir=None):
@@ -261,7 +261,7 @@ def record_series_setup(project_slug, answers_data, reviewer="user", project_dir
         config = (ProjectConfig.model_validate(read_json(project_path)) if project_path.is_file() else
                   ProjectConfig(project_id=f"proj_{project_slug}", slug=project_slug, title=project_slug))
         if config.slug != project_slug:
-            raise CliValidationError("Setup/project identity mismatch")
+            raise DomainValidationError("Setup/project identity mismatch")
         config = _apply_answers(config, setup)
         config.setup_revision = setup.setup_revision
         config.schema_version = setup.schema_version

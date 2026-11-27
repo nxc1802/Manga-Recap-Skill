@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from PIL import Image
 from pydantic import ValidationError
-from src.core.schemas import PanelItem, PanelManifest, ScriptSegment, RecapScript, CameraMotionType
+from src.core.schemas import PanelItem, PanelManifest, PanelStatus, ScriptSegment, RecapScript, CameraMotionType
 from src.core.visual_contract import Shot, VisualPlan, Region, ProductionMotion
 from src.core.storage import calculate_sha256
 from src.render.visual_policy import is_tall_panel, decompose_tall_panel, generate_visual_plan
@@ -74,22 +74,18 @@ def test_no_missing_evidence_or_implicit_fallback(evidence, damage):
         generate_visual_plan(root, manifest, script)
 
 
-def test_substitute_prefers_same_segment_and_records_reason(evidence):
+def test_nonrenderable_active_panel_fails_validation_instead_of_substituting(evidence):
     root, manifest, script = evidence
     manifest.panels[0].notes = "text_only"
-    plan = generate_visual_plan(root, manifest, script)
-    shot = plan.shots[0]
-    assert shot.substitute_panel_id == "p2"
-    assert shot.substitution_reason == "same_segment"
-    assert shot.source_panel_id == "p1"
-    assert shot.source_box == Region()
+    with pytest.raises(ValueError, match="non-renderable"):
+        generate_visual_plan(root, manifest, script)
 
 
-def test_no_arbitrary_first_panel_substitution(evidence):
+def test_context_only_without_active_panel_fails_validation(evidence):
     root, manifest, script = evidence
     for panel in manifest.panels:
-        panel.notes = "text_only"
-    with pytest.raises(ValueError, match="No evidenced visual substitute"):
+        panel.status = PanelStatus.CONTEXT_ONLY
+    with pytest.raises(ValueError, match="no renderable ACTIVE panel"):
         generate_visual_plan(root, manifest, script)
 
 

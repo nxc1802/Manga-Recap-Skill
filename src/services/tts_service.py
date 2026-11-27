@@ -6,15 +6,10 @@ Delegates audio synthesis directly to src.tts.engine.get_tts_engine().
 
 from __future__ import annotations
 
-import asyncio
-import json
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
-from src.core.config import config
 from src.core.logger import logger
-from src.core.storage import calculate_sha256, calculate_utterance_fingerprint
 from src.tts.catalog import CATALOG_VOICES, resolve_voice_id
 from src.tts.engine import get_tts_engine, get_wav_duration_seconds
 
@@ -30,16 +25,8 @@ VOICE_MODELS = {
 }
 
 
-def _seq_sort_key(item: Dict[str, Any]) -> float:
-    val = str(item["sequence_id"]).replace("_", ".")
-    try:
-        return float(val)
-    except ValueError:
-        return float(item["sequence_number"])
-
-
 class TTSService:
-    """Service facade for local speech synthesis, duration calculation, and script parsing."""
+    """Service facade for local VieNeu-TTS speech synthesis and duration calculation."""
 
     def __init__(self):
         self._engine = None
@@ -56,9 +43,7 @@ class TTSService:
         self._engine = value
 
     def resolve_voice_name(self, voice_name: Optional[str] = None) -> str:
-        """Resolves arbitrary voice string or alias to a valid VieNeu voice_id."""
-        if not voice_name and config and config.tts:
-            voice_name = config.tts.voice
+        """Resolves voice string or alias to a valid VieNeu voice_id."""
         return resolve_voice_id(voice_name)
 
     def get_audio_duration_ms(self, audio_path: str) -> int:
@@ -77,101 +62,6 @@ class TTSService:
                 if size > 44:
                     return int(round(((size - 44) / 96000.0) * 1000))
             return 0
-
-    def parse_script_text(self, script_text: str) -> list[dict]:
-        """
-        Parses script text/JSON to extract panel sequences and script segments.
-        Supports both legacy text markers and JSON configuration formats.
-        """
-        script_text = script_text.strip()
-        if script_text.startswith("{") and script_text.endswith("}"):
-            try:
-                data = json.loads(script_text)
-                scripts_dict = {}
-                if isinstance(data, dict):
-                    if "scripts" in data:
-                        scripts_dict = data["scripts"]
-                    else:
-                        has_seq_keys = any(str(k).replace("_", "").isdigit() for k in data.keys())
-                        if has_seq_keys:
-                            scripts_dict = data
-
-                results = []
-                for k, v in scripts_dict.items():
-                    seq_str = str(k).strip()
-                    match_prefix = re.match(r"^(\d+)", seq_str)
-                    if not match_prefix:
-                        continue
-                    seq_num = int(match_prefix.group(1))
-
-                    if isinstance(v, dict):
-                        tag = v.get("status") or v.get("tag") or ""
-                        status = "processed"
-                        if tag in ("context_only", "useless", "video_and_context"):
-                            status = "context_only" if tag == "context_only" else ("useless" if tag == "useless" else "processed")
-                        results.append({
-                            "sequence_id": seq_str,
-                            "sequence_number": seq_num,
-                            "text": v.get("text", ""),
-                            "status": status,
-                            "focus_x": v.get("focus_x", 50),
-                            "focus_y": v.get("focus_y", 50),
-                            "pan_direction": v.get("pan_direction", "horizontal"),
-                            "crop_scale": v.get("crop_scale", 100)
-                        })
-                    else:
-                        results.append({
-                            "sequence_id": seq_str,
-                            "sequence_number": seq_num,
-                            "text": str(v),
-                            "status": "processed",
-                            "focus_x": 50,
-                            "focus_y": 50,
-                            "pan_direction": "horizontal",
-                            "crop_scale": 100
-                        })
-
-                results.sort(key=_seq_sort_key)
-                return results
-            except Exception as e:
-                logger.error(f"Error parsing script_text as JSON: {e}. Falling back to text regex.")
-
-        # Legacy text regex parsing
-        matches = re.finditer(
-            r"\[Khung\s*hình\s*([^\]]+)\](?:\s*\[(context_only|video_and_context|useless)\])?:?\s*(.*?)(?=\[Khung\s*hình\s*[^\]]+\]|$)",
-            script_text,
-            re.DOTALL | re.IGNORECASE
-        )
-        results = []
-        for match in matches:
-            seq_str = match.group(1).strip()
-            tag = (match.group(2) or "").strip().lower()
-            text = match.group(3).strip()
-            text = re.sub(r"^:\s*", "", text)
-
-            status = "processed"
-            if tag == "context_only":
-                status = "context_only"
-            elif tag == "useless":
-                status = "useless"
-
-            match_prefix = re.match(r"^(\d+)", seq_str)
-            if not match_prefix:
-                continue
-            seq_num = int(match_prefix.group(1))
-            results.append({
-                "sequence_id": seq_str,
-                "sequence_number": seq_num,
-                "text": text,
-                "status": status,
-                "focus_x": 50,
-                "focus_y": 50,
-                "pan_direction": "horizontal",
-                "crop_scale": 100
-            })
-
-        results.sort(key=_seq_sort_key)
-        return results
 
     async def generate_panel_audio(
         self,
@@ -219,20 +109,6 @@ class TTSService:
         finally:
             if list_file_path.exists():
                 list_file_path.unlink()
-
-    async def process_chapter_audio(self, chapter_id, chapter_num, speed=None,
-                                    voice_name=None, progress_callback=None):
-        from src.core.execution_policy import resolve_legacy_chapter
-        from src.core.workflow import synthesize_chapter_tts
-        project = resolve_legacy_chapter(chapter_id, chapter_num)
-        synthesize_chapter_tts(
-            project.name,
-            str(chapter_num),
-            speed=speed,
-            voice=voice_name,
-            engine="neural",
-        )
-        return True
 
 
 tts_service = TTSService()
