@@ -1,36 +1,47 @@
 {
-  "schema_version": "1.0.0",
-  "release_candidate": {
-    "version": "7.1.0",
-    "baseline_sha": "4bd550eef9f3405c3f6cd250337edb736a8bfc4f",
-    "code_sha": "5d8ca077a4517d76395d22e19abfb8a39eb0c85b",
-    "verdict": "NOT READY",
-    "blockers": [
-      "P8.2 YouTube live upload/verify BLOCKED: expired OAuth refresh token for cho_review",
-      "P8.3 Hugging Face live archive push/verify/restore BLOCKED: HTTP 401 Unauthorized on HF_TOKEN",
-      "P7.2 5-chapter and 10-20-chapter live multi-chunk Kaggle series workloads NOT RUN"
-    ]
-  },
-  "environment": {
-    "os": "macOS-26.6-arm64-arm-64bit-Mach-O",
-    "python": "3.13.14",
-    "local_encoders": ["libx264", "h264_videotoolbox"],
-    "kaggle_hardware": "2x Tesla T4 (CUDA 13.0, dual h264_nvenc, VieNeu 3.8.5)"
-  },
-  "results": [
-    {"id": "P0-SUITE", "phase": "P0", "mode": "offline", "status": "PASS", "summary": "compileall, sync_requirements --check, version 7.1.0, and 572 pytest cases (BUG-01..BUG-09 regressions)"},
-    {"id": "SET-01..08", "phase": "P1", "mode": "live", "status": "PASS", "summary": "Two isolated projects (v71-accept-local, v71-accept-kaggle) configured via explicit 8-question user setup"},
-    {"id": "PRE-01..13", "phase": "P2", "mode": "live", "status": "PASS", "summary": "Live TruyenQQ crawl (202+141 raw pages -> 219 raw panels), live gemini-decision-1 (206,578 + 184,225 tokens), local import, warm-cache 0-API run, manual repack"},
-    {"id": "SCR-01..09", "phase": "P3", "mode": "live", "status": "PASS", "summary": "Ch.1 (24 segs, 79 active panels, 230/230 checks) and Ch.2 (17 segs, 65 active panels) authored from visual inspection"},
-    {"id": "PRV-LOCAL", "phase": "P4", "mode": "live", "status": "PASS", "summary": "Local 720p preview: 188.40s, av_diff=0.003s, 60 SRT cues, decode_rc=0, 90.38s wall"},
-    {"id": "PRV-KAGGLE", "phase": "P4", "mode": "live", "status": "PASS", "summary": "Kaggle Dual-T4 1080p preview: standalone TTS (99s, fixed BUG-09) + standalone Render (185s kernel, tts_devices=[]), 187.84s, av_diff=0.0067s, decode_rc=0"},
-    {"id": "APR-01..06", "phase": "P5", "mode": "live", "status": "PASS", "summary": "Pre-approval block, genuine user approval, script/preview/voice invalidation on disposable copies, exact SHA-256 Ch.1 promotion on both Local & Kaggle"},
-    {"id": "P7.1-LOCAL", "phase": "P7", "mode": "live", "status": "PASS", "summary": "Local Ch.1-2 produce + compile in 53.16s (Ch.1 promoted in 0.073s), feature 327.26s + 48kHz master WAV 327.34s, decode_rc=0"},
-    {"id": "P7.2-KAGGLE-2CH", "phase": "P7", "mode": "live", "status": "PASS", "summary": "Kaggle Dual-T4 Policy B Ch.1-2 produce + compile via Chunk Planner: 156.93s worker makespan (293.76s e2e), 1.98x TTS, 3.96x NVENC encode, 0 OOM, feature 325.21s, decode_rc=0; verified resume 4.99s (0 jobs)"},
-    {"id": "P7.2-KAGGLE-LONG", "phase": "P7", "mode": "live", "status": "NOT RUN", "summary": "5-chapter and 10-20-chapter multi-chunk live Kaggle series runs not executed"},
-    {"id": "P8.1-PACKAGE", "phase": "P8", "mode": "live", "status": "PASS", "summary": "1280x720 thumbnails and youtube_metadata.json generated cleanly"},
-    {"id": "P8.2-YOUTUBE", "phase": "P8", "mode": "live", "status": "BLOCKED", "summary": "Expired OAuth refresh token for cho_review; requires interactive re-auth"},
-    {"id": "P8.3-HF", "phase": "P8", "mode": "live", "status": "BLOCKED", "summary": "HTTP 401 Unauthorized from Hugging Face API on HF_TOKEN"},
-    {"id": "P8.4-CLEAN", "phase": "P8", "mode": "live", "status": "PASS", "summary": "clean --dry-run rc=0 (0 deletions); missing --confirm-project rc=2; --purge-raw without archive receipt rc=3"}
-  ]
+  "verdict": "READY",
+  "release_candidate_commit": "1a541c2",
+  "project_slug": "v71-accept-kaggle",
+  "gates": {
+    "bug10_youtube_duplicate_prevention": {
+      "status": "PASS",
+      "commit": "1a541c2",
+      "targeted_pytest": "51 passed in 3.85s"
+    },
+    "youtube_live": {
+      "status": "PASS",
+      "account": "cho_review",
+      "privacy": "private",
+      "ch1_video_id": "7aQbMCV48f0",
+      "feature_video_id": "yQCqXmw9U9Q",
+      "yt07_duplicate_prevented": true
+    },
+    "huggingface_live": {
+      "status": "PASS",
+      "repo_id": "Cuong2004/manga-recap-archive",
+      "commit_sha": "ff60ec47054ebe7ac249e9ef24bb4541425fdd18",
+      "verified_file_count": 644,
+      "restored_hash_verified": "644/644"
+    },
+    "kaggle_dual_t4_run_a_ch1_5": {
+      "status": "PASS",
+      "kernel": "cuongnguyen1802/mr-v71-accept-k-c3-9116",
+      "poll_seconds": 274,
+      "e2e_seconds": 395.04,
+      "wall_makespan_sec": 221.78
+    },
+    "kaggle_dual_t4_run_b_ch6_10": {
+      "status": "PASS",
+      "kernel": "cuongnguyen1802/mr-v71-accept-k-c6-10304",
+      "poll_seconds": 381,
+      "e2e_seconds": 506.16
+    },
+    "compile_10_chapters": {
+      "status": "PASS",
+      "chapters_compiled": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
+      "duration_seconds": 773.321333,
+      "size_bytes": 257556496,
+      "ffmpeg_decode": "DECODE_OK"
+    }
+  }
 }
