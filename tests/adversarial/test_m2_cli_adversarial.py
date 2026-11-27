@@ -55,7 +55,7 @@ class TestCliExitCodesAndPurity:
     def test_version_flag_success(self):
         proc = run_cli(["--version"])
         assert proc.returncode == 0
-        assert "5.0.0" in proc.stdout
+        assert "7.1.0" in proc.stdout
 
     def test_missing_project_returns_io_error_exit_code_3(self):
         for subcmd in ["inspect", "status", "validate", "tts", "compile"]:

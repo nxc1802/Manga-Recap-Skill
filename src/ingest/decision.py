@@ -949,6 +949,15 @@ def _resolve_post_repack_record(
                 f"Invalid source lineage metadata on repacked panel '{p.panel_id}'; run 'segment --force' or repair panel_plan."
             )
         src_id, src_sha = str(src_ids[0]), str(src_shas[0])
+        self_rec = pass1_records.get(p.panel_id)
+        if (
+            self_rec is not None
+            and self_rec["sha256"] == p.sha256 == src_sha
+            and (self_rec["width"], self_rec["height"]) == (p.width, p.height)
+            and self_rec.get("source_raw_panels") == src_ids
+            and self_rec.get("source_raw_sha256s") == src_shas
+        ):
+            return dict(self_rec["dec"]), self_rec["raw"], str(self_rec.get("origin") or "raw_pass1")
         src_rec = pass1_records.get(src_id)
         if (
             src_rec is None
@@ -1113,7 +1122,13 @@ def run_decision_pipeline(
                     cache_hits_pass1 += 1
 
         pending = [p for p in panels if p.panel_id not in pass1]
-        key = resolve_gemini_api_key(api_key) if (bool(pending) or force_refresh) else (api_key or "")
+        resolved_key: Optional[str] = None
+
+        def _get_api_key() -> str:
+            nonlocal resolved_key
+            if resolved_key is None:
+                resolved_key = resolve_gemini_api_key(api_key)
+            return resolved_key
 
         telemetry: Dict[str, Any] = {
             "requests": {},
@@ -1139,6 +1154,7 @@ def run_decision_pipeline(
             f"DecisionEngine Pass 1 ({cfg.policy}): {len(pending)} pending / {len(panels)} total via {model_name}..."
         )
         if pending:
+            key = _get_api_key()
             first_error: Optional[BaseException] = None
             completed_since_flush = 0
             try:
@@ -1225,6 +1241,7 @@ def run_decision_pipeline(
                 else:
                     to_query_split.append(p)
             if to_query_split:
+                key = _get_api_key()
                 with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_split))) as pool:
                     futs = {
                         pool.submit(
@@ -1306,7 +1323,7 @@ def run_decision_pipeline(
                             prev_panel,
                             p,
                             int(vcs_gap or 0),
-                            key,
+                            _get_api_key(),
                             client=transport,
                             config=cfg,
                         )
@@ -1434,6 +1451,7 @@ def run_decision_pipeline(
                 else:
                     to_query_p2.append(p)
             if to_query_p2:
+                key = _get_api_key()
                 with ThreadPoolExecutor(max_workers=min(max_workers, len(to_query_p2))) as pool:
                     futs = {
                         pool.submit(

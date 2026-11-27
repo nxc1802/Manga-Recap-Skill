@@ -42,7 +42,7 @@ def test_domain_validation_error_decoupled_from_cli():
 
 
 def test_app_version_distinguished_from_schema_versions():
-    assert APP_VERSION == "5.0.0"
+    assert APP_VERSION == "7.1.0"
     assert PROJECT_SCHEMA_VERSION == "3.0.0"
     assert PRODUCTION_SCHEMA_VERSION == "4.1.0"
     assert SETUP_SCHEMA_VERSION == "5.0.0"

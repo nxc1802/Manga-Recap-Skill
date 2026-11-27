@@ -59,6 +59,10 @@ TERMINAL_REMOTE_FAILURE_STATES = {
     "CANCEL_ACKNOWLEDGED",
 }
 
+TERMINAL_LOCAL_STATES = {s.upper() for s in TERMINAL_REMOTE_FAILURE_STATES} | {
+    LifecycleState.SYNCED.upper(),
+}
+
 MAX_KAGGLE_GPU_SESSION_SEC = 32400  # 9h Kaggle interactive/batch GPU session ceiling
 
 
@@ -179,7 +183,14 @@ def reconcile_submit_unknown(
         ) from exc
 
     mapped = normalize_remote_status(norm or raw_status)
-    persisted_status = LifecycleState.REMOTE_COMPLETE if mapped == "COMPLETE" else mapped
+    if mapped == "COMPLETE":
+        persisted_status = LifecycleState.REMOTE_COMPLETE
+    elif mapped == "FAILED":
+        persisted_status = LifecycleState.FAILED
+    elif mapped in {LifecycleState.QUEUED, LifecycleState.RUNNING}:
+        persisted_status = mapped
+    else:
+        persisted_status = LifecycleState.SUBMIT_UNKNOWN
     updated = {
         **state_payload,
         "status": persisted_status,
@@ -229,7 +240,7 @@ def check_no_duplicate_active_job(
         ) from exc
 
     norm_status = str(state.status or "").strip()
-    if norm_status.upper() not in {s.upper() for s in ACTIVE_JOB_STATES}:
+    if norm_status.upper() in TERMINAL_LOCAL_STATES:
         return state
 
     # Reconcile ambiguous/timed-out/active job via its original persisted account only.

@@ -1438,25 +1438,26 @@ def preview_chapter(
     encoder: Optional[str] = None,
     render_workers: Optional[int] = None,
     tts_workers: Optional[int] = None,
-    kaggle: bool = False,
     force: bool = False,
 ) -> Dict[str, Any]:
     """Canonical Stage 4 (Preview): validate script -> TTS -> preview render -> review pack."""
     if str(chapter_num) != "1":
         raise DomainValidationError("Preview workflow is dedicated to Chapter 1")
-    require_series_setup(project_slug)
+    setup = require_series_setup(project_slug)
     chap_dir = resolve_existing_chapter_dir(project_slug, str(chapter_num))
     if not (chap_dir / "script.json").is_file():
         raise DomainValidationError(
             "Missing script.json for Chapter 1; inspect contact sheets and author narration first."
         )
     validate_project_or_chapter(project_slug, chapter=str(chapter_num))
+    named = extract_named_settings(setup)
+    use_kaggle = str(named.get("compute", "local")).strip().lower() == "kaggle"
     tts_res = synthesize_chapter_tts(
         project_slug,
         str(chapter_num),
         force=force,
         workers=tts_workers,
-        kaggle=kaggle,
+        kaggle=use_kaggle,
     )
     render_res = render_chapter_workflow(
         project_slug,
@@ -1464,11 +1465,12 @@ def preview_chapter(
         quality="preview",
         encoder=encoder,
         workers=render_workers,
-        kaggle=kaggle,
+        kaggle=use_kaggle,
     )
     return {
         "project_slug": project_slug,
         "chapter_number": str(chapter_num),
+        "compute": "kaggle" if use_kaggle else "local",
         "tts": tts_res,
         "render": render_res,
         "review_pack": render_res.get("review_pack"),
@@ -1708,14 +1710,13 @@ def produce_chapters(
     retry_chapter: Optional[str] = None,
     compile_after: bool = False,
     cleanup: bool = False,
-    kaggle: Optional[bool] = None,
     encoder: Optional[str] = None,
     render_workers: int = 2,
     tts_workers: int = 2,
     force: bool = False,
 ) -> Dict[str, Any]:
     """
-    Canonical Stage 6 (Produce): routes single/multi-chapter production via the confirmed
+    Canonical Stage 7 (Produce): routes single/multi-chapter production via the confirmed
     compute backend (local or Kaggle Dual-T4) after verifying Chapter 1 approval and scripts.
     """
     setup = require_series_setup(project_slug)
@@ -1744,18 +1745,17 @@ def produce_chapters(
         validate_narration_evidence(chap_dir, load_recap_script(chap_dir), load_manifest(chap_dir))
 
     named = extract_named_settings(setup)
-    use_kaggle = (str(named.get("compute", "local")).strip().lower() == "kaggle") if kaggle is None else bool(kaggle)
+    use_kaggle = str(named.get("compute", "local")).strip().lower() == "kaggle"
 
     if use_kaggle:
         from src.cloud.kaggle_service import KaggleCloudService
         service = KaggleCloudService()
         if not service.is_authenticated:
             raise DomainValidationError("Kaggle API authentication failed.")
-        cloud_res = service.dispatch_series_job(
+        cloud_res = service.dispatch_series_chunks(
             project_slug=project_slug,
             chapters=target_chapters,
             gpu=True,
-            wait=True,
             compile_feature=compile_after,
             render_workers=render_workers,
             encoder_preference=encoder or "auto",

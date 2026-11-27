@@ -62,15 +62,13 @@ class CloudJob(BaseModel):
 
 
 def write_cloud_job_state(state_path: Optional[Path], payload: Dict[str, Any]) -> None:
-    """Validates and atomically persists ``cloud_job.json`` if parent directory exists."""
+    """Validates and atomically persists ``cloud_job.json``; raises on persistence failure."""
     if state_path is None:
         return
-    try:
-        if state_path.parent.is_dir():
-            model = CloudJob.model_validate(payload)
-            atomic_write_json(state_path, model.model_dump(mode="json", exclude_none=True))
-    except Exception as exc:
-        logger.debug("Could not persist cloud_job.json (%s): %s", state_path, exc)
+    if not state_path.parent.is_dir():
+        raise FileNotFoundError(f"Cloud job state parent directory does not exist: {state_path.parent}")
+    model = CloudJob.model_validate(payload)
+    atomic_write_json(state_path, model.model_dump(mode="json", exclude_none=True))
 
 
 def load_cloud_job_state(state_path: Path) -> CloudJob:

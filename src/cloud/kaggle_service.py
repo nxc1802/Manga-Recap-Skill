@@ -309,7 +309,7 @@ class KaggleCloudService:
         series = series_chapters is not None
         chapters = list(series_chapters) if series else [str(chapter_number)]
         project = get_project_dir(project_slug)
-        chapter = get_chapter_dir(project_slug, chapter_number)
+        chapter = project / "chapters" / str(chapter_number)
         job_state_path = (project if series else chapter) / "cloud_job.json"
 
         resolved_queue_timeout: Optional[float] = 900.0 if queue_timeout_seconds is None else (

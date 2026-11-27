@@ -101,7 +101,7 @@ def test_cli_cloud_dispatch_reconcile_and_chunked_options(unit_project, monkeypa
         == 0
     )
     capsys.readouterr()
-    assert calls[-1][0] == "series"
+    assert calls[-1][0] == "chunks"
 
     assert main(["cloud", "reconcile", "--project", "unit", "--chapter", "1", "--json"]) == 0
     rec_payload = json.loads(capsys.readouterr().out)

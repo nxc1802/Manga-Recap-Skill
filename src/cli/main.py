@@ -277,7 +277,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prv.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
     p_prv.add_argument("--render-workers", type=int, default=None, help="Render concurrent worker count")
     p_prv.add_argument("--tts-workers", type=int, default=None, help="TTS concurrent worker count")
-    p_prv.add_argument("--kaggle", action="store_true", help="Offload preview TTS/render to Kaggle Cloud GPU")
     p_prv.add_argument("--force", action="store_true", help="Re-synthesize TTS even if cached")
 
     # 21. approve (record human Chapter 1 preview approval bound to hashes)
@@ -294,7 +293,6 @@ def build_parser() -> JsonAwareArgumentParser:
     p_prod.add_argument("--retry-chapter", default=None, help="Specific chapter number to retry")
     p_prod.add_argument("--compile", action="store_true", help="Auto-compile completed chapters into master recap video")
     p_prod.add_argument("--cleanup", action="store_true", help="Safely clean up temporary intermediate clips after verified final render")
-    p_prod.add_argument("--kaggle", action=argparse.BooleanOptionalAction, default=None, help="Override compute setting from setup")
     p_prod.add_argument("--encoder", choices=["auto", "libx264", "h264_nvenc", "h264_videotoolbox"], default=None, help="Video encoder")
     p_prod.add_argument("--render-workers", type=int, default=2, help="Video render concurrent workers")
     p_prod.add_argument("--tts-workers", type=int, default=2, help="TTS synthesis concurrent workers")
@@ -341,7 +339,6 @@ def _handle_preview(args: argparse.Namespace) -> Dict[str, Any]:
         encoder=getattr(args, "encoder", None),
         render_workers=getattr(args, "render_workers", None),
         tts_workers=getattr(args, "tts_workers", None),
-        kaggle=bool(getattr(args, "kaggle", False)),
         force=bool(getattr(args, "force", False)),
     )
 
@@ -364,7 +361,6 @@ def _handle_produce(args: argparse.Namespace) -> Dict[str, Any]:
         retry_chapter=getattr(args, "retry_chapter", None),
         compile_after=bool(getattr(args, "compile", False)),
         cleanup=bool(getattr(args, "cleanup", False)),
-        kaggle=getattr(args, "kaggle", None),
         encoder=getattr(args, "encoder", None),
         render_workers=getattr(args, "render_workers", 2),
         tts_workers=getattr(args, "tts_workers", 2),

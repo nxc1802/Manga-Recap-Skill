@@ -28,8 +28,9 @@ Optional credentials (see `.env.example`):
 4. **Preview Chapter 1:** Run `manga-recap preview --project <slug> --chapter 1 --json` to generate `preview.mp4`, `preview.srt`, `review_pack.md`, and `review_pack.json`.
 5. **Approve:** After human review of Chapter 1, record approval bound to exact config and artifact hashes:
    `manga-recap approve --project <slug> --reviewer "<user>" --config-fingerprint "<hash>" --artifact-hash "<hash>" --json`
-6. **Produce & Compile:** Run `manga-recap produce --project <slug> --chapters <range> --compile --json` (local or Kaggle Dual-T4 Policy B `h264_nvenc` per confirmed `Q02`). Monitor via `manga-recap status --project <slug> --json`.
-7. **Publish, Archive & Clean:** Save clean 16:9 thumbnail (`chapters/<N>/thumbnail.jpg`), confirm channel/privacy (`manga-recap youtube accounts --json`), publish with `manga-recap publish --project <slug> --chapter <N> --account <alias> --wait --json`, archive with `manga-recap archive push/verify`, and inspect cleanup with `manga-recap clean --project <slug> --dry-run --json`.
+6. **Prepare & Author Remaining Chapters:** Repeat `prepare` and `validate --pacing` for remaining chapters in the confirmed range while maintaining `characters.json` and `story_summary.md`.
+7. **Produce & Compile:** Run `manga-recap produce --project <slug> --chapters <range> --compile --json` (local or Kaggle Dual-T4 Policy B `h264_nvenc` via automatic Chunk Planner per confirmed `Q02`). Monitor via `manga-recap status --project <slug> --json`.
+8. **Publish (and Optional Archive / Clean):** Save clean 16:9 thumbnail (`chapters/<N>/thumbnail.jpg`), confirm channel/privacy (`manga-recap youtube accounts --json`), upload with `manga-recap publish --project <slug> --chapter <N> --account <alias> --json` and verify with `--action verify`. Optional archival: `manga-recap archive push/verify`; explicit safe cleanup: `manga-recap clean --project <slug> --dry-run --json`.
 
 ## Granular Repair & Utility Commands
 

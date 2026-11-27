@@ -46,7 +46,7 @@ class TestCliParserAndDispatch:
         code = main(["--version"])
         assert code == 0
         captured = capsys.readouterr()
-        assert "5.0.0" in captured.out
+        assert "7.1.0" in captured.out
 
     def test_subcommand_help_flag(self, capsys):
         for subcmd in ["inspect", "validate", "status", "crawl", "tts", "render", "compile"]:

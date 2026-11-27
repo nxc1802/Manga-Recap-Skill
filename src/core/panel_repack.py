@@ -189,11 +189,17 @@ def apply_panel_plan(
     if can_fast_metadata:
         for item, orig in zip(plan.items, manifest.panels):
             meta = dict(orig.evidence_metadata or {})
+            prior_op = meta.get("repack_op")
             meta["classification_group"] = item.group.value
-            meta["repack_op"] = item.op.value
-            meta["source_raw_panels"] = list(item.source_panel_ids)
-            meta["source_raw_sha256s"] = [orig.sha256]
-            if orig.vcs_start is not None and orig.vcs_end is not None:
+            if prior_op in ("split_at", "merge") and item.op == PanelPlanOp.KEEP:
+                meta.setdefault("source_raw_panels", list(item.source_panel_ids))
+                meta.setdefault("source_raw_sha256s", [orig.sha256])
+            else:
+                meta["repack_op"] = item.op.value
+                if not meta.get("source_raw_panels") or not meta.get("source_raw_sha256s"):
+                    meta["source_raw_panels"] = list(item.source_panel_ids)
+                    meta["source_raw_sha256s"] = [orig.sha256]
+            if orig.vcs_start is not None and orig.vcs_end is not None and "source_vcs_range" not in meta:
                 meta["source_vcs_range"] = [orig.vcs_start, orig.vcs_end]
             if item.tall_motion_hint:
                 meta["tall_motion_hint"] = item.tall_motion_hint
@@ -295,13 +301,20 @@ def apply_panel_plan(
                     filename = f"{panel_id}.jpg"
                     out_file = stage_panels / filename
                     shutil.copy2(src_path, out_file)
-                    meta: Dict[str, Any] = {
-                        "classification_group": item.group.value,
-                        "repack_op": item.op.value,
-                        "source_raw_panels": list(item.source_panel_ids),
-                        "source_raw_sha256s": [src.sha256],
-                        "source_vcs_range": [v_top, v_bottom],
-                    }
+                    orig_meta = dict(src.evidence_metadata or {})
+                    prior_op = orig_meta.get("repack_op")
+                    meta: Dict[str, Any] = dict(orig_meta)
+                    meta["classification_group"] = item.group.value
+                    if prior_op in ("split_at", "merge") and item.op == PanelPlanOp.KEEP:
+                        meta.setdefault("source_raw_panels", list(item.source_panel_ids))
+                        meta.setdefault("source_raw_sha256s", [src.sha256])
+                        meta.setdefault("source_vcs_range", [v_top, v_bottom])
+                    else:
+                        meta["repack_op"] = item.op.value
+                        if not meta.get("source_raw_panels") or not meta.get("source_raw_sha256s"):
+                            meta["source_raw_panels"] = list(item.source_panel_ids)
+                            meta["source_raw_sha256s"] = [src.sha256]
+                        meta.setdefault("source_vcs_range", [v_top, v_bottom])
                     if item.tall_motion_hint:
                         meta["tall_motion_hint"] = item.tall_motion_hint
                     notes = item.reason or f"repack:{item.op.value}"

@@ -1,6 +1,6 @@
 """Application and schema version constants for Manga Recap."""
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "7.1.0"
 
 # Distinct document contract schema versions
 PROJECT_SCHEMA_VERSION = "3.0.0"

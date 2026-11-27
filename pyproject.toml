@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "manga-recap"
-version = "5.0.0"
+version = "7.1.0"
 description = "Manga Recap Skill with local VieNeu-TTS and FFmpeg"
 readme = "README.md"
 requires-python = ">=3.10"
